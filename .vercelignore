@@ -1,0 +1,14 @@
+# Never upload these to the deployment
+node_modules
+dist
+.git
+.github
+.hermes
+.claude
+.pi
+.crush
+.impeccable/cache
+.impeccable/review
+openspec/changes/archive
+*.log
+.env*
