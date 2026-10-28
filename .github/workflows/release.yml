@@ -73,10 +73,12 @@ jobs:
           set -euo pipefail
           rm -f fleet-console-*.tar.gz fleet-console-*.sha256 SHA256SUMS
           for arch in amd64 arm64; do
+            # The release target embeds RELEASE_COMMIT/RELEASE_TIME (fixed
+            # metadata, deterministic tarball), not the dev COMMIT/BUILD_TIME.
             GOARCH=$arch make release \
               VERSION="$VERSION" \
-              COMMIT="$TAG" \
-              BUILD_TIME="$COMMIT_TIME" \
+              RELEASE_COMMIT="$TAG" \
+              RELEASE_TIME="$COMMIT_TIME" \
               ARTIFACT_ARCH="$arch"
           done
           sha256sum fleet-console-*.tar.gz > SHA256SUMS
