@@ -174,6 +174,19 @@ Verify with §2's table, then one real task end-to-end. A green install with no 
 
 ---
 
+## 4b. The fleet control plane (fleet-console)
+
+| What | Value |
+|---|---|
+| binary | `fleet-console` — one static file, board embedded (`make build`) |
+| unit | `fleet-console.service` (systemd --user; `%h/.local/bin/fleet-console`) |
+| port | `127.0.0.1:8787` |
+| config | `FLEET_CONSOLE_TOKEN` in a mode-600 env file; `FLEET_CONSOLE_DB` for the SQLite path |
+| alerts | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` (owner-supplied; never committed) |
+| kill switch | `systemctl --user stop fleet-console && systemctl --user disable fleet-console` |
+| dry run | `fleet-console --tick` — mirror + decide only; no forge, rig or git write |
+| old timer | `gh-autodispatch.service` — stop and disable it before enabling the act loop |
+
 ## 5. What is deliberately absent
 
 - **No forge MCP.** The CLI does everything the MCP did, without 45k tokens of schema.
