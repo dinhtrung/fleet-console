@@ -2,7 +2,7 @@
 
 ### Requirement: The work unit is a task
 
-Only an open item that is not an epic SHALL be dispatched. An issue with children SHALL never be handed to a seat,
+Only an open item that is not an epic SHALL be dispatched. An item with children SHALL never be handed to a seat,
 even when its own fields look dispatchable.
 
 #### Scenario: An epic is skipped
@@ -10,35 +10,45 @@ even when its own fields look dispatchable.
 - **WHEN** an open issue has three open children
 - **THEN** the plan carries a skip reason naming it as an epic, and only its children are candidates
 
-### Requirement: Blocking looks one way
+### Requirement: Blocking is one-directional per forge
 
-A task SHALL be blocked when a related item with a **smaller** iid is open on that project. Related items with a
-larger iid SHALL NOT block, because the forge's link is symmetric and both directions deadlock a chain.
+A task SHALL be blocked only by links the forge defines as directional or by a smaller-numbered related item where
+the link is symmetric. The app SHALL NOT apply both rules to one project.
 
-#### Scenario: A symmetric link
+#### Scenario: A symmetric GitLab link
 
-- **WHEN** #110 and #120 are related to each other and both are open
+- **WHEN** #110 and #120 are `relates_to` each other and both are open
 - **THEN** #120 is blocked by #110 and #110 is a candidate
 
-### Requirement: Order by iid, cap by free builders
+#### Scenario: A GitHub dependency
 
-Candidates SHALL be taken in ascending iid, oldest first across the project, up to the free builders of its rig and
-the project's cap.
+- **WHEN** #120 is `blocked_by` #110 and both are open
+- **THEN** #120 is blocked regardless of number order, because the link is already directional
+
+### Requirement: Order by number, cap by free builders
+
+Candidates SHALL be taken in ascending item number, up to the free builders of the project's rig and the project's
+`concurrency_cap`. Both limits SHALL be applied; the smaller one wins.
 
 #### Scenario: Three builders, two free
 
 - **WHEN** five tasks are ready and two builders are free
-- **THEN** the two smallest iids are dispatched and the rest carry the reason `no free builder`
+- **THEN** the two smallest numbers are dispatched and the rest carry the reason `no free builder`
 
-### Requirement: Dispatch is idempotent and leased
+### Requirement: Dispatch is idempotent against rig rows
 
-A dispatch SHALL hold a lease for its project and SHALL abort when the task already has a live worktree, a branch on
-origin or a live queue row for its iid. A second run of the same intent SHALL be a no-op.
+A dispatch SHALL abort when the item already has a live contract, a branch on origin or a live rig queue row whose
+body names its number. A second run of the same intent SHALL be a no-op naming the existing record.
 
 #### Scenario: A row somebody made by hand
 
-- **WHEN** a task has no dispatch record but a live row's body names its iid
-- **THEN** the dispatch aborts with that row named as the reason
+- **WHEN** an item has no dispatch record but a live row's body names its number
+- **THEN** the dispatch aborts with that row's id named as the reason
+
+#### Scenario: A second loop instance
+
+- **WHEN** two instances run against one project
+- **THEN** the project lease lets exactly one act and the other records `held by <owner>` and writes nothing
 
 ### Requirement: A worktree is reused, never deleted
 
@@ -49,3 +59,13 @@ another branch SHALL be skipped only when it also holds uncommitted changes, and
 
 - **WHEN** a previous dispatch left `wt-app-221` on the right branch with uncommitted files
 - **THEN** the new dispatch reuses it and records the reuse in the event trail
+
+### Requirement: A dispatch names the seat and the row it created
+
+Every dispatch SHALL record the seat address, branch, worktree, base sha and the rig queue row id it created, so a
+later tick can correlate the row without scanning bodies.
+
+#### Scenario: The row is closed by a seat
+
+- **WHEN** a builder closes its row
+- **THEN** the dispatch record shows that row id and the next tick reads its closure rather than guessing

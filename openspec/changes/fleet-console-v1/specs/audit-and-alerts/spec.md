@@ -3,17 +3,17 @@
 ### Requirement: Every write is one event row
 
 Each mutation the app performs SHALL record one event: actor, kind, subject, detail, exit code and a hash of the
-command's output. The trail SHALL answer what closed a task or a label without reading a log.
+command's output. The trail SHALL answer what closed an item or set a label without reading a log.
 
 #### Scenario: Who closed the epic
 
 - **WHEN** an epic is closed by the loop
 - **THEN** one event names the actor, the epic and the children listed
 
-### Requirement: Secrets never reach the audit trail
+### Requirement: Secret material never reaches the audit trail
 
-Tokens and passwords SHALL be redacted before an event row is written, and a redaction test SHALL fail the build if
-a token-shaped value reaches the store.
+Tokens, passwords and provider keys SHALL be redacted before an event row is written, and a test SHALL fail the
+build when a token-shaped value reaches the store.
 
 #### Scenario: A token in an error message
 
@@ -28,4 +28,24 @@ send another.
 #### Scenario: The same parked task for two hours
 
 - **WHEN** a parked decision stays unanswered for two hours
-- **THEN** exactly one escalation names the project, the task, the question and a link to the board
+- **THEN** exactly one escalation names the project, the item, the question and a link to the board
+
+### Requirement: Writes go through the owner, not around it
+
+A mutation of queue or decision state SHALL be a rig CLI call recorded with its argv and exit code. The app SHALL
+NOT write that state into its own database.
+
+#### Scenario: A row resolved from the board
+
+- **WHEN** the owner answers a decision on the board
+- **THEN** the event records the `rig queue resolve` argv and the row id, and no local state row is written
+
+### Requirement: An audit row is joinable to the rig's transition log
+
+An event that touches a queue row SHALL carry that row's id, so the app's audit and `rig queue transitions` can be
+read together for one obligation.
+
+#### Scenario: The chain across both logs
+
+- **WHEN** a row is created, handed off and closed
+- **THEN** the app's events and the row's transitions agree on who did what and in which order

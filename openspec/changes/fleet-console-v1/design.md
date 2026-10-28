@@ -2,310 +2,315 @@
 
 ## 1. The problem, stated precisely
 
-`dispatcher.py` works and its rules are right, but it is bound to one repo and one rig, and its memory is a
-JSON file. Four projects on four repos would mean four copies of the script, four systemd timers, four logs to read,
-four state files to keep consistent, and no place that answers "what is the fleet doing across all of them — and what
-is waiting for me?".
+A single-repo dispatcher works until the second project exists. Then there is no cross-project view, state lives in
+a JSON file with no transactions and no audit, and "the fleet is idle" needs four reads (`rig ps`, the tick log,
+the queue rows, the forge) to discover that the real answer is *a verdict is parked, waiting for a human*.
 
-Today the answer to "why is the fleet idle?" takes four reads (`rig ps`, the tick log, the queue rows, the forge) and
-a human who remembers that `nothing: no task is ready` can mean *a verdict is parked* — and a task that sat blocked for
-two hours is that failure. That is the gap this app closes:
+This revision starts from a different premise than the 2026-10-27 draft: **OpenRig already owns work state**, so
+the app must not build a second one. The app is the forge-aware planner and the surface, not the queue.
 
-- **one place** for projects, repos, rigs and seats;
-- **one durable state** for dispatch, leases, verdicts and merges;
-- **one board** that names the blocking reason and offers the action;
-- **one audit trail** for every write the fleet made.
+## 2. Invariants that survive unchanged
 
-Non-goals, deliberately: it is not a model in the loop (dispatch is deterministic — `docs/my-stack.md` §3, no LLM in the
-dispatch step), it does not replace `rig` (it drives it), it does not replace the forge, and it does not write
-code. It also does not merge on a builder's word: the four facts of §9 are the only path to a merge.
+From `docs/my-stack.md` §3, still the contract:
 
-## 2. What the existing loop must keep
-
-Straight from `docs/my-stack.md` §3, these are invariants, not implementation details:
-
-1. **Work unit = task.** An epic (an issue with children) is never dispatched.
+1. **Work unit = task.** An epic (an item with children) is never dispatched.
 2. **Candidates** are open tasks whose parent epic is open, or parentless tasks.
-3. **Blocking** is `related_items` with a **smaller iid** still open — one direction only, because GitLab's
-   `relates_to` is symmetric and checking both deadlocks the chain.
-4. **Ordering** is by iid within a project, oldest epic first.
-5. **Concurrency** is bounded by free builders of that project's rig, and N>1 only for genuinely independent tasks.
+3. **Blocking** is one-directional per forge: GitLab uses `related_items` with a **smaller** iid because
+   `relates_to` is symmetric and checking both ways deadlocks; GitHub uses native issue dependencies (`blocked_by`),
+   which are already directional.
+4. **Ordering** is ascending by item number within a project.
+5. **Concurrency** is bounded by the free builders of that project's rig, capped by the project.
 6. **`onhold`** on an epic skips the epic and every child; only a human clears it.
-7. **`status::ongoing`** has exactly one writer per transition (set at dispatch, cleared by the janitor or the
-   reviewer) — no racing.
-8. **Housekeeping runs before the "no free builder" early return**: prune closed, reset stalled, reconcile the
-   marker label, re-nudge unclaimed rows.
-9. **Idempotency covers rows the loop did not create** — scan live row bodies for `#<iid>`, because the state file
-   only knows its own dispatches.
-10. **Reuse a worktree** whose HEAD is the wanted branch (keep uncommitted work); never delete one to unblock.
+7. **The in-flight marker** has exactly one writer per transition (set at dispatch, cleared by the janitor or the
+   reviewer).
+8. **Housekeeping runs before the "no free builder" early return.**
+9. **Idempotency covers rows the loop did not create** — a live row whose body names the item number blocks a
+   second dispatch.
+10. **A worktree is reused, never deleted to unblock.**
 
-## 3. Model
+## 3. Ownership: rig vs app
 
-```
-Project ──< Repo            (1..n; the worktrees are cut from Repo.path)
-        └─< Rig ──< Seat   (builders bound + one reviewer; capacity = free builders)
-        └─< Task ──< Dispatch ──< Lease
-                    └─ QueueRow (mirror of rig's row)
-                    └─ Verdict ──< Merge
-                    └─ Decision  (a human obligation: parked row, red gate, product question)
-```
+| Fact | Owner | Read by the app | Written by the app |
+|---|---|---|---|
+| Queue row, its state, closure reason, transitions | rig | `rig queue list -A -a --json`, `queue show --full --json` | `queue create/claim/handoff/update/resolve` |
+| Human decision, options, SLA, receipt | rig | `rig queue overdue`, `rig view show escalations` | `queue create --destination human@external --human-questions-file --tier --evidence-ref --verify` |
+| Step progression between seats | rig | `rig workflow status/show/trace` | `workflow instantiate/project/route/abort` |
+| Parked diagnosis | rig | `rig parked --rig`, `rig view show pickup` | none |
+| Seat state, model, permissions | rig | `rig ps --nodes --full --json`, `rig seat status` | `rig seat set-permissions/set-model`, `launch/stop` |
+| Account switch, usage | rig | `rig provider signals/accounts`, `rig usage` | `rig provider switch` |
+| Forge items, links, PR/MR, checks | app | forge adapter | labels, comments, issue close, PR merge |
+| Dispatch attempt: seat, branch, worktree, base sha, qitem id | app | SQLite `dispatch` | app |
+| The verdict accepted for a merge | app | SQLite `verdict` | app (from the seat's note) |
+| Who wrote what, when | app | SQLite `event` | app (redacted) |
+| Rig spec for a project | app | generated file under `~/.openrig/specs/rigs/<rig>/` | app (`rig spec validate`, `specs sync`, `up`, `down`) |
 
-- **Project** — `key` (`app`), display name, forge project id, label vocabulary, default branch, gate commands,
-  enabled, concurrency cap, `onhold`.
-- **Repo** — a project may own several (`app`, `docs`, `infra`). A task names the repo it lands in; worktrees are
-  `~/develop/wt-<repo>-<iid>` so two repos never collide on an iid.
-- **Rig/Seat** — which rig serves the project, which seats build, which reviews, each seat's runtime (pinned per
-  spec) and its *observed* model (probe, never guess).
-- **Task** — a mirror of a forge item: `iid, repo, type, state, labels, parent_iid, updated_at, title`.
-- **Dispatch** — one row per (task, attempt): seat, branch, worktree, base sha, brief path, qitem id, timestamps.
-- **QueueRow** — a mirror of `rig queue show`, refreshed each tick: `pickup.state`, `destinationSession`,
-  `closureReason`; the app writes only through audited actions.
-- **Decision** — the thing this app exists for: a blocking obligation with an owner (`human`), a question,
-  options, a deadline, and the action that clears it.
-- **Event** — append-only audit: who (human/loop/seat), what, on what, before/after, and the command's output hash.
+The app may cache rig reads for the board (`snapshot`), but a cache is never the source of a decision: the act pass
+re-reads the row it is about to touch.
 
-## 4. Architecture
+## 4. Model
 
 ```
-              ┌──────────────────────────── fleet-console (one Go binary) ───────────────────────────┐
-  GitLab ───▶ │ mirror loop  ──▶ SQLite ──▶ decide loop ──▶ act loop ──▶ rig / git / forge adapters    │
-  rig    ───▶ │ (read, 15 s)      (durable)   (pure, 1 min)  (audited)                                │
-              │                                    │                                                  │
-              │                          REST + SSE API ──▶ web board (static, embedded)               │
-              └───────────────────────────────────────────────────────────────────────────────────────┘
+Project ──< Repo                      (1..n; worktrees cut from Repo.path)
+        ├── Rig ──< Seat             (declared by the generated spec; capacity = free builders)
+        └──< Item ──< Dispatch ──< Verdict
+                          └── qitem id ──▶ rig queue row (not copied, referenced)
+                          └── change request ──▶ checks (forge)
 ```
 
-Three loops, one writer:
+- **Project** — `key`, forge kind + project id, default branch, label vocabulary, gate commands, concurrency cap,
+  enabled, `onhold`, rig spec template name.
+- **Repo** — `key`, path, worktree root. Worktrees are `wt-<project>-<number>` so two repos never collide.
+- **Rig** — generated from the template; the row names its builders and reviewer. The app stores the rig name and
+  the template inputs, never a hand-edited spec.
+- **Item** — a forge mirror: `number, kind (epic|task), state, title, labels, parent_number, blocked_by[], url`.
+- **Dispatch** — one row per (item, attempt): seat, branch, worktree, base sha, brief path, qitem id, timestamps.
+- **Verdict** — `dispatch_id`, `sha`, `accept|reject`, source note id, at. Only a verdict for the current head sha
+  can gate a merge.
+- **Event** — append-only audit of the app's own writes: actor, kind, subject, command, exit code, stdout hash.
 
-- **Mirror** (read-only, every 15 s per project, jittered): forge items + related links + MRs + pipelines; rig
-  `queue list -A -a --json`, `ps --nodes --json`; git branches on origin. Writes only the mirror tables.
-- **Decide** (pure, every 60 s or on a mirror delta): runs the algorithm of §6 against the mirror and emits
-  *intents* (`dispatch(task, seat)`, `nudge(row)`, `clear_marker(task)`, `close_epic(x)`, `raise_decision(...)`).
-  Pure means replayable: given the same mirror, the same intents, so a bug is reproducible offline in a test.
-- **Act** (serialized, one at a time per project): executes intents through adapters, records the command and its
-  exit in `events`, and is the only place that mutates the world. Global kill switch and per-project pause.
+## 5. Architecture
 
-Adapters are thin and swappable: `Forge` (GitLab REST via `glab api` first, GraphQL for the item list),
-`Rig` (`rig ... --json`, or the daemon HTTP API with `OPENRIG_AUTH_BEARER_TOKEN` when it is up: fewer subprocesses),
-`Git` (worktree add/reuse, fetch, branch checks), `Gates` (pipeline status + job list, never the badge).
+```
+              ┌──────────────────────── fleet-console (one Go binary) ────────────────────────┐
+  GitHub ───▶ │ mirror loop ──▶ SQLite ──▶ decide loop ──▶ act loop ──▶ forge / rig / git      │
+  GitLab ───▶ │ (read, 15 s)   (owned+cache)  (pure, 1 min)  (serialized, audited)            │
+  rig    ───▶ │                                        │                                      │
+              │                       Fiber v3 REST + SSE ──▶ embedded board (go:embed)       │
+              └───────────────────────────────────────────────────────────────────────────────┘
+```
 
-Why Go + SQLite: it matches the repo's stack and the box (single static binary, a `systemd --user` unit, no new
-service to keep alive), it gives real transactions for leases, and it can serve the embedded web build from one file.
-The dispatcher's rules are already proven in Python; port them as tests, not as a rewrite (see tasks 2.1).
+- **Mirror** (read-only, 15 s per project, jittered): forge items + links + PR/MR + checks; rig queue snapshot and
+  seat snapshot; `git ls-remote` branch index. Writes mirror/cache tables only.
+- **Decide** (pure, 60 s or on a mirror delta): the algorithm of §8 over the mirror snapshot, emitting intents
+  (`dispatch`, `nudge`, `clear_marker`, `close_epic`, `raise_decision`). Replayable: same snapshot, same intents.
+- **Act** (serialized, one at a time per project): executes intents through adapters, records one `event` per
+  write, and is the only place that mutates the world. Global kill switch and per-project pause.
 
-## 5. Data (SQLite, WAL)
+Why Go + Fiber v3: the deliverable is one static binary that can be copied to any fleet box (see
+`stack-provisioning`), the loops are plain goroutines with `exec.CommandContext`, and Fiber v3 gives the REST + SSE
+surface without pulling a second runtime. The rejected alternative (TanStack Start end-to-end) is recorded in §15.
+
+## 6. Data (SQLite, WAL)
+
+Owned tables:
 
 ```sql
 CREATE TABLE project (
   id INTEGER PRIMARY KEY, key TEXT UNIQUE NOT NULL, name TEXT NOT NULL,
-  forge_project TEXT NOT NULL,            -- "acme/example-app"
+  forge_kind TEXT NOT NULL,                -- github | gitlab
+  forge_project TEXT NOT NULL,             -- "dinhtrung/fleet-console"
   default_branch TEXT NOT NULL DEFAULT 'main',
-  rig TEXT, concurrency_cap INTEGER NOT NULL DEFAULT 2,
+  rig TEXT NOT NULL, rig_template TEXT NOT NULL,
+  concurrency_cap INTEGER NOT NULL DEFAULT 2,
   enabled INTEGER NOT NULL DEFAULT 1, onhold INTEGER NOT NULL DEFAULT 0,
-  gate_cmd TEXT,                          -- e.g. "go test ./... && npm run typecheck"
-  labels_json TEXT NOT NULL DEFAULT '{}'
+  gate_cmd TEXT, labels_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE repo (
   id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES project(id),
-  key TEXT NOT NULL, path TEXT NOT NULL,  -- /srv/dev/example-app
-  worktree_root TEXT NOT NULL, UNIQUE(project_id, key)
+  key TEXT NOT NULL, path TEXT NOT NULL, worktree_root TEXT NOT NULL,
+  UNIQUE(project_id, key)
 );
-CREATE TABLE task (
-  id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES project(id),
-  iid INTEGER NOT NULL, repo_key TEXT NOT NULL, type TEXT NOT NULL,  -- task | epic
-  state TEXT NOT NULL, title TEXT NOT NULL, parent_iid INTEGER,
-  labels TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
-  UNIQUE(project_id, iid)
+CREATE TABLE item (                        -- forge mirror, one row per item
+  id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, number INTEGER NOT NULL,
+  kind TEXT NOT NULL, state TEXT NOT NULL, title TEXT NOT NULL,
+  labels TEXT NOT NULL DEFAULT '', parent_number INTEGER,
+  blocked_by_json TEXT NOT NULL DEFAULT '[]', url TEXT NOT NULL,
+  updated_at TEXT NOT NULL, UNIQUE(project_id, number)
 );
 CREATE TABLE dispatch (
-  id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES task(id),
-  attempt INTEGER NOT NULL, seat TEXT NOT NULL, rig TEXT NOT NULL,
-  branch TEXT NOT NULL, worktree TEXT NOT NULL, base_sha TEXT NOT NULL,
-  qitem_id TEXT, brief_path TEXT, created_at TEXT NOT NULL, ended_at TEXT,
-  end_reason TEXT,                        -- merged | rejected | stalled | superseded | abandoned
-  UNIQUE(task_id, attempt)
+  id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, item_number INTEGER NOT NULL,
+  attempt INTEGER NOT NULL, seat TEXT NOT NULL, branch TEXT NOT NULL,
+  worktree TEXT NOT NULL, base_sha TEXT NOT NULL, qitem_id TEXT,
+  brief_path TEXT, created_at TEXT NOT NULL, ended_at TEXT,
+  end_reason TEXT,                         -- merged | rejected | stalled | superseded | abandoned
+  UNIQUE(project_id, item_number, attempt)
 );
-CREATE TABLE lease (                      -- one live claim per task, TTL 30 min, renewed by the loop
-  task_id INTEGER PRIMARY KEY REFERENCES task(id),
-  owner TEXT NOT NULL,                    -- "loop@fleet-console"
-  expires_at TEXT NOT NULL
-);
-CREATE TABLE decision (
-  id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, task_iid INTEGER,
-  kind TEXT NOT NULL,                     -- parked | red_gate | product_question | quota | marker_leak
-  question TEXT NOT NULL, options_json TEXT NOT NULL, answer TEXT,
-  created_at TEXT NOT NULL, answered_at TEXT, answered_by TEXT, sla_at TEXT
+CREATE TABLE verdict (
+  id INTEGER PRIMARY KEY, dispatch_id INTEGER NOT NULL REFERENCES dispatch(id),
+  sha TEXT NOT NULL, decision TEXT NOT NULL,  -- accept | reject
+  source TEXT NOT NULL, at TEXT NOT NULL
 );
 CREATE TABLE event (
-  id INTEGER PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL,
-  kind TEXT NOT NULL, subject TEXT NOT NULL, detail TEXT NOT NULL, exit_code INTEGER
+  id INTEGER PRIMARY KEY, at TEXT NOT NULL, actor TEXT NOT NULL, kind TEXT NOT NULL,
+  subject TEXT NOT NULL, detail TEXT NOT NULL, exit_code INTEGER, stdout_hash TEXT
 );
-CREATE TABLE mirror_meta (project_id INTEGER PRIMARY KEY, last_forge_at TEXT, last_rig_at TEXT, etag TEXT);
+CREATE TABLE snapshot (                    -- cache of rig reads, never a decision source
+  project_id INTEGER NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL,
+  synced_at TEXT NOT NULL, PRIMARY KEY (project_id, kind)
+);
+CREATE TABLE mirror_meta (
+  project_id INTEGER PRIMARY KEY, last_forge_at TEXT, last_rig_at TEXT, etag TEXT
+);
 ```
 
-Derived, not stored: "free builders" (rig snapshot minus live rows), "blocked by" (task graph computed in the decide
-pass), "in flight" (dispatch without `ended_at`).
+No `queue_row`, `decision`, `lease` or `task-state` table exists. "Blocked by", "free builders" and "in flight" are
+derived from the snapshot and the owned tables.
 
-## 6. The decide algorithm (per project, iid order)
+## 7. The rig contract
+
+Every rig command the app uses goes through one adapter function that returns a domain type and never a raw map:
+
+- `RigVersion()`, `QueueList()`, `QueueShow(id)`, `QueueCreate(...)`, `QueueUpdate(...)`, `QueueHandoff(...)`,
+  `QueueResolve(...)`, `Seats()`, `Parked(rig)`, `ProviderSignals()`, `SpecValidate()`, `Up()`, `Down()`, `Grow()`,
+  `Launch()`, `Send()`.
+- Decoding is strict about **required** facts: a missing `pickup_state`, `destination_session`, `state` or seat
+  identity is an error, never a zero value. Unknown keys are recorded (once per key per version) but do not fail.
+- A `runtime-compat` check at boot and on every upgrade: `rig --version` at or above the floor, plus one real read
+  of `queue list` and `ps --nodes`. A failure refuses to start the act loop (the mirror and board still run) and
+  shows the reason.
+- Fixtures: `internal/rig/testdata/<version>/<command>.json` captured from a real box. Upgrading the rig floor means
+  capturing new fixtures and diffing them; the diff is the migration list.
+
+## 8. Forge adapters
+
+One normalized model, two implementations:
+
+- **Item**: number, kind (epic if it has children), state, title, body, labels, parent number, blocked-by numbers,
+  url.
+- **Change request**: number, head sha, draft, mergeable, body, closes-item number, checks (name, status,
+  conclusion, allow_failure).
+- **Writes**: set/clear marker label, comment, close item, merge change request at a sha.
+
+GitHub (`gh api`): issues + sub-issues for the epic relation; issue dependencies for `blocked_by`; PRs, check runs
+and commit statuses; `gh pr merge --squash --match-head-commit <sha>`. GitLab (`glab api`): issues + `related_items`
+(smaller-iid rule), MRs, head pipeline jobs with `allow_failure`, `glab mr merge --sha`.
+
+The adapter is chosen per project; the decide loop sees only the normalized model. A project is never a mix of the
+two.
+
+## 9. The decide algorithm (per project, ascending number)
 
 ```
 for each project where enabled and not onhold:
-  snapshot = mirror(project)                      # items, links, rows, branches, pipelines
-  housekeeping(project):                          # ALWAYS, before any early return
-    prune dispatches whose task is closed
-    reset dispatches stalled > N min with no MR (attempts += 1, give up at 3)
-    reconcile marker label (closed task or no live row ⇒ clear status::ongoing)
-    re-nudge rows unclaimed > 15 min on an idle seat (cooldown 30 min)
-    detect parked: dispatch ended, branch has an open MR, no live row ⇒ decision(parked)
-    detect marker leak: MR merged but task open ⇒ decision(marker_leak)
+  snapshot = mirror(project)
+  housekeeping(project):                       # ALWAYS, before any early return
+    prune dispatches whose item is closed
+    reset dispatches stalled > N min with no open CR (attempts += 1, give up at 3)
+    reconcile marker label (closed item, or no live rig row ⇒ clear)
+    re-nudge unclaimed rows > 15 min on an idle seat (cooldown 30 min)
+    detect parked: dispatch ended, CR open, no live row ⇒ decision(parked)
+    detect marker leak: CR merged, item still open ⇒ decision(marker_leak)
     close epics whose children are all closed (comment listing them)
   free = builders(rig) - busy(snapshot.rows)
   if free == 0: return
   ready = []
-  for t in open tasks of project, iid asc:
-     skip if t is epic
+  for t in open items, number asc:
+     skip if t is an epic
      skip if onhold(t) or onhold(parent(t))
      skip if parent(t) exists and parent(t) is not an open epic
-     skip if t in dispatched or in a live row body
-     skip if a branch feature/<iid>-* exists on origin and no merged MR for it
-     skip if any related item with a SMALLER iid is open     # one direction only
+     skip if t already dispatched or named in a live row body
+     skip if a branch feature/<number>-* exists on origin and has no merged CR
+     skip if any blocked_by item is open            # GitHub: native; GitLab: smaller related iid
      ready.append(t); if len(ready) == min(free, cap): break
-  for t in ready: intent(dispatch, t, next free seat)         # one worktree per (repo, iid)
+  for t in ready: intent(dispatch, t, next free seat)
 ```
 
-`dispatch` = `git fetch` → base sha → worktree add-or-reuse → brief from template + task body + project gates →
-`rig queue create --source human@kernel --destination <seat> --body-file <brief>` → set `status::ongoing` → lease.
-Every step idempotent: an existing worktree on the right branch is reused, an existing row for the iid aborts the
-dispatch, a second loop instance is excluded by the project lease.
+## 10. Decisions live in the rig
 
-## 7. Decisions — the part that was missing
-
-`decision` is a first-class object, because "the fleet is idle" is usually "one question is unanswered".
-
-Kinds and how they clear:
-
-| kind | raised when | options the board offers |
-|---|---|---|
-| `parked` | dispatch ended, MR still open, no live row | *hand a fix row to the branch's builder* · *re-dispatch* · *close as superseded* |
-| `red_gate` | head pipeline red, or a gate command failed | *open the failing job* · *retry the job* · *accept the flake* (records job ids) |
-| `marker_leak` | MR merged, task still open | *close the task now* (with the merged sha) |
-| `product_question` | a seat's row closed `blockedOn: human` | free text answer → posted as the decision on the row, then resolved |
-| `quota` | every seat on an account stops within a minute | *pause the project until the reset* · *switch account* |
-
-Each decision has an SLA (parked: 30 min, red gate: 2 h). Missing it escalates to Telegram with the project, the
-task, the question and a deep link into the board — that is the alert that was silent for two hours today.
-
-## 8. Seats, capacity and quota
-
-- Capacity is read from the rig, not configured: `ps --nodes --json` (seats, `sessionStatus`, `agentActivity`) minus
-  rows `working|claimed|in-progress`. A seat that is `needs_input` on `permission_prompt` counts as busy **and**
-  raises a `product_question` — a fleet parked on a menu is not idle, and no tick can fix it.
-- Quota: when ≥2 seats of one rig go `stalled-after-claim` within 5 minutes, raise one `quota` decision for the
-  account rather than one per seat, and stop dispatching to that rig until the reset. Never add seats for capacity:
-  quota is per account (docs/my-stack.md §3 limits).
-- Permission posture is shown per seat (`full_bypass`, `acceptEdits`, auto) because a reviewer that believes it
-  cannot merge is a documented failure mode; the board shows the mode and the last launch time.
-
-## 9. The merge watchdog (the only merge path)
-
-The reviewer keeps the judgement; the console keeps the button. A merge intent is emitted only when all four facts
-hold, read fresh in the act pass — never from a cached mirror:
-
-1. an `ACCEPT <sha>` verdict exists for this dispatch (decision/verdict table),
-2. that sha is the MR's current head,
-3. the MR's **pipeline** for that head is green (job list, `allow_failure` respected; docs-only with no pipeline
-   counts as green),
-4. `detailed_merge_status == mergeable` and the body contains `Closes #<iid>`.
-
-Anything unknown refuses and raises a `red_gate` decision with the missing fact named. Merge is
-`glab mr merge <iid> --sha <sha> --yes`, then the task is verified closed and the next item unblocked; if the merge
-commit does not close the task, complete it and record why.
-
-## 10. UI
-
-One board, dense, dark-friendly, keyboard-first. Four screens plus a drawer.
+The app does not store decisions. It creates a rig queue row addressed to a human with the question, options and
+evidence, and reads the answer back:
 
 ```
-┌ fleet-console ──────────────────────────────────────────────────────────────────────────────┐
-│ ● app   ▶ 3 building · 1 review · 2 waiting on you        ● docs  ⏸ paused (quota)         │
-├─────────────────────────────────────────────────────────────────────────────────────────────┤
-│ app · main  1a2b3c4         ready 4   inflight 3   waiting-you 2   blocked 7   merged 12/h │
-├──────────┬──────────────────────────────────────────────────────────────────────────────────┤
-│ PROJECTS │ TASK                                   STATE      SEAT      AGE    WHY BLOCKED     │
-│ app  12 │ #51 connection-pool store             building   build-1   24m    —               │
-│ docs   4 │ #53 connection-pool form (MNP)        queued     —         3m     waits #52      │
-│ infra  0 │ #42 archive timestamp-seed            waiting    —         2h     ⚠ parked: MR    │
-│          │                                            on you                  !17 green,    │
-│          │                                                                    no verdict      │
-│          │ #55 connection-pool archive           blocked    —         2h     waits #54      │
-├──────────┴──────────────────────────────────────────────────────────────────────────────────┤
-│ ▲ 2 decisions need you   [ open the oldest ▸ ]        ⏱ oldest 2h 04m   SLA 30m  ⚠ breaching │
-└─────────────────────────────────────────────────────────────────────────────────────────────┘
+rig queue create --destination <human>@external --human-intent decision \
+  --summary "<project> #<n>: <the question>" --body-file <brief> \
+  --human-questions-file <questions.json> --tier human-gate \
+  --evidence-ref <artifact path> --verify
 ```
 
-- **Board** (above): per project, the counts that matter, then tasks ordered iid, each with the *reason* it is not
-  moving (waits #x / parked / red gate) — the "three kinds of idle" from §3.8 rendered instead of logged.
-- **Decisions**: the queue of obligations, oldest first, SLA badge, one click per option, free-text for questions.
-  Answering writes the decision to the row/issue and resumes the loop; nothing here is a chat message.
-- **Seats**: per rig, each seat's state, model (observed), permission mode, last activity, current row, pane tail
-  (read-only, `tmux capture-pane`); actions: stop, launch, set permissions, send a message (with sender identity).
-- **Task drawer**: brief, branch, worktree, MR with its pipeline jobs, verdict text, the event trail, links to issue
-  and MR. This is where "who checked this" is answerable in one screen.
-- **Settings**: projects/repos/rigs/labels/gates, concurrency caps, kill switch, alert routes.
+- SLA: the rig's tier deadline (`queue overdue`) plus the app's own escalation timer.
+- Clearing: `rig queue resolve <qid> --decision "..."` — the answer, not a chat message.
+- Escalation: on an overdue row the app sends one Telegram message (edit/replace, never repeat) with project, item,
+  question and a board deep link. Telegram is the app's channel; the rig's gateway speaks Slack.
+- Kinds remain: `parked`, `red_gate`, `marker_leak`, `product_question`, `quota` — each maps to one question row.
 
-Deliberately absent: a chart of tokens per day. Cost belongs in a report the user asks for, not a dashboard that
-invites watching it.
+## 11. The merge watchdog (the only merge path)
 
-## 11. API
+The reviewer keeps the judgement; the console keeps the button. Merge only when all four facts hold, re-read in the
+act pass, never from the snapshot:
 
-`GET /api/board?project=…`, `GET /api/tasks/{iid}`, `GET /api/decisions`, `POST /api/decisions/{id}/answer`,
-`POST /api/tasks/{iid}/dispatch`, `POST /api/rows/{qid}/resolve|handoff|close`, `POST /api/seats/{seat}/stop|launch`,
-`POST /api/projects/{key}/pause|resume`, `GET /api/events?since=…`, `GET /api/stream` (SSE for board deltas).
-Every POST requires a bearer token, is idempotent by an `Idempotency-Key`, and returns the `event_id` it wrote.
-Read-only tokens exist for a wall display; the browser gets a session cookie, never a forge token.
+1. an `ACCEPT <sha>` verdict exists for this dispatch,
+2. that sha is the change request's current head,
+3. the checks for that head are green (allow-failure respected; a docs-only CR with no checks counts as green),
+4. it is mergeable and its body contains the closing keyword for the item (`Closes #<n>`; GitHub accepts
+   `Closes #n`, GitLab `Closes #<iid>`).
 
-## 12. Safety and idempotency
+Anything unknown refuses and raises a `red_gate` decision naming the missing fact. Merge is
+`gh pr merge <n> --squash --match-head-commit <sha>` (or `glab mr merge <iid> --sha <sha> --yes`), then the item is
+verified closed and the next item unblocked; if the merge did not close it, the app closes it and records why.
 
-- **One writer**: act runs under a global lock; each project also holds a lease so two instances never dispatch.
-- **Dry-run is the default on first boot** per project: intents are shown on the board for a day, then the owner
-  flips `applied=1`. Same discipline as `dispatcher.py`'s `--apply`.
-- **Kill switch** per project and globally; a paused project mirrors and keeps raising decisions but writes nothing.
-- **No token in the repo**: forge access via `glab` (its own store) or a CI/service token in the environment; the
-  app never prints a token into an event row (redact before insert, test it).
-- **Every write is one event row**, with the command, exit code and a hash of stdout — the audit answers "who closed
-  this epic" without reading a log file.
-- **Never destructive**: the app does not delete branches or worktrees; it reports them for `worktree-audit.sh`.
+## 12. Rig lifecycle
 
-## 13. Deployment
+A project row renders a spec from `templates/rig.yaml.tmpl`:
 
-Two `systemd --user` units on the box that hosts the rigs (`the fleet box`): `fleet-console.service` (the binary, 127.0.0.1:8787,
-`Restart=on-failure`, `EnvironmentFile` for tokens, mode 600) and nothing else — the timer of the old dispatcher is
-replaced by the app's own decide loop. The board is served on loopback and reached over SSH (`ssh -L 8787:127.0.0.1:8787`)
-or through the existing proxy; no public listener, no new TLS cert to renew.
+- inputs: rig name, one absolute `cwd` per seat, runtime + model per seat, account/env block, builder count,
+  reviewer count, guidance file paths, culture file.
+- path: `~/.openrig/specs/rigs/<rig>/rig.yaml` plus `CULTURE.md`, `guidance/`, and the `agents` symlink.
+- sequence: `rig spec validate --json` → `rig specs sync` → `rig up <rig> --plan --json` → `rig up <rig>
+  --non-interruptive --json` → verify every seat is `running`.
+- growth: `rig grow <rigId> <seat> --pod dev --cwd <path>` then `rig export <rig> -o <spec>` so the spec matches
+  the running topology; the record in SQLite keeps only the inputs.
+- removal: `rig down <rig> --delete` and archive the spec directory (never `rig archive`, which keeps the name).
+- credentials: per-seat agent dirs are seeded before launch (`state/omp/<seat>/agent/config.yml` with the provider
+  key, `mcp.json` with the project's serena/codegraph entries); the app never prints them.
+- one rig per project is the default. Sharing one rig across projects is rejected in §15.
 
-Migration from the current loop, in order: run the console read-only against `app` for a week next to
-`dispatcher.timer` (assert the same plan every tick — a golden test comparing both decisions), then
-disable the timer, then let the console apply. The old state file is imported once (`dispatched`, `attempts`,
-`nudges`, `closers`) so nothing is re-dispatched on cutover.
+## 13. UI — shadcn/ui on sage
 
-## 14. Phases
+- **Component library**: shadcn/ui, generated by `shadcn@latest` into `src/components/ui`, built on its Base UI
+  primitives, styled only through CSS-variable tokens. `components.json` is committed.
+- **Appearance**: one, `sage`. The `:root` block carries the sage tokens; `[data-theme]` variants are gone; the
+  appearance registry exports a single entry and the switcher is removed from the shell.
+- **Token bridge**: shadcn's semantic variables (`--background`, `--foreground`, `--primary`, `--border`, `--ring`,
+  `--radius`) are mapped onto the sage palette roles in `src/index.css`, so a shadcn component inherits the board's
+  ground/panel/rail/ink/rule roles instead of shipping its own colours.
+- **Density and ruled layout survive**: no elevation, hairline rules, fixed columns, one-row-per-record. A shadcn
+  component that cannot meet that is restyled at the token level, not overridden per screen.
+- **Screens**: board, decisions, seats, task drawer, settings — unchanged in purpose.
+
+## 14. API
+
+`GET /api/board`, `GET /api/items/{n}`, `GET /api/decisions`, `POST /api/decisions/{id}/answer`,
+`POST /api/items/{n}/dispatch`, `POST /api/rows/{qid}/resolve|handoff|close`, `POST /api/seats/{seat}/stop|launch`,
+`POST /api/projects/{key}/pause|resume`, `GET /api/events`, `GET /api/stream` (SSE), `GET /api/health`,
+`GET /api/compat`. Every POST needs a bearer token, is idempotent by `Idempotency-Key`, and returns the `event_id`
+it wrote. The board gets a session cookie, never a forge token.
+
+## 15. Decisions and rejected alternatives
+
+1. **rig owns work state** (rejected: keep `queue_row`/`decision`/`lease` tables). Reason: two sources of truth
+   for one row; the rig already has transactional handoff and an append-only transition log. Cost accepted: the
+   app's board depends on rig CLI shapes, which is why `runtime-compat` exists.
+2. **Go 1.25 + Fiber v3 + one static binary** (rejected: pure TypeScript/TanStack Start). Reason: the artifact
+   must be copyable to a fleet box as one file; a Node SEA build is ~110 MB and experimental, a Docker image is
+   ~200 MB and still needs the host's rig/tmux. TS kept the type-sharing win but lost the packaging requirement.
+   Fiber v3 over `net/http`: the route/middleware/SSE surface is the app's whole API and Fiber's group/middleware
+   model keeps the 12 handlers readable; the stdlib remains a one-file change if Fiber's v3 API moves.
+3. **SQLite via `modernc.org/sqlite`** (rejected: `mattn/go-sqlite3`). Reason: `CGO_ENABLED=0` is what makes the
+   single static binary real; one writer plus WAL is the whole concurrency story.
+4. **`rig` and `gh`/`glab` as host tools** (rejected: reimplement the daemon API and forge HTTP directly). Reason:
+   the CLIs own authentication and the rig's own semantics; a library would duplicate two release trains. Accepted
+   cost: the binary is not hermetic, and the packaging spec says so.
+5. **Rig lifecycle generated from the registry** (rejected: one shared rig for all projects, or a hand-authored rig
+   per project). Reason: a seat's cwd, MCP configuration, culture and guidance are launch-time and per-repo; one
+   reviewer per rig serializes reviews; `rig down` must have a per-project blast radius. Generated per project is
+   the same isolation with none of the manual work.
+6. **Two forge adapters, GitHub first** (rejected: GitLab-only). Reason: this repository and its fleet live on
+   GitHub, the existing fleets live on GitLab, and the normalized model is small (item, CR, checks).
+7. **Runtime compat probe + fixtures** (rejected: pin an exact rig version and assume shape). Reason: boxes in this
+   estate already run 0.7.0 and 0.7.4; a pinned binary would refuse to work on the box that has the fleet.
+8. **Task order: rules and oracle before the board** (rejected: board-first P0). Reason: a board over an unproven
+   planner is the failure this project exists to remove; the golden plan comparison is the only evidence the port
+   is faithful.
+9. **shadcn/ui + sage only** (rejected: keep the inherited component system and five appearances). Reason: the
+   owner chose one library and one appearance; five appearances are five token sets to keep contrast-correct for a
+   single-operator board.
+
+## 16. Phases
 
 | Phase | Ships | Proof |
 |---|---|---|
-| P0 | registry + mirror + board read-only | board shows app's real queue and tasks; a golden test replays the last 200 lines of `dispatcher.log` and agrees on every skip reason |
-| P1 | decide loop dry-run + decisions queue | one week of dry-run intents; the parked/red-gate/marker-leak detectors fire on the two real incidents (the 2-hour archive park, the 9102 flake) reproduced from fixtures |
-| P2 | act loop for dispatch + resolve + merge watchdog | a real task dispatched end-to-end with the timer disabled, merged by the watchdog on the four facts |
-| P3 | multi-project: second repo onboarded | two projects at once, capacity isolated, no cross-project iid collision |
-| P4 | alerts, SLA, quota handling, cost report on demand | a parked decision escalates to Telegram within its SLA |
-
-## 15. Decisions I made that you can overrule
-
-1. **Go + SQLite, one binary** — matches the repos; a Postgres would mean a service to babysit. Overrule if a second
-   box must share state (then: Postgres, same schema).
-2. **Mirror instead of live reads on every screen** — a board that hits the forge per page load melts a self-managed
-   GitLab and loses the "why" history. Staleness is shown (badge with the last sync).
-3. **Decisions as records, not notifications** — a Telegram message is a nudge; the obligation must survive a
-   restart, which is why the archive task stalled twice.
-4. **No LLM in the loop, ever** — including "smart" ordering. The ordering rules are the owner's, and a model in
-   that path makes the fleet unreproducible.
-5. **The console does not own the merge judgement** — only the button, on four deterministic facts.
+| P0 | module, Fiber v3 skeleton, SQLite, compat probe, rule port + oracle harness | `go test ./...` green; plan matches the dispatcher's on recorded ticks |
+| P1 | forge adapters (GitHub, then GitLab), mirror, decide dry-run | a week of dry-run intents; parked/red-gate/marker-leak fire on fixtures |
+| P2 | rig lifecycle + act loop (dispatch, rows, merge watchdog) | a real issue dispatched, reviewed and merged by the watchdog on four facts |
+| P3 | web foundation (shadcn + sage) + board, decisions, drawer | screenshot of two projects, one paused, one parked, on the sage tokens |
+| P4 | alerts, quota, second project, cutover | one Telegram escalation; two projects dispatching with isolated rigs |

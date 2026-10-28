@@ -1,52 +1,63 @@
 # Tasks — fleet-console v1
 
-Each phase ships on its own. A box is ticked only with the command that proved it.
+Each phase ships on its own. A box is ticked only with the command that proved it. The order is deliberate: the
+rules and the oracle come before any surface (design §15.8).
 
-## 1. Skeleton and registry (P0)
+## 1. Contract, skeleton, rules port (P0)
 
-- [ ] 1.1 Go module, `cmd/fleet-console`, `internal/{store,forge,rig,git,decide,act,web}`, SQLite via `modernc.org/sqlite` (no cgo), schema from design §5 with migrations. Verify: `go build ./...` and `go test ./internal/store` creates and re-opens a temp DB.
-- [ ] 1.2 Registry CRUD + seed for `app` (repo `example-app`, rig `fleet-omp`, builders `build-1/2`, reviewer `review`). Verify: `fleet-console projects add …` then `GET /api/projects` returns it.
-- [ ] 1.3 Config file (`/etc/fleet-console/config.yaml` or `~/.config/fleet-console/`) for tokens, ports, alert routes; tokens from the environment only, redacted from logs. Verify: a startup log with a fake token prints `REDACTED`.
-- [ ] 1.4 systemd user unit + `--healthcheck` subcommand. Verify: `systemctl --user start fleet-console` then `curl -fsS 127.0.0.1:8787/api/health`.
+- [ ] 1.1 Go module `github.com/dinhtrung/fleet-console`, `cmd/fleet-console`, `internal/{store,forge,rig,git,decide,act,web}`, Go 1.25. Verify: `go build ./...` and `go vet ./...` exit 0.
+- [ ] 1.2 Fiber v3 app skeleton: `/api/health`, `/api/compat`, bearer middleware, `Idempotency-Key` middleware, graceful shutdown on SIGTERM. Verify: `go test ./internal/web` covers 401 without token, 200 with, and a repeated key returning the first `event_id`.
+- [ ] 1.3 SQLite store with the schema of design §6 (`modernc.org/sqlite`, WAL, `busy_timeout`), migrations, one writer guard. Verify: `go test ./internal/store` creates, reopens and migrates a temp DB; `CGO_ENABLED=0 go build ./...` succeeds.
+- [ ] 1.4 Port the dispatcher's rules as pure functions over a snapshot: epic skip, parent gate, `onhold` cascade, live-row-body idempotency, branch-on-origin, one-way blocking, ascending order, cap. Verify: table tests, one per rule, named after the rule.
+- [ ] 1.5 Oracle harness: run `~/bin/fleet-autodispatch.py --dry-run` and the Go plan against the same recorded inputs; diff task sets and skip reasons. Verify: `go test ./internal/decide -run TestOracle` passes on at least 20 recorded ticks checked into `testdata/ticks/`.
+- [ ] 1.6 Rig compat probe: version floor, one real `queue list` and `ps --nodes` read, required-field checks, unknown-key log. Verify: `fleet-console --compat` prints version, floor and the two parsed shapes; a fixture with a renamed field exits non-zero naming the field.
 
-## 2. Mirror (P0)
+## 2. Rig contract and lifecycle (P0)
 
-- [ ] 2.1 Port the work-item reader: GraphQL paged 100/page, ≤10 pages, iid as int, `related_items`, parent, labels, state. Verify: a fixture test of one real page parses 100 items with no null iid.
-- [ ] 2.2 Read merge requests + pipelines (head pipeline, job list, `allow_failure`, `detailed_merge_status`). Verify: `TestPipelineFacts` over recorded payloads for green/red/flaky/docs-only.
-- [ ] 2.3 Read rig: `rig queue list -A -a --json` and `rig ps --nodes --json` (bare array), map to `queue_row` and seat records. Verify: a test over this box's real output.
-- [ ] 2.4 Read origin branches per repo and record `feature/<iid>-*`. Verify: `TestBranchIndex` with a recorded `ls-remote`.
-- [ ] 2.5 Mirror loop with jitter, per-project stamps, and a `stale` flag surfaced to the API. Verify: kill the forge CLI and confirm the board shows the last sync time instead of an empty board.
+- [ ] 2.1 Rig adapter: `QueueList`, `QueueShow`, `QueueCreate`, `QueueUpdate`, `QueueHandoff`, `QueueResolve`, `Seats`, `Parked`, `ProviderSignals` — one function per CLI command, domain types out. Verify: fixture tests per command against captured `--json`; no `map[string]any` crosses the package boundary (`go vet` + a grep task in review).
+- [ ] 2.2 Spec template `templates/rig.yaml.tmpl` + renderer: rig name, per-seat cwd/runtime/model, account env, builder count, guidance and culture paths. Verify: `go test ./internal/rig -run TestRenderSpec` compares the rendered YAML with a golden file, and `rig spec validate <rendered> --json` reports valid.
+- [ ] 2.3 Launch sequence: write spec dir, `rig specs sync`, `rig up <rig> --plan --json`, `rig up --non-interruptive`, verify every seat `running` or fail with the seat named. Verify: one real launch on the fleet box, with the JSON of both calls recorded in the task's evidence.
+- [ ] 2.4 Growth and write-back: `rig grow` then `rig export` so the spec matches the running topology. Verify: after growing one seat, the exported spec validates and `rig ps --nodes --rig <rig> --json` lists the new seat.
+- [ ] 2.5 Teardown: `rig down <rig> --delete` + spec archive; refuse when the rig still has live rows. Verify: a throwaway rig is removed and `rig ps --include-archived` no longer lists it; `rig up <same-name>` fails with a row-count message before teardown and succeeds after.
+- [ ] 2.6 Per-seat credential and MCP seeding before launch (provider key, `mcp.json` with serena/codegraph/rtk entries, `PATH` including Go). Verify: from inside a launched seat, `rig whoami --json` and one `mcp__serena__*` call succeed; the key never appears in any log or event row (grep the event table).
 
-## 3. Decide (P1, dry-run)
+## 3. Forge adapters (P1)
 
-- [ ] 3.1 Candidate filter and blocking rules exactly as design §6, as pure functions over a mirror snapshot. Verify: table tests for epic, onhold parent, closed parent, live row body, branch on origin, smaller related iid.
-- [ ] 3.2 Housekeeping passes: prune, reset stalled (≤3 attempts), marker reconcile, re-nudge unclaimed (15 min/30 min cooldown), epic close. Verify: one test per pass, each asserting the event rows written.
-- [ ] 3.3 Parked / marker-leak / red-gate detectors raising `decision` rows. Verify: replay the two real incidents as fixtures (#42 parked with a green MR and no verdict; a band flake on a head pipeline) and assert the decision kind and question text.
-- [ ] 3.4 Golden test against the live loop: run the console's plan and `dispatcher.py --apply=false` for the same project on the same mirror, assert identical task sets and skip reasons. Verify: the test passes for ten consecutive ticks in a week of shadow running.
+- [ ] 3.1 Normalized model + interface (`Item`, `ChangeRequest`, `Check`, writes) with a fake implementation. Verify: `go test ./internal/forge` exercises the interface through the fake for decide-loop tests.
+- [ ] 3.2 GitHub reader: issues, sub-issues (epic → children), issue dependencies (`blocked_by`), PRs, check runs / commit statuses. Verify: recorded payload fixtures from `dinhtrung/fleet-console`; `TestGitHubItems` reproduces an epic with children and one blocked task.
+- [ ] 3.3 GitHub writes: label set/clear, comment, close item, `gh pr merge --squash --match-head-commit <sha>`. Verify: one real issue labelled and one docs-only PR merged by the watchdog path on a throwaway branch.
+- [ ] 3.4 GitLab reader/writer parity: `glab api` items with `related_items` (smaller-iid rule), MRs, head pipeline jobs with `allow_failure`, `glab mr merge --sha`. Verify: fixture tests from `traffic-simulator-v2` payloads, and the same decide test passes for both adapters.
+- [ ] 3.5 Auth and rate limits: token from the CLI's own store (never the repo), one retry on 5xx, a bounded per-tick request budget. Verify: `TestBudget` refuses the 101st call in a tick; a 401 surfaces as a project-level `stale` state, not an empty board.
 
-## 4. Act (P2)
+## 4. Mirror and decide (P1, dry-run)
 
-- [ ] 4.1 Dispatch intent: fetch, base sha, worktree add-or-reuse (reuse when HEAD is the branch, skip when other branch + dirty), brief from template, `rig queue create --source human@kernel`, set `status::ongoing`, record dispatch + lease. Verify: a real task dispatched with the old timer stopped; worktree and row exist; a second run of the intent is a no-op.
-- [ ] 4.2 Row actions: resolve (decision text), handoff, close-as-superseded, re-nudge. Verify: each writes an event with the row's before/after state and the CLI exit code.
-- [ ] 4.3 Merge watchdog: four facts re-read in the act pass; refuse with the missing fact named. Verify: four refusal tests (no verdict / sha drift / red pipeline / not mergeable) and one end-to-end merge on a docs-only MR.
-- [ ] 4.4 Post-merge: verify the task closed, complete it when the body only `Refs` it, clear `status::ongoing`, unblock the next task. Verify: a test where the MR body says `Refs #x` and the task ends closed with an event naming the reason.
+- [ ] 4.1 Mirror loop with jitter, per-project stamps and a `stale` flag. Verify: kill the forge CLI and confirm the API still returns the last successful sync time plus `stale: true`.
+- [ ] 4.2 Branch index per repo (`feature/<n>-*`) from `git ls-remote`. Verify: `TestBranchIndex` over a recorded remote listing.
+- [ ] 4.3 Rig snapshot read (`queue list -A -a`, `ps --nodes --full`) into the `snapshot` cache, stamped. Verify: the board endpoint returns rows and seats from the snapshot with `synced_at`.
+- [ ] 4.4 Housekeeping passes: prune, reset stalled (≤3), marker reconcile, re-nudge (15 min / 30 min cooldown), epic close. Verify: one test per pass asserting the `event` rows written.
+- [ ] 4.5 Incident fixtures: parked (open CR, no verdict, no live row) and marker leak (merged CR, item open) raise the decision question. Verify: `go test ./internal/decide -run TestIncident` names the question text for both fixtures.
+- [ ] 4.6 Dry-run week: intents only, compared against the live dispatcher every tick. Verify: ten consecutive ticks with zero diffs, recorded in `docs/cutover.md`.
 
-## 5. Web board (P2)
+## 5. Act (P2)
 
-- [ ] 5.1 Static build embedded (`go:embed`), served at `/`, SSE at `/api/stream`. Verify: `go build` then the board renders from the embedded assets with no node at runtime.
-- [ ] 5.2 Board screen with the four states and the reason column; project switcher; counts. Verify: a screenshot with two projects, one paused, one with a parked decision.
-- [ ] 5.3 Decisions screen: oldest first, SLA badge, options, free-text answer, optimistic update confirmed by SSE. Verify: answering a fixture decision moves it out of the queue and writes one event.
-- [ ] 5.4 Seat screen: state, observed model, permission mode, last activity, pane tail (read-only). Verify: shows the real `fleet-omp` seats, including a seat parked on a permission prompt.
-- [ ] 5.5 Task drawer: brief, branch, worktree, MR + job list, verdict, event trail, issue/MR links. Verify: opens for a task that was dispatched, reviewed and merged.
+- [ ] 5.1 Dispatch intent: fetch, base sha, worktree add-or-reuse, brief from template, `rig queue create --source human@kernel --destination <seat> --body-file`, marker label, dispatch row. Verify: a real issue dispatched with the old timer stopped; a second run is a no-op naming the existing row.
+- [ ] 5.2 Row actions: resolve, handoff, close-as-superseded, re-nudge — each one rig call plus one `event` row. Verify: each action's test asserts the CLI argv, the exit code and the before/after state.
+- [ ] 5.3 Verdict capture: read the reviewer's note, store `verdict(dispatch, sha, accept|reject)`; only the newest note counts. Verify: three tests — accept, later reject vetoes, note for an older sha ignored.
+- [ ] 5.4 Merge watchdog: four facts re-read in the act pass; refuse naming the missing fact. Verify: four refusal tests plus one end-to-end merge on a docs-only PR.
+- [ ] 5.5 Post-merge: verify the item closed, close it when the body only referenced it, clear the marker, unblock the next item. Verify: a fixture where the PR body says `Refs #n` and the item ends closed with an event naming the reason.
 
-## 6. Alerts and multi-project (P3)
+## 6. Web foundation and board (P3)
 
-- [ ] 6.1 Telegram escalation on SLA breach and on `quota` decisions; one message per decision, edited rather than repeated. Verify: a forced SLA breach delivers one message containing project, task and board deep link.
-- [ ] 6.2 Second project onboarded (a real second repo), with isolated capacity. Verify: both projects dispatch on the same box without an iid collision or a shared worktree path.
-- [ ] 6.3 Quota handling: ≥2 seats stalled on one account within 5 min raises one `quota` decision and pauses dispatch to that rig. Verify: simulated stall in a test, and one real observation on the box.
+- [ ] 6.1 shadcn/ui init: `components.json`, `@` alias, Base UI primitives, `tw-animate-css`, `cva`/`clsx`/`tailwind-merge`. Verify: `npm run typecheck && npm run build` green, and one generated component (`button`) renders in the existing shell.
+- [ ] 6.2 Sage as the only appearance: delete the light/dark/dusk/ember token blocks, their registry entries, the appearance menu and the `dark` custom variant; `:root` carries sage. Verify: `grep -rn 'data-theme="\(light\|dark\|dusk\|ember\)"' src index.html` returns nothing; a screenshot shows the sage board.
+- [ ] 6.3 Token bridge: map shadcn semantic variables onto the sage roles (`--background`, `--foreground`, `--primary`, `--border`, `--ring`, `--radius`), no component-level colour overrides. Verify: the board and a shadcn `Dialog`/`Menu` use only bridge variables (`grep -rn 'bg-\|text-' src/components/ui` shows token classes, not palette hex).
+- [ ] 6.4 Replace the inherited primitives that shadcn now owns (Button, Dialog, Menu, Field, Toast) and delete the replaced files. Verify: no screen imports a deleted path (`npx tsc -b` green) and the accessibility checks on the swapped Dialog/Menu pass.
+- [ ] 6.5 Embedded board: `go:embed dist`, SPA fallback, SSE at `/api/stream`. Verify: `go build` then `./fleet-console` serves the board with no Node at runtime; `curl -N /api/stream` prints one event on a state change.
+- [ ] 6.6 Board, decisions, seats and task drawer screens. Verify: one screenshot per screen on sage tokens — two projects, one paused, one parked decision; the seat screen shows a real omp seat; the drawer shows branch, PR, checks, verdict and events.
 
-## 7. Cutover (P3)
+## 7. Alerts, quota, multi-project, cutover (P4)
 
-- [ ] 7.1 Import `~/.local/state/dispatcher.json` (`dispatched`, `attempts`, `nudges`, `closers`) so nothing re-dispatches. Verify: after import, a dry-run plan for `app` is a subset of the old dispatcher's.
-- [ ] 7.2 Disable `dispatcher.timer`, enable the console's act loop, watch one full task end-to-end. Verify: task dispatched, reviewed, merged, epic closed, board empty with a reason per closed task.
-- [ ] 7.3 Update `~/my-stack.md` §3.8/§3.9 to describe the console as the dispatcher (one doc the owner reads after a reboot), and keep the old script in `~/bin` as the fallback with a note. Verify: the section names the units, the port, the registry file and the kill switch.
+- [ ] 7.1 Telegram escalation on SLA breach and on `quota`: one message per decision, edited rather than repeated. Verify: a forced breach delivers one message with project, item, question and a board deep link.
+- [ ] 7.2 Quota handling: two seats stalled within 5 minutes raises one decision and pauses dispatch to that rig; `rig provider signals` is the source. Verify: simulated stall test and one real reading.
+- [ ] 7.3 Second project onboarded with its own generated rig and isolated capacity. Verify: both projects dispatch without a shared worktree path or item-number collision.
+- [ ] 7.4 Cutover: import the dispatcher state (`dispatched`, `attempts`, `nudges`, `closers`), disable the old timer, run one item end-to-end. Verify: item dispatched → reviewed → merged → epic closed, with the board empty and a reason per closed item; `docs/my-stack.md` names the binary, the unit, the port and the kill switch.

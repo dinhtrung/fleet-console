@@ -2,8 +2,9 @@
 
 ### Requirement: A project is a row, not a script
 
-A project SHALL be one row naming its forge project, its default branch, one or more repos with a local path and a
-worktree root, and the rig that serves it. Onboarding a repo SHALL be that row, with no new timer, log or state file.
+A project SHALL be one row naming its forge kind and project id, its default branch, one or more repos with a local
+path and worktree root, its rig name and the rig template that generates it. Onboarding SHALL be that row, with no
+new timer, log or state file.
 
 #### Scenario: Two projects on one box
 
@@ -17,8 +18,8 @@ worktree root, and the rig that serves it. Onboarding a repo SHALL be that row, 
 
 ### Requirement: Capacity comes from the rig
 
-Free builders SHALL be computed from the rig's own state — its seats minus the rows that are working, claimed or
-in progress — capped by the project's `concurrency_cap`. Capacity SHALL NOT be a configured number.
+Free builders SHALL be computed from the rig's own state — its seats minus rows that are working, claimed or in
+progress — capped by the project's `concurrency_cap`. Capacity SHALL NOT be a configured number.
 
 #### Scenario: A seat parked on a prompt is not free
 
@@ -37,10 +38,20 @@ and SHALL write nothing to the forge, rig or git.
 
 ### Requirement: Every screen stamps its source
 
-A screen reading mirrored state SHALL show when that mirror was last refreshed, per source. An empty board SHALL
-never be the only thing a failed fetch produces.
+A screen reading mirrored or cached state SHALL show when that source was last refreshed. An empty board SHALL never
+be the result of a failed fetch alone.
 
 #### Scenario: The forge is unreachable
 
 - **WHEN** the forge read fails for a project
 - **THEN** the board shows the last successful sync time and marks the project stale, instead of rendering no tasks
+
+### Requirement: The registry owns the rig, not only its name
+
+A project row SHALL name the rig template and the inputs that generate its rig; a rig name that no template
+produced SHALL be reported as unmanaged rather than driven.
+
+#### Scenario: A hand-made rig
+
+- **WHEN** a project points at a rig whose spec the app did not render
+- **THEN** the board marks it unmanaged and the act loop refuses to dispatch to it

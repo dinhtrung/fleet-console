@@ -1,50 +1,71 @@
-# Proposal — fleet-console v1
+# Proposal — fleet-console v1 (revised after the OpenRig capability review)
 
 ## Why
 
-The automatic fleet in `~/my-stack.md` §3.8 works for one repo on one rig: `dispatcher.py` (stdlib +
-`glab` + `rig`), a JSON state file, one timer, one log. Two things break when there is a second project:
+The 2026-10-27 design treated the app as a second system of record: its own `queue_row`, `decision`, `lease` and
+`event` tables beside a JSON dispatcher. A review of OpenRig 0.7.x shows the rig already owns most of that and
+maintains it: `rig queue` is the durable owned-work record with transactional handoff, closure reasons and a
+transition log; `rig queue create --destination <human>@external --human-questions-file` is a decision record with
+options, an SLA tier and a receipt; `rig workflow` projects the next step when a seat closes one; `rig view show
+pickup|escalations|held` derives the three kinds of idle; `rig parked` diagnoses a stopped seat that still owes
+work; `rig provider` owns account switching.
 
-- **There is no cross-project view.** "Why is the fleet idle?" needs `rig ps`, the tick log, `rig queue list` and
-  the forge — four reads, and the answer ("a verdict is parked, waiting for me") is invisible for hours. It happened
-  twice this week: #41 sat parked for two hours, and #42 for four, both reported as idle.
-- **Everything is per-repo.** A second repo means a second copy of the script, timer, log and state file, and no
-  place that knows which rig serves which project, or that a rig's builders are the shared capacity.
+A second queue and a second decision store would duplicate state, drift on every rig release, and leave "who owns
+this row" unanswerable. What the rig cannot do is what this app is for: it does not read the forge, it has no
+ordering or blocking rules over issues, it has no merge gate, and it has no cross-project view tied to forge tasks.
 
 ## What changes
 
-One internal app — a Go binary with SQLite, a REST+SSE API and a web board — that keeps the loop's rules exactly and
-adds the four things that make it run N projects: a **registry** (project → repos, rig, seats, gates, labels),
-**durable state** (tasks, dispatches, leases, decisions, events instead of one JSON), a **decisions queue** (every
-blocking obligation as a record with an owner and an SLA, answerable in one click), and a **deterministic merge
-watchdog** (four facts, no judgement).
+- **rig is the system of record for work state.** Queue rows, human decisions, leases, step progression and the
+  parked diagnosis are read from and written through the rig CLI. The app stores what the rig does not have: a
+  forge mirror, one dispatch record per attempt, the verdict it accepted, and an audit row per write.
+- **The registry owns the rig lifecycle.** A project row renders a rig spec from one template, launches it, grows
+  it, probes it and tears it down with `--delete`. Onboarding a project is a row; no rig is authored by hand.
+- **A forge abstraction with two adapters.** GitHub (`gh`) and GitLab (`glab`) are normalized to one item /
+  change-request / checks model. This repository's own fleet runs on GitHub issues; the existing fleets stay on
+  GitLab.
+- **One static Go binary.** Go 1.25, Fiber v3, SQLite through `modernc.org/sqlite` (no cgo), the built board
+  embedded with `go:embed`. Host tools the binary drives are declared, not bundled: `rig`, `gh`/`glab`, `git`, `tmux`.
+- **The rig contract is probed, not assumed.** One adapter per CLI command, a version floor checked at boot, a
+  minimal-field contract, and recorded fixtures per rig version — the rig's `--json` shapes changed between 0.7.0
+  and 0.7.4 in the same month.
+- **The board is shadcn/ui on the sage appearance only.** shadcn/ui components (CSS-variable tokens, Base UI
+  primitives) are the component library; the inherited light, dark, dusk and ember appearances are deleted and the
+  appearance switcher goes with them.
+- **The stack installs from a script.** A separate change set (`stack-provisioning`) adds `install.sh`, a pinned
+  `stack.lock`, profiles and a verify phase, because a new box needs ten tools, the rig daemon, seat credentials
+  and systemd units before this app can start.
 
-## In scope (v1)
+## Capabilities
 
-- Registry for N projects, each with 1..n repos and one rig; concurrency capped per project.
-- Mirror loop over forge + rig + git branches; board that names the reason a task is not moving.
-- Decide loop implementing §3.8's ordering and blocking rules, dry-run by default, replayable offline.
-- Act loop: dispatch, re-nudge, marker reconcile, epic close, row resolve/handoff, merge watchdog.
-- Decisions queue with SLA and Telegram escalation; audit trail of every write.
+### New Capabilities
 
-## Out of scope
+- `forge` — normalized issues, change requests and checks over GitHub and GitLab.
+- `rig-lifecycle` — render, launch, grow, verify and remove a project's rig from its registry row.
+- `runtime-compat` — the rig CLI contract, version floor, boot probe and fixtures.
 
-- Replacing `rig` or the forge; any code writing; model-driven ordering or "smart" prioritisation.
-- Multi-tenant auth beyond a bearer token + read-only token; a hosted deployment.
-- Cost dashboards (a report on demand instead).
+### Modified Capabilities
 
-## Risk and the mitigation
+- `dispatch` — same rules; idempotency and handoff now read rig rows instead of a mirrored table.
+- `project-registry` — a project row owns a rig lifecycle, not only a rig name.
+- `console-ui` — the board keeps its "why is it not moving" duty; shadcn/ui and sage replace the inherited
+  components and appearances.
+- `audit-and-alerts` — every write is still one audit row; the writes themselves go through the rig CLI.
 
-| Risk | Mitigation |
-|---|---|
-| Two writers during cutover double-dispatch | the console's project lease + a golden test that compares its plan with `dispatcher.py`'s every tick for a week |
-| A mirror bug hides work ("no task ready" while one is ready) | every skip reason is a stored row, and the board shows it; a task with no reason is a test failure |
-| Merging on stale facts | the watchdog re-reads all four facts in the act pass, never from the mirror |
-| The app becomes a second source of truth for rig state | rig remains authoritative; the mirror is stamped with its sync time on every screen |
+## Impact
 
-## Success
+- New Go module (`cmd/fleet-console`, `internal/{store,forge,rig,git,decide,act,web}`) plus `web/` built to `dist/`
+  at build time and embedded at compile time.
+- New dependencies: Fiber v3, `modernc.org/sqlite`, Go 1.25; web gains shadcn/ui, `class-variance-authority`,
+  `tailwind-merge`, `clsx`, Base UI primitives and `tw-animate-css`.
+- Deleted from the web scaffold: the light, dark, dusk and ember token blocks, their registry entries, the
+  multi-item appearance menu, and the four inherited component files shadcn replaces.
+- Host prerequisites, declared rather than implied: `rig`, `gh` or `glab`, `git`, `tmux`, a running OpenRig daemon.
+- Migration: the existing dispatcher runs in shadow until the app's plan matches it on every tick.
 
-- One screen answers "what is the fleet doing, per project, and what waits for me" in under five seconds.
-- A parked verdict is escalated before its SLA instead of being found hours later.
-- Onboarding a second repo is a row in the registry, not a new script and timer.
-- The dry-run plan for `app` matches the existing dispatcher's on every tick for a week before any write is enabled.
+## Non-goals
+
+- No model in the dispatch path; ordering is the owner's written rules.
+- No replacement for the rig daemon or the forge; the app drives both through their CLIs.
+- No second queue, no second decision store, no second lease.
+- No cost dashboard; `rig usage` answers that on demand.
