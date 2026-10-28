@@ -150,6 +150,25 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 		}
 	}
 
+	// The mirror's stamps decide the board's sync time and stale flag. A failed
+	// forge read keeps the previous items and stamp; it never reads as an empty board.
+	statuses := make(map[int64]store.MirrorStatus, len(projects))
+	synced := time.Time{}
+	stale := false
+	forbidden := false
+	for _, p := range projects {
+		status, err := f.Store.MirrorStatus(ctx, p.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		statuses[p.ID] = status
+		if status.LastForgeAt != nil && status.LastForgeAt.After(synced) {
+			synced = *status.LastForgeAt
+		}
+		stale = stale || status.ForgeStale
+		forbidden = forbidden || status.ForgeForbidden
+	}
+
 	result := make([]boardProject, 0, len(projects))
 	for _, p := range projects {
 		dispatches := map[int]store.DispatchRow{}
@@ -166,10 +185,17 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 				}
 			}
 		}
+		projectStatus := statuses[p.ID]
 		bp := boardProject{Key: p.Key, Name: p.Name, Paused: p.OnHold, Status: rig.StatusOK, Items: []boardItem{}}
-		if compatBlocked {
+		switch {
+		case compatBlocked:
 			bp.Status = "compat-blocked"
 			bp.Reason = compat.Error
+		case projectStatus.ForgeForbidden:
+			// The token lacks a scope or the branch is protected; retrying cannot
+			// succeed. The reason names the operation and the forge's message.
+			bp.Status = "forbidden"
+			bp.Reason = projectStatus.ForgeError
 		}
 		for _, item := range byProject[p.ID] {
 			if item.State != "open" {
@@ -220,10 +246,13 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 			if row.State == "queued" && live >= p.ConcurrencyCap && p.ConcurrencyCap > 0 {
 				row.State, row.Reason = "waiting", "no free builder"
 			}
-			if compatBlocked {
+			switch {
+			case compatBlocked:
 				// The act loop is off; every project says why instead of looking
 				// like an empty or idle queue.
 				row.State, row.Reason = "blocked", "compat-blocked"
+			case projectStatus.ForgeForbidden:
+				row.State, row.Reason = "blocked", projectStatus.ForgeError
 			}
 			switch row.State {
 			case "building":
@@ -242,20 +271,6 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 		sort.Slice(bp.Items, func(i, j int) bool { return bp.Items[i].Number < bp.Items[j].Number })
 		result = append(result, bp)
 	}
-	// The mirror's stamps decide the board's sync time and stale flag. A failed
-	// forge read keeps the previous items and stamp; it never reads as an empty board.
-	synced := time.Time{}
-	stale := false
-	for _, p := range projects {
-		status, err := f.Store.MirrorStatus(ctx, p.ID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		if status.LastForgeAt != nil && status.LastForgeAt.After(synced) {
-			synced = *status.LastForgeAt
-		}
-		stale = stale || status.ForgeStale
-	}
 	syncedAt := f.now().UTC().Format(time.RFC3339)
 	if !synced.IsZero() {
 		syncedAt = synced.UTC().Format(time.RFC3339)
@@ -263,6 +278,7 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"projects": result, "synced_at": syncedAt, "stale": stale,
 		"compat_blocked": compatBlocked, "compat_reason": compat.Error,
+		"forge_forbidden": forbidden,
 	})
 }
 

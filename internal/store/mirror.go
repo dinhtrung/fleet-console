@@ -100,21 +100,23 @@ func (s *Store) SetRigStamp(ctx context.Context, projectID int64, at time.Time) 
 
 // MirrorStatus is the stamp/stale block the board reads.
 type MirrorStatus struct {
-	LastForgeAt *time.Time `json:"last_forge_at,omitempty"`
-	LastRigAt   *time.Time `json:"last_rig_at,omitempty"`
-	ForgeStale  bool       `json:"forge_stale"`
-	RigStale    bool       `json:"rig_stale"`
-	ForgeError  string     `json:"forge_error,omitempty"`
-	RigError    string     `json:"rig_error,omitempty"`
-	BranchError string     `json:"branch_error,omitempty"`
+	LastForgeAt    *time.Time `json:"last_forge_at,omitempty"`
+	LastRigAt      *time.Time `json:"last_rig_at,omitempty"`
+	ForgeStale     bool       `json:"forge_stale"`
+	ForgeForbidden bool       `json:"forge_forbidden"`
+	RigStale       bool       `json:"rig_stale"`
+	ForgeError     string     `json:"forge_error,omitempty"`
+	RigError       string     `json:"rig_error,omitempty"`
+	BranchError    string     `json:"branch_error,omitempty"`
 }
 
 type statusPayload struct {
-	ForgeStale  bool   `json:"forge_stale"`
-	RigStale    bool   `json:"rig_stale"`
-	ForgeError  string `json:"forge_error,omitempty"`
-	RigError    string `json:"rig_error,omitempty"`
-	BranchError string `json:"branch_error,omitempty"`
+	ForgeStale     bool   `json:"forge_stale"`
+	ForgeForbidden bool   `json:"forge_forbidden"`
+	RigStale       bool   `json:"rig_stale"`
+	ForgeError     string `json:"forge_error,omitempty"`
+	RigError       string `json:"rig_error,omitempty"`
+	BranchError    string `json:"branch_error,omitempty"`
 }
 
 // MirrorStatus reads the last successful stamps and the last tick's stale block.
@@ -142,6 +144,7 @@ func (s *Store) MirrorStatus(ctx context.Context, projectID int64) (MirrorStatus
 		var block statusPayload
 		if json.Unmarshal([]byte(payload), &block) == nil {
 			status.ForgeStale, status.RigStale = block.ForgeStale, block.RigStale
+			status.ForgeForbidden = block.ForgeForbidden
 			status.ForgeError, status.RigError, status.BranchError = block.ForgeError, block.RigError, block.BranchError
 		}
 	} else if err != sql.ErrNoRows {

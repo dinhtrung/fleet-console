@@ -117,3 +117,76 @@ func TestBoardMarksProjectsCompatBlocked(t *testing.T) {
 		t.Fatalf("item = %+v, want compat-blocked", project.Items)
 	}
 }
+
+func TestBoardShowsForbiddenScope(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "fleet.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	projectID, err := st.CreateProject(ctx, store.ProjectInput{
+		Key: "app", Name: "app", ForgeKind: "github", ForgeProject: "dinhtrung/fleet-console",
+		Rig: "fleet-console", ConcurrencyCap: 2, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	at := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
+	if err := st.ReplaceItems(ctx, projectID, []store.ItemRecord{{
+		Number: 7, Kind: "task", State: "open", Title: "One", Labels: "", BlockedByJSON: "[]",
+		URL: "u", UpdatedAt: at,
+	}}); err != nil {
+		t.Fatalf("items: %v", err)
+	}
+	const forbidden = "forge: forbidden: gh api orgs/github/actions/permissions: You must be an org admin. (HTTP 403)"
+	if err := st.PutSnapshot(ctx, projectID, "status", map[string]any{
+		"forge_stale": true, "forge_forbidden": true, "forge_error": forbidden,
+	}, at); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+
+	app, err := New(Config{
+		Token: "test-token", Store: st,
+		Compat: func(context.Context) rig.Report {
+			return rig.Report{OK: true, Status: rig.StatusOK}
+		},
+	})
+	if err != nil {
+		t.Fatalf("app: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/board", nil)
+	req.Header.Set(fiber.HeaderAuthorization, "Bearer test-token")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var board struct {
+		Forbidden bool `json:"forge_forbidden"`
+		Projects  []struct {
+			Status string `json:"status"`
+			Reason string `json:"reason"`
+			Items  []struct {
+				State  string `json:"state"`
+				Reason string `json:"reason"`
+			} `json:"items"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(body, &board); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	if !board.Forbidden {
+		t.Fatalf("forge_forbidden = false: %s", body)
+	}
+	if len(board.Projects) != 1 {
+		t.Fatalf("projects = %d, want 1", len(board.Projects))
+	}
+	project := board.Projects[0]
+	if project.Status != "forbidden" || project.Reason != forbidden {
+		t.Fatalf("project status = %q reason = %q", project.Status, project.Reason)
+	}
+	if len(project.Items) != 1 || project.Items[0].State != "blocked" || project.Items[0].Reason != forbidden {
+		t.Fatalf("item = %+v, want the forbidden reason", project.Items)
+	}
+}
