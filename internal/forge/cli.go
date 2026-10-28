@@ -92,9 +92,27 @@ func (c *cli) run(ctx context.Context, args ...string) ([]byte, error) {
 		stdout, stderr, err = c.runner.Run(ctx, argv...)
 	}
 	if err != nil {
-		return nil, classify(stderr, err)
+		return nil, classify(operationName(argv), stderr, err)
 	}
 	return []byte(stdout), nil
+}
+
+// operationName is the short form the forbidden error names: the API path for a
+// read, the verb and target for a write, never a comment body.
+func operationName(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	switch argv[0] {
+	case "gh", "glab":
+		if len(argv) >= 3 && argv[1] == "api" {
+			return argv[0] + " api " + argv[2]
+		}
+		if len(argv) >= 4 {
+			return strings.Join(argv[:4], " ")
+		}
+	}
+	return strings.Join(argv, " ")
 }
 
 // api runs `gh api`/`glab api` with the given arguments.
@@ -102,14 +120,21 @@ func (c *cli) api(ctx context.Context, args ...string) ([]byte, error) {
 	return c.run(ctx, append([]string{"api"}, args...)...)
 }
 
-func classify(stderr string, err error) error {
-	if errors.Is(err, ErrStale) || errors.Is(err, ErrBudget) {
+func classify(operation, stderr string, err error) error {
+	if errors.Is(err, ErrStale) || errors.Is(err, ErrBudget) || errors.Is(err, ErrForbidden) {
 		return err
 	}
 	message := strings.ToLower(stderr + " " + err.Error())
+	// A GitHub rate limit is a 403, so it must be classified before the
+	// forbidden case: retrying after the window can succeed.
 	switch {
-	case strings.Contains(message, "http 401"), strings.Contains(message, "http 403"),
-		strings.Contains(message, "rate limit"), http5xx.MatchString(strings.ToUpper(stderr)):
+	case strings.Contains(message, "rate limit"), strings.Contains(message, "abuse detection"):
+		return fmt.Errorf("%w: %s", ErrStale, strings.TrimSpace(stderr))
+	case strings.Contains(message, "http 401"):
+		return fmt.Errorf("%w: %s", ErrStale, strings.TrimSpace(stderr))
+	case strings.Contains(message, "http 403"), strings.Contains(message, "403 forbidden"):
+		return &ForbiddenError{Operation: operation, Detail: strings.TrimSpace(stderr)}
+	case http5xx.MatchString(strings.ToUpper(stderr)):
 		return fmt.Errorf("%w: %s", ErrStale, strings.TrimSpace(stderr))
 	}
 	return fmt.Errorf("forge: %w: %s", err, strings.TrimSpace(stderr))

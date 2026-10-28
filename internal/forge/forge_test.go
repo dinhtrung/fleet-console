@@ -391,3 +391,42 @@ func TestRetryOn5xx(t *testing.T) {
 		t.Fatalf("calls = %d, want one retry", len(runner.calls))
 	}
 }
+
+func TestForbiddenNamesTheOperation(t *testing.T) {
+	runner := &stubRunner{respond: func(int, []string) (string, string, error) {
+		return "", "gh: You must be an org admin or have the actions policies fine-grained permission. (HTTP 403)", errors.New("exit status 1")
+	}}
+	adapter := NewGitHub("dinhtrung/fleet-console", runner, &Budget{Max: 100})
+	_, err := adapter.Items(context.Background())
+	t.Logf("classified: %v (errors.Is ErrForbidden=%v, ErrStale=%v)", err, errors.Is(err, ErrForbidden), errors.Is(err, ErrStale))
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("error = %v, want ErrForbidden", err)
+	}
+	if errors.Is(err, ErrStale) {
+		t.Fatalf("403 also matched ErrStale: %v", err)
+	}
+	var forbidden *ForbiddenError
+	if !errors.As(err, &forbidden) {
+		t.Fatalf("error = %T, want *ForbiddenError", err)
+	}
+	if !strings.Contains(forbidden.Operation, "gh api repos/dinhtrung/fleet-console/issues") {
+		t.Fatalf("operation = %q, want the API path", forbidden.Operation)
+	}
+	if !strings.Contains(err.Error(), "org admin") {
+		t.Fatalf("error = %q, want the forge's permission message", err)
+	}
+}
+
+func TestRateLimitIsStaleNotForbidden(t *testing.T) {
+	runner := &stubRunner{respond: func(int, []string) (string, string, error) {
+		return "", "gh: API rate limit exceeded for user ID 1. (HTTP 403)", errors.New("exit status 1")
+	}}
+	adapter := NewGitHub("dinhtrung/fleet-console", runner, &Budget{Max: 100})
+	_, err := adapter.Items(context.Background())
+	if !errors.Is(err, ErrStale) {
+		t.Fatalf("error = %v, want ErrStale", err)
+	}
+	if errors.Is(err, ErrForbidden) {
+		t.Fatalf("a rate limit read as forbidden: %v", err)
+	}
+}

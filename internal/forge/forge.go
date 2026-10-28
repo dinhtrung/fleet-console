@@ -3,8 +3,9 @@
 //
 // The decide loop never reads a forge: it consumes this model. Credentials come from
 // the gh/glab CLI stores only — the app never reads, stores or logs a token. Reads are
-// bounded by a per-tick request budget; a 401 or a 5xx surfaces as ErrStale so the
-// project is marked stale rather than rendered as an empty board. The only mutations
+// bounded by a per-tick request budget; a 401, a rate limit or a 5xx surfaces as
+// ErrStale so the project is marked stale rather than rendered as an empty board,
+// while a 403 is a distinct ErrForbidden naming the operation. The only mutations
 // are the four writes on Forge.
 package forge
 
@@ -45,7 +46,27 @@ var (
 	ErrStale = errors.New("forge read is stale")
 	// ErrBudget means this tick used its request budget.
 	ErrBudget = errors.New("forge request budget exhausted")
+	// ErrForbidden means the credential is valid but not allowed: a missing
+	// scope or a protected branch. Retrying the same call cannot succeed.
+	ErrForbidden = errors.New("forge operation forbidden")
 )
+
+// ForbiddenError names the operation the credential may not perform. The board
+// shows its Error() text, so the operator sees the missing scope, not "stale".
+type ForbiddenError struct {
+	Operation string
+	Detail    string
+}
+
+func (e *ForbiddenError) Error() string {
+	if e.Detail == "" {
+		return "forge: forbidden: " + e.Operation
+	}
+	return "forge: forbidden: " + e.Operation + ": " + e.Detail
+}
+
+// Is lets errors.Is(err, ErrForbidden) work without unwrapping a sentinel.
+func (e *ForbiddenError) Is(target error) bool { return target == ErrForbidden }
 
 // Link is one blocking/related edge with the other item's state.
 type Link struct {

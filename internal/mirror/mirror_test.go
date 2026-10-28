@@ -135,3 +135,39 @@ func TestLoopTicksAndStops(t *testing.T) {
 		t.Fatalf("ticks = %d, want at least 2", ticks)
 	}
 }
+
+func TestForgeForbiddenIsNamed(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	id := project(t, st)
+	fake := forge.NewFake(forge.KindGitHub)
+	fake.ItemsValue = []forge.Item{{Number: 7, Kind: forge.KindTask, State: forge.StateOpen, Title: "One"}}
+
+	first := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
+	m := &Mirror{Store: st, Now: func() time.Time { return first }}
+	if _, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: fake}}); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	fake.ReadErr = &forge.ForbiddenError{
+		Operation: "gh api orgs/github/actions/permissions",
+		Detail:    "You must be an org admin. (HTTP 403)",
+	}
+	m.Now = func() time.Time { return first.Add(time.Minute) }
+	if _, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: fake}}); err != nil {
+		t.Fatalf("forbidden tick: %v", err)
+	}
+	status, err := st.MirrorStatus(ctx, id)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !status.ForgeForbidden {
+		t.Fatalf("status = %+v, want forge_forbidden", status)
+	}
+	if status.ForgeError != fake.ReadErr.Error() {
+		t.Fatalf("forge_error = %q, want %q", status.ForgeError, fake.ReadErr.Error())
+	}
+	if status.LastForgeAt == nil || !status.LastForgeAt.Equal(first) {
+		t.Fatalf("stamp = %v, want the previous success", status.LastForgeAt)
+	}
+}

@@ -6,6 +6,7 @@ package mirror
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math/rand"
 	"strings"
 	"time"
@@ -29,14 +30,15 @@ type Project struct {
 
 // ProjectResult is one project's read outcome for this tick.
 type ProjectResult struct {
-	Items       []forge.Item
-	CRs         []forge.ChangeRequest
-	Branches    []git.Branch
-	Rows        []rig.QueueRow
-	Seats       []rig.Seat
-	ForgeStale  bool
-	ForgeError  string
-	BranchError string
+	Items          []forge.Item
+	CRs            []forge.ChangeRequest
+	Branches       []git.Branch
+	Rows           []rig.QueueRow
+	Seats          []rig.Seat
+	ForgeStale     bool
+	ForgeForbidden bool
+	ForgeError     string
+	BranchError    string
 }
 
 // TickResult is everything one tick read.
@@ -67,11 +69,12 @@ type forgeSnapshot struct {
 }
 
 type statusBlock struct {
-	ForgeStale  bool   `json:"forge_stale"`
-	RigStale    bool   `json:"rig_stale"`
-	ForgeError  string `json:"forge_error,omitempty"`
-	RigError    string `json:"rig_error,omitempty"`
-	BranchError string `json:"branch_error,omitempty"`
+	ForgeStale     bool   `json:"forge_stale"`
+	ForgeForbidden bool   `json:"forge_forbidden"`
+	RigStale       bool   `json:"rig_stale"`
+	ForgeError     string `json:"forge_error,omitempty"`
+	RigError       string `json:"rig_error,omitempty"`
+	BranchError    string `json:"branch_error,omitempty"`
 }
 
 // Tick reads every project once. Forge failures keep the previous item rows and
@@ -110,11 +113,19 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 			crs, crsErr := project.Forge.ChangeRequests(ctx)
 			if itemsErr != nil || crsErr != nil {
 				pr.ForgeStale = true
-				if itemsErr != nil {
-					pr.ForgeError = itemsErr.Error()
-				} else {
-					pr.ForgeError = crsErr.Error()
+				chosen := itemsErr
+				if chosen == nil {
+					chosen = crsErr
 				}
+				// A 403 is a permission failure, not a transient read; prefer its
+				// error (which names the operation) when either read hit it.
+				switch {
+				case errors.Is(itemsErr, forge.ErrForbidden):
+					chosen, pr.ForgeForbidden = itemsErr, true
+				case errors.Is(crsErr, forge.ErrForbidden):
+					chosen, pr.ForgeForbidden = crsErr, true
+				}
+				pr.ForgeError = chosen.Error()
 			} else {
 				pr.Items, pr.CRs = items, crs
 				records := make([]store.ItemRecord, 0, len(items))
@@ -146,7 +157,7 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 		}
 
 		status := statusBlock{
-			ForgeStale: pr.ForgeStale, ForgeError: pr.ForgeError,
+			ForgeStale: pr.ForgeStale, ForgeForbidden: pr.ForgeForbidden, ForgeError: pr.ForgeError,
 			RigStale: result.RigStale, RigError: result.RigError,
 			BranchError: pr.BranchError,
 		}
