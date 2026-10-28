@@ -1,0 +1,170 @@
+name: release
+
+# Cuts the artifact install.sh verifies: one static binary per architecture,
+# a deterministic tarball, and the sha256 beside it. The pinned values in
+# stack.lock are only valid for the bytes this workflow produces, so the run
+# prints the exact lines to paste back.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: package linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve the version from the tag
+        id: v
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+            git rev-parse -q --verify "refs/tags/$tag" >/dev/null \
+              || { echo "tag $tag does not exist in this repository"; exit 1; }
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          version="${tag#v}"
+          case "$version" in
+            ""|*[!0-9.]*) echo "unexpected tag '$tag'; expected vX.Y.Z"; exit 1 ;;
+          esac
+          # The commit time is fixed per tag, so rebuilding the same tag gives
+          # the same bytes and the same sha256 in stack.lock.
+          commit_time=$(git log -1 --format=%cI "$tag^{commit}")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit_time=$commit_time" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          # Pinned to the patch that produced the published sha256: a floating
+          # minor re-builds the same tag into different bytes and breaks stack.lock.
+          node-version: "24.22.2"
+          cache: npm
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.14"
+          cache: true
+
+      - name: Build the board and both architectures
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          TAG: ${{ steps.v.outputs.tag }}
+          COMMIT_TIME: ${{ steps.v.outputs.commit_time }}
+        run: |
+          set -euo pipefail
+          rm -f fleet-console-*.tar.gz fleet-console-*.sha256 SHA256SUMS
+          for arch in amd64 arm64; do
+            GOARCH=$arch make release \
+              VERSION="$VERSION" \
+              COMMIT="$TAG" \
+              BUILD_TIME="$COMMIT_TIME" \
+              ARTIFACT_ARCH="$arch"
+          done
+          sha256sum fleet-console-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Check the packaged binary reports the tag
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          tar -xzf "fleet-console-$VERSION-linux-amd64.tar.gz" -C "$tmp"
+          test -x "$tmp/fleet-console"
+          got=$("$tmp/fleet-console" --version --json | tr -d '[:space:]')
+          echo "$got"
+          echo "$got" | grep -q "\"version\":\"$VERSION\"" || { echo "binary version is not $VERSION"; exit 1; }
+          echo "$got" | grep -q "\"commit\":\"$TAG\"" || { echo "binary commit is not $TAG"; exit 1; }
+          sha256sum "$tmp/fleet-console"
+
+      - name: Compare with the pins in stack.lock
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          lock_version=$(awk -F'= *' '/^fleet_console *=/ {print $2}' stack.lock)
+          if [ "$lock_version" != "$VERSION" ]; then
+            echo "::warning::stack.lock pins fleet_console=$lock_version but this release is $VERSION"
+          fi
+          pinned=$(awk -F'= *' '/^fleet_console_sha256 *=/ {print $2}' stack.lock)
+          built=$(awk '$2 ~ /linux-amd64/ {print $1}' SHA256SUMS)
+          if [ "$pinned" != "$built" ]; then
+            echo "::warning::stack.lock pins $pinned; this build is $built — update stack.lock before installing from the release"
+          fi
+
+      - name: Write the release notes
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          TAG: ${{ steps.v.outputs.tag }}
+          COMMIT_TIME: ${{ steps.v.outputs.commit_time }}
+        run: |
+          set -euo pipefail
+          arm=$(awk '$2 ~ /linux-arm64/ {print $1}' SHA256SUMS)
+          cat > notes.md <<EOF
+          Static binary, board embedded, no runtime dependencies.
+
+          - tag: \`$TAG\`
+          - built at: \`$COMMIT_TIME\`
+          - toolchain: go 1.25.x, node 24.x (stack.lock)
+
+          \`\`\`
+          $(cat SHA256SUMS)
+          \`\`\`
+
+          Install with \`install.sh --apply\` after pinning these lines in \`stack.lock\`:
+
+          \`\`\`
+          fleet_console = $VERSION
+          fleet_console_sha256 = $(awk '$2 ~ /linux-amd64/ {print $1}' SHA256SUMS)
+          fleet_console_url = https://github.com/${{ github.repository }}/releases/download/$TAG/fleet-console-$VERSION-linux-amd64.tar.gz
+          \`\`\`
+
+          arm64 tarball sha256: \`$arm\`
+          EOF
+          cat notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fleet-console-linux
+          path: |
+            fleet-console-*.tar.gz
+            fleet-console-*.sha256
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" fleet-console-*.tar.gz fleet-console-*.sha256 SHA256SUMS --clobber
+          else
+            gh release create "$TAG" \
+              --title "fleet-console $TAG" \
+              --notes-file notes.md \
+              fleet-console-*.tar.gz fleet-console-*.sha256 SHA256SUMS
+          fi
+          gh release view "$TAG" --json url,assets --jq '{url: .url, assets: [.assets[].name]}'
