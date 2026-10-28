@@ -132,6 +132,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	app, err := web.New(web.Config{
 		Token:  token,
 		Compat: func(context.Context) rig.Report { return report },
+		Store:  db,
+		Rig:    rig.NewAdapter(rig.ExecRunner{}),
 	})
 	if err != nil {
 		return err

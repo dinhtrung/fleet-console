@@ -22,6 +22,16 @@ const STATUS: Record<string, { code: string; word: string; className: string }> 
   on: { code: "ON", word: "On", className: "bg-plum text-on-plum" },
   off: { code: "OFF", word: "Off", className: "border border-rule-strong text-ink-muted" },
   gradual: { code: "GRD", word: "Gradual", className: "bg-selected text-ink-muted" },
+  building: { code: "BLD", word: "Building", className: "bg-plum text-on-plum" },
+  review: { code: "REV", word: "Review", className: "bg-selected text-ink" },
+  waiting: { code: "WAI", word: "Waiting", className: "border border-rule-strong text-ink-muted" },
+  parked: { code: "PRK", word: "Parked", className: "bg-attention text-on-attention" },
+  paused: { code: "PSE", word: "Paused", className: "bg-attention text-on-attention" },
+  blocked: { code: "BLK", word: "Blocked", className: "border border-rule-strong text-ink" },
+  queued: { code: "QUE", word: "Queued", className: "border border-rule text-ink-muted" },
+  merged: { code: "MRG", word: "Merged", className: "bg-plum text-on-plum" },
+  running: { code: "RUN", word: "Running", className: "bg-plum text-on-plum" },
+  idle: { code: "IDL", word: "Idle", className: "border border-rule text-ink-muted" },
 };
 
 export function StatusMagnet({

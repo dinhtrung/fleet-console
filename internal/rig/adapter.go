@@ -47,6 +47,9 @@ type QueueItem struct {
 	ClosureReason   string `json:"closure_reason"`
 	ObligationOwner string `json:"obligation_owner"`
 	ObligationState string `json:"obligation_state"`
+	CreatedAt       string `json:"created_at"`
+	DeadlineAt      string `json:"deadline_at"`
+	EvidenceRef     string `json:"evidence_ref"`
 }
 
 type queueItemWire struct {
@@ -58,8 +61,11 @@ type queueItemWire struct {
 		Obligation string `json:"obligation"`
 		Owner      string `json:"owner"`
 		State      string `json:"state"`
+		DeadlineAt string `json:"deadlineAt"`
 	} `json:"waiting"`
 	ID            string `json:"qitemId"`
+	CreatedAt     string `json:"tsCreated"`
+	EvidenceRef   string `json:"evidenceRef"`
 	Source        string `json:"sourceSession"`
 	Destination   string `json:"destinationSession"`
 	State         string `json:"state"`
@@ -86,6 +92,9 @@ func (w queueItemWire) item() (*QueueItem, error) {
 		ClosureReason:   w.ClosureReason,
 		ObligationOwner: w.Waiting.Owner,
 		ObligationState: w.Waiting.State,
+		CreatedAt:       w.CreatedAt,
+		DeadlineAt:      w.Waiting.DeadlineAt,
+		EvidenceRef:     w.EvidenceRef,
 	}
 	for _, req := range []struct {
 		field, value string
@@ -227,8 +236,24 @@ func (a *Adapter) writeItem(ctx context.Context, command string, args ...string)
 	if err != nil {
 		return nil, err
 	}
+	var envelope struct {
+		QitemID     string          `json:"qitemId"`
+		Created     json.RawMessage `json:"created"`
+		ClosedQitem json.RawMessage `json:"closedQitem"`
+		Closed      json.RawMessage `json:"closed"`
+	}
+	_ = decode(data, &envelope)
+	candidate := data
+	switch {
+	case len(envelope.Created) > 0:
+		candidate = envelope.Created
+	case len(envelope.ClosedQitem) > 0:
+		candidate = envelope.ClosedQitem
+	case len(envelope.Closed) > 0:
+		candidate = envelope.Closed
+	}
 	var wire queueItemWire
-	if err := decode(data, &wire); err != nil {
+	if err := decode(candidate, &wire); err != nil {
 		return nil, fmt.Errorf("%s: %w", command, err)
 	}
 	return wire.item()
@@ -571,4 +596,19 @@ func (a *Adapter) Send(ctx context.Context, session, text string) error {
 	}
 	_, err := a.run(ctx, "send", session, text)
 	return err
+}
+
+// Capture reads the last lines of one seat's pane.
+func (a *Adapter) Capture(ctx context.Context, session string, lines int) (string, error) {
+	if session == "" {
+		return "", fmt.Errorf("capture: session is required")
+	}
+	if lines <= 0 {
+		lines = 20
+	}
+	data, err := a.run(ctx, "capture", session, "--lines", fmt.Sprint(lines))
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }

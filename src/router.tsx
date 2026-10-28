@@ -12,7 +12,10 @@ import { useAuth } from "./auth/session";
 import { getSettings } from "./mock/api";
 import type { WorkspaceSettings } from "./mock/types";
 import { SignInScreen } from "./screens/SignInScreen";
-import { DashboardScreen } from "./screens/DashboardScreen";
+import { BoardScreen } from "./screens/BoardScreen";
+import { DecisionsScreen } from "./screens/DecisionsScreen";
+import { SeatsScreen } from "./screens/SeatsScreen";
+import { TaskDrawerScreen } from "./screens/TaskDrawerScreen";
 import { UserListScreen } from "./screens/UserListScreen";
 import { UserDetailScreen } from "./screens/UserDetailScreen";
 import { RoleListScreen } from "./screens/RoleListScreen";
@@ -101,7 +104,21 @@ const rootRoute = createRootRoute({
   notFoundComponent: RouteNotFound,
 });
 
-const dashboardRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: DashboardScreen });
+const dashboardRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: BoardScreen });
+
+const decisionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/decisions",
+  component: DecisionsScreen,
+});
+
+const seatsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/seats", component: SeatsScreen });
+
+const taskDrawerRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/items/$number",
+  component: TaskDrawerScreen,
+});
 
 const usersRoute = createRoute({ getParentRoute: () => rootRoute, path: "/users", component: UserListScreen });
 
@@ -177,6 +194,9 @@ const featureFlagsRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
+  decisionsRoute,
+  seatsRoute,
+  taskDrawerRoute,
   usersRoute,
   userDetailRoute,
   rolesRoute,

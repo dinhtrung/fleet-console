@@ -13,6 +13,9 @@ const bearerPrefix = "Bearer "
 func bearerAuth(token string) fiber.Handler {
 	want := []byte(token)
 	return func(c fiber.Ctx) error {
+		if isBoardCookie(c, token) {
+			return c.Next()
+		}
 		header := c.Get(fiber.HeaderAuthorization)
 		if len(header) <= len(bearerPrefix) || !strings.EqualFold(header[:len(bearerPrefix)], bearerPrefix) {
 			return unauthorized(c)

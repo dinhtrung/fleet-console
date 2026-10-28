@@ -18,12 +18,17 @@ type QueueRow struct {
 
 // Seat is one node from `rig ps --nodes --full --json`.
 type Seat struct {
-	NodeID    string `json:"node_id"`
-	RigID     string `json:"rig_id"`
-	Rig       string `json:"rig"`
-	Session   string `json:"session"`
-	LogicalID string `json:"logical_id"`
-	Lifecycle string `json:"lifecycle"`
+	NodeID       string `json:"node_id"`
+	RigID        string `json:"rig_id"`
+	Rig          string `json:"rig"`
+	Session      string `json:"session"`
+	LogicalID    string `json:"logical_id"`
+	Lifecycle    string `json:"lifecycle"`
+	Runtime      string `json:"runtime"`
+	Model        string `json:"model"`
+	Profile      string `json:"profile"`
+	Permission   string `json:"permission"`
+	LastActivity string `json:"last_activity"`
 }
 
 // FieldError names the command and the field that failed its required check.
@@ -54,12 +59,17 @@ type queueRowWire struct {
 }
 
 type seatWire struct {
-	NodeID    string `json:"nodeId"`
-	RigID     string `json:"rigId"`
-	Rig       string `json:"rigName"`
-	Session   string `json:"canonicalSessionName"`
-	LogicalID string `json:"logicalId"`
-	Lifecycle string `json:"lifecycleState"`
+	NodeID           string `json:"nodeId"`
+	RigID            string `json:"rigId"`
+	Rig              string `json:"rigName"`
+	Session          string `json:"canonicalSessionName"`
+	LogicalID        string `json:"logicalId"`
+	Lifecycle        string `json:"lifecycleState"`
+	Runtime          string `json:"runtime"`
+	Model            string `json:"model"`
+	Profile          string `json:"profile"`
+	PermissionPolicy string `json:"permissionPolicy"`
+	LastActivity     string `json:"lastActivityAt"`
 }
 
 // ParseQueueList decodes the queue list and enforces the required fields.
@@ -156,13 +166,22 @@ func ParseSeats(data []byte, unknown func(key string)) ([]Seat, error) {
 		if err := json.Unmarshal(item, &wire); err != nil {
 			return nil, fmt.Errorf("ps --nodes: entry %d: %w", i, err)
 		}
+		permission := wire.PermissionPolicy
+		if permission == "" {
+			permission = wire.Profile
+		}
 		seat := Seat{
-			NodeID:    wire.NodeID,
-			RigID:     wire.RigID,
-			Rig:       wire.Rig,
-			Session:   wire.Session,
-			LogicalID: wire.LogicalID,
-			Lifecycle: wire.Lifecycle,
+			NodeID:       wire.NodeID,
+			RigID:        wire.RigID,
+			Rig:          wire.Rig,
+			Session:      wire.Session,
+			LogicalID:    wire.LogicalID,
+			Lifecycle:    wire.Lifecycle,
+			Runtime:      wire.Runtime,
+			Model:        wire.Model,
+			Profile:      wire.Profile,
+			Permission:   permission,
+			LastActivity: wire.LastActivity,
 		}
 		for _, check := range []struct {
 			field, path, value string

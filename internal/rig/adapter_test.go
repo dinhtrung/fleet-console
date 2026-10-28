@@ -246,3 +246,31 @@ func TestSendArgv(t *testing.T) {
 		t.Fatalf("send argv: %v", runner.calls)
 	}
 }
+
+func TestQueueResolveEnvelope(t *testing.T) {
+	item := fixtureBytes(t, "queue-show.json")
+	payload := append([]byte(`{"actionId":"a1","verb":"resolve","qitemId":"q","closedQitem":`), item...)
+	payload = append(payload, '}')
+	runner := &scriptedRunner{fn: func([]string) ([]byte, error) { return payload, nil }}
+	got, err := NewAdapter(runner).QueueResolve(context.Background(), "q", "Approve")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if got.ID != "qitem-20261028164026-242c10cda7e2c6b3" || got.State != "handed-off" {
+		t.Fatalf("item = %+v", got)
+	}
+}
+
+func TestQueueHandoffEnvelope(t *testing.T) {
+	created := fixtureBytes(t, "queue-show.json")
+	payload := append([]byte(`{"closed":{"qitemId":"old"},"created":`), created...)
+	payload = append(payload, '}')
+	runner := &scriptedRunner{fn: func([]string) ([]byte, error) { return payload, nil }}
+	got, err := NewAdapter(runner).QueueHandoff(context.Background(), "old", HandoffRequest{To: "seat@rig"})
+	if err != nil {
+		t.Fatalf("handoff: %v", err)
+	}
+	if got.ID != "qitem-20261028164026-242c10cda7e2c6b3" {
+		t.Fatalf("handoff must return the created row, got %+v", got)
+	}
+}
