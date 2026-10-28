@@ -19,6 +19,7 @@ import (
 	// Embedded so a release binary keeps time-zone data on a bare box.
 	_ "time/tzdata"
 
+	"github.com/dinhtrung/fleet-console/internal/act"
 	"github.com/dinhtrung/fleet-console/internal/decide"
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/git"
@@ -215,6 +216,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stderr, "fleet-console: compat: %s\n", report.Error)
 	} else {
 		fmt.Fprintf(stderr, "fleet-console: compat: rig %s at or above floor %s\n", report.Version, report.Floor)
+	}
+	// The act loop's first check. A failed probe is a hard refusal with one named
+	// reason; the mirror and the board keep serving. The loop itself lands in
+	// task 5.x and must call this same gate before it writes.
+	if err := act.NewGate(report).Check(); err != nil {
+		fmt.Fprintf(stderr, "fleet-console: %v\n", err)
 	}
 
 	// The mirror runs in the server: read-only, jittered, and dry-run only for

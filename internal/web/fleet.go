@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -17,10 +18,11 @@ import (
 
 // Fleet is the read model behind the product screens.
 type Fleet struct {
-	Store *store.Store
-	Rig   *rig.Adapter
-	Hub   *Hub
-	Now   func() time.Time
+	Store  *store.Store
+	Rig    *rig.Adapter
+	Hub    *Hub
+	Now    func() time.Time
+	Compat func(ctx context.Context) rig.Report
 }
 
 type boardItem struct {
@@ -46,6 +48,8 @@ type boardProject struct {
 	Key    string      `json:"key"`
 	Name   string      `json:"name"`
 	Paused bool        `json:"paused"`
+	Status string      `json:"status"`           // ok | compat-blocked
+	Reason string      `json:"reason,omitempty"` // the named compat refusal
 	Counts boardCounts `json:"counts"`
 	Items  []boardItem `json:"items"`
 }
@@ -121,6 +125,11 @@ func parseInts(raw string) []int {
 // Board assembles projects, counts and one reason per task from stored facts.
 func (f *Fleet) Board(c fiber.Ctx) error {
 	ctx := c.Context()
+	compat := rig.Report{OK: true, Status: rig.StatusOK}
+	if f.Compat != nil {
+		compat = f.Compat(ctx)
+	}
+	compatBlocked := compat.Blocked()
 	projects, err := f.Store.Projects(ctx)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
@@ -157,7 +166,11 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 				}
 			}
 		}
-		bp := boardProject{Key: p.Key, Name: p.Name, Paused: p.OnHold, Items: []boardItem{}}
+		bp := boardProject{Key: p.Key, Name: p.Name, Paused: p.OnHold, Status: rig.StatusOK, Items: []boardItem{}}
+		if compatBlocked {
+			bp.Status = "compat-blocked"
+			bp.Reason = compat.Error
+		}
 		for _, item := range byProject[p.ID] {
 			if item.State != "open" {
 				continue
@@ -207,6 +220,11 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 			if row.State == "queued" && live >= p.ConcurrencyCap && p.ConcurrencyCap > 0 {
 				row.State, row.Reason = "waiting", "no free builder"
 			}
+			if compatBlocked {
+				// The act loop is off; every project says why instead of looking
+				// like an empty or idle queue.
+				row.State, row.Reason = "blocked", "compat-blocked"
+			}
 			switch row.State {
 			case "building":
 				bp.Counts.Building++
@@ -242,7 +260,10 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 	if !synced.IsZero() {
 		syncedAt = synced.UTC().Format(time.RFC3339)
 	}
-	return c.JSON(fiber.Map{"projects": result, "synced_at": syncedAt, "stale": stale})
+	return c.JSON(fiber.Map{
+		"projects": result, "synced_at": syncedAt, "stale": stale,
+		"compat_blocked": compatBlocked, "compat_reason": compat.Error,
+	})
 }
 
 type checkOut struct {
@@ -291,7 +312,7 @@ func (f *Fleet) Item(c fiber.Ctx) error {
 		}
 		labels := splitLabels(item.Labels)
 		detail := itemDetail{
-			Project: boardProject{Key: p.Key, Name: p.Name, Paused: p.OnHold},
+			Project: boardProject{Key: p.Key, Name: p.Name, Paused: p.OnHold, Status: rig.StatusOK},
 			Item: boardItem{
 				Number: item.Number, Title: item.Title, State: item.State,
 				Age: age(item.UpdatedAt), URL: item.URL, Labels: labels,

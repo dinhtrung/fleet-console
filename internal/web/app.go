@@ -32,7 +32,7 @@ func New(cfg Config) (*fiber.App, error) {
 	compat := cfg.Compat
 	if compat == nil {
 		compat = func(context.Context) rig.Report {
-			return rig.Report{Floor: rig.Floor, Error: "compat probe not configured"}
+			return rig.Report{Floor: rig.Floor, Status: rig.StatusBlocked, Error: "compat probe not configured"}
 		}
 	}
 
@@ -45,7 +45,7 @@ func New(cfg Config) (*fiber.App, error) {
 		IdleTimeout:  60 * time.Second,
 	})
 	hub := NewHub()
-	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub}
+	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat}
 
 	app.Use(idempotency())
 	app.Get("/api/health", func(c fiber.Ctx) error {
