@@ -14,11 +14,11 @@ rules and the oracle come before any surface (design §15.8).
 
 ## 2. Rig contract and lifecycle (P0)
 
-- [ ] 2.1 Rig adapter: `QueueList`, `QueueShow`, `QueueCreate`, `QueueUpdate`, `QueueHandoff`, `QueueResolve`, `Seats`, `Parked`, `ProviderSignals` — one function per CLI command, domain types out. Verify: fixture tests per command against captured `--json`; no `map[string]any` crosses the package boundary (`go vet` + a grep task in review).
-- [ ] 2.2 Spec template `templates/rig.yaml.tmpl` + renderer: rig name, per-seat cwd/runtime/model, account env, builder count, guidance and culture paths. Verify: `go test ./internal/rig -run TestRenderSpec` compares the rendered YAML with a golden file, and `rig spec validate <rendered> --json` reports valid.
-- [ ] 2.3 Launch sequence: write spec dir, `rig specs sync`, `rig up <rig> --plan --json`, `rig up --non-interruptive`, verify every seat `running` or fail with the seat named. Verify: one real launch on the fleet box, with the JSON of both calls recorded in the task's evidence.
-- [ ] 2.4 Growth and write-back: `rig grow` then `rig export` so the spec matches the running topology. Verify: after growing one seat, the exported spec validates and `rig ps --nodes --rig <rig> --json` lists the new seat.
-- [ ] 2.5 Teardown: `rig down <rig> --delete` + spec archive; refuse when the rig still has live rows. Verify: a throwaway rig is removed and `rig ps --include-archived` no longer lists it; `rig up <same-name>` fails with a row-count message before teardown and succeeds after.
+- [x] 2.1 Rig adapter: `QueueList`, `QueueShow`, `QueueCreate`, `QueueUpdate`, `QueueHandoff`, `QueueResolve`, `Seats`, `Parked`, `ProviderSignals` — one function per CLI command, domain types out. Verify: fixture tests per command against captured `--json`; no `map[string]any` crosses the package boundary (`go vet` + a grep task in review).
+- [x] 2.2 Spec template `templates/rig.yaml.tmpl` + renderer: rig name, per-seat cwd/runtime/model, account env, builder count, guidance and culture paths. Verify: `go test ./internal/rig -run TestRenderSpec` compares the rendered YAML with a golden file, and `rig spec validate <rendered> --json` reports valid.
+- [x] 2.3 Launch sequence: write spec dir, `rig specs sync`, `rig up <rig> --plan --json`, `rig up --non-interruptive`, verify every seat `running` or fail with the seat named. Verify: one real launch on the fleet box, with the JSON of both calls recorded in the task's evidence.
+- [x] 2.4 Growth and write-back: `rig grow` then `rig export` so the spec matches the running topology. Verify: after growing one seat, the exported spec validates and `rig ps --nodes --rig <rig> --json` lists the new seat.
+- [x] 2.5 Teardown: `rig down <rig> --delete` + spec archive; refuse when the rig still has live rows. Verify: a throwaway rig is removed and `rig ps --include-archived` no longer lists it; `rig up <same-name>` fails with a row-count message before teardown and succeeds after.
 - [ ] 2.6 Per-seat credential and MCP seeding before launch (provider key, `mcp.json` with serena/codegraph/rtk entries, `PATH` including Go). Verify: from inside a launched seat, `rig whoami --json` and one `mcp__serena__*` call succeed; the key never appears in any log or event row (grep the event table).
 
 ## 3. Forge adapters (P1)
