@@ -1,33 +1,27 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="admin-panel — an operable admin surface for users, roles, organizations, sessions and audit, running entirely on synthetic data." />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content="light" />
     <title>fleet-console</title>
     <script>
-      // Appearance is resolved before the first paint: the stored choice if it is a registered
-      // appearance, otherwise the OS preference. Without this the browser paints the default and
-      // then swaps it, which is a visible defect on every reload and every deep link.
+      // The board has one appearance, sage: it is the `:root` token block in src/index.css. A stored
+      // choice from the retired five-appearance build is cleared before the first paint, so a stale
+      // value cannot flash another palette and no dead preference survives on the machine.
       //
-      // The id list mirrors `src/lib/appearance.ts`. This script runs before paint, so it cannot
-      // import the registry — keep the two in step when an appearance is added.
+      // Display density is applied here too: it has to be in effect on the first paint, or the board
+      // reflows once the app mounts.
       (function () {
-        var APPEARANCES = ["light", "dark", "dusk", "ember", "sage"];
         try {
-          var stored = localStorage.getItem("admin-panel.appearance") || "system";
-          var resolved = APPEARANCES.indexOf(stored) >= 0
-            ? stored
-            : (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-          document.documentElement.setAttribute("data-theme", resolved);
-          // Display density is applied here too: it has to be in effect on the first paint, or the
-          // board reflows once the app mounts.
-          var density = localStorage.getItem("admin-panel.density");
+          localStorage.removeItem("fleet-console.appearance");
+          localStorage.removeItem("admin-panel.appearance");
+          var density = localStorage.getItem("fleet-console.density");
+          localStorage.removeItem("admin-panel.density");
           document.documentElement.setAttribute("data-density", density === "compact" ? "compact" : "comfortable");
         } catch (e) {
-          document.documentElement.setAttribute("data-theme", "light");
           document.documentElement.setAttribute("data-density", "comfortable");
         }
       })();

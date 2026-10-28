@@ -10,8 +10,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Columns3 } from "lucide-react";
 import { cn } from "../../lib/cn";
-import { EmptyState, ErrorState, IconButton, LoadingRows, NoMatchesState } from "../ui";
-import { Menu } from "../ui/Menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  EmptyState,
+  ErrorState,
+  IconButton,
+  LoadingRows,
+  NoMatchesState,
+} from "../ui";
 import { PAGE_SIZES } from "../../mock/api";
 
 export interface GridColumn<T> {
@@ -114,19 +123,31 @@ export function DataGrid<T>({
           {total === 1 ? "record" : "records"}
         </p>
         <div className="ml-auto flex items-center gap-1.5">
-          <Menu
-            label="Choose columns"
-            align="end"
-            trigger={<Columns3 size={14} />}
-            items={columns
-              .filter((c) => c.hideable !== false)
-              .map((c) => ({
-                id: c.id,
-                label: `${hidden.includes(c.id) ? "Show" : "Hide"} ${c.header}`,
-                onSelect: () =>
-                  setHidden((current) => (current.includes(c.id) ? current.filter((id) => id !== c.id) : [...current, c.id])),
-              }))}
-          />
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <IconButton label="Choose columns">
+                  <Columns3 size={14} />
+                </IconButton>
+              }
+            />
+            <DropdownMenuContent align="end">
+              {columns
+                .filter((c) => c.hideable !== false)
+                .map((c) => (
+                  <DropdownMenuItem
+                    key={c.id}
+                    onClick={() =>
+                      setHidden((current) =>
+                        current.includes(c.id) ? current.filter((id) => id !== c.id) : [...current, c.id],
+                      )
+                    }
+                  >
+                    {hidden.includes(c.id) ? "Show" : "Hide"} {c.header}
+                  </DropdownMenuItem>
+                ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 

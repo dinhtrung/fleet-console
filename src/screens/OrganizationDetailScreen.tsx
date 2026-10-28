@@ -18,10 +18,19 @@ import {
   Button,
   ConfirmDialog,
   Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   ErrorState,
   FieldRow,
+  IconButton,
   LoadingRows,
-  Menu,
   NotFoundState,
   OrgMark,
   Panel,
@@ -29,12 +38,12 @@ import {
   SelectInput,
   StatusMagnet,
   TextInput,
+  useToast,
 } from "../components/ui";
 import { RequirePermission } from "../components/RequirePermission";
 import { Gate, useAccess } from "../access/access";
 import { PageHeader } from "../shell/PageHeader";
 import { useScope } from "../shell/scope";
-import { useToast } from "../components/ui/Toast";
 import { cn } from "../lib/cn";
 import { absoluteDate, number } from "../lib/format";
 import {
@@ -282,31 +291,36 @@ function OrganizationDetail({ orgId }: { orgId: string }) {
     hideable: false,
     cell: (member) => (
       <div className="flex justify-end">
-        <Menu
-          label={`Actions for ${member.user.name}`}
-          trigger={<MoreHorizontal size={14} />}
-          items={[
-            {
-              id: "role",
-              label: "Change organization role",
-              hint: ROLE_LABEL[member.memberRole],
-              onSelect: () => {
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <IconButton label={`Actions for ${member.user.name}`}>
+                <MoreHorizontal size={14} />
+              </IconButton>
+            }
+          />
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              onClick={() => {
                 changeRole.reset();
                 setRoleTarget(member);
                 setRoleDraft(member.memberRole);
-              },
-            },
-            {
-              id: "remove",
-              label: "Remove member",
-              destructive: true,
-              onSelect: () => {
+              }}
+            >
+              <span>Change organization role</span>
+              <span className="ml-auto text-[0.6875rem] text-ink-muted">{ROLE_LABEL[member.memberRole]}</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              variant="destructive"
+              onClick={() => {
                 removeMember.reset();
                 setRemoveTarget(member);
-              },
-            },
-          ]}
-        />
+              }}
+            >
+              Remove member
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     ),
   };
@@ -431,27 +445,15 @@ function OrganizationDetail({ orgId }: { orgId: string }) {
 
       <Dialog
         open={addOpen}
-        onClose={() => setAddOpen(false)}
-        title="Add a member"
-        description={`Choose someone from the user directory and the role they will hold in ${orgName}.`}
-        footer={
-          <>
-            <Button variant="quiet" onClick={() => setAddOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              disabled={!selectedUser}
-              busy={addMember.isPending}
-              onClick={() => {
-                if (selectedUser) addMember.mutate({ userId: selectedUser.id, role: newRole });
-              }}
-            >
-              Add member
-            </Button>
-          </>
-        }
+        onOpenChange={(next) => {
+          if (!next) setAddOpen(false);
+        }}
       >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add a member</DialogTitle>
+            <DialogDescription>{`Choose someone from the user directory and the role they will hold in ${orgName}.`}</DialogDescription>
+          </DialogHeader>
         <div className="flex flex-col gap-3">
           <TextInput
             label="Find a user"
@@ -510,15 +512,54 @@ function OrganizationDetail({ orgId }: { orgId: string }) {
             <p className="text-[0.6875rem] font-semibold text-attention">{messageOf(addMember.error)}</p>
           ) : null}
         </div>
+          <DialogFooter>
+            <Button variant="quiet" onClick={() => setAddOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              disabled={!selectedUser}
+              busy={addMember.isPending}
+              onClick={() => {
+                if (selectedUser) addMember.mutate({ userId: selectedUser.id, role: newRole });
+              }}
+            >
+              Add member
+            </Button>
+          </DialogFooter>
+        </DialogContent>
       </Dialog>
 
       <Dialog
         open={roleTarget !== null}
-        onClose={() => setRoleTarget(null)}
-        title="Change organization role"
-        description={roleTarget ? `Choose the role ${roleTarget.user.name} holds in ${orgName}.` : undefined}
-        footer={
-          <>
+        onOpenChange={(next) => {
+          if (!next) setRoleTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change organization role</DialogTitle>
+            <DialogDescription>
+              {roleTarget ? `Choose the role ${roleTarget.user.name} holds in ${orgName}.` : undefined}
+            </DialogDescription>
+          </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <FieldRow label="Member">
+            <span className="font-semibold">{roleTarget?.user.name}</span>{" "}
+            <span className="font-mono text-[0.625rem] text-ink-muted">{roleTarget?.user.email}</span>
+          </FieldRow>
+          <SelectInput
+            label="Organization role"
+            value={roleDraft}
+            onChange={(event) => setRoleDraft(event.target.value as MembershipRole)}
+            options={ROLE_OPTIONS}
+            hint="A change that transfers ownership is confirmed before it is applied."
+          />
+          {changeRole.isError && roleTarget !== null ? (
+            <p className="text-[0.6875rem] font-semibold text-attention">{messageOf(changeRole.error)}</p>
+          ) : null}
+        </div>
+          <DialogFooter>
             <Button variant="quiet" onClick={() => setRoleTarget(null)}>
               Cancel
             </Button>
@@ -538,25 +579,8 @@ function OrganizationDetail({ orgId }: { orgId: string }) {
             >
               Save role
             </Button>
-          </>
-        }
-      >
-        <div className="flex flex-col gap-3">
-          <FieldRow label="Member">
-            <span className="font-semibold">{roleTarget?.user.name}</span>{" "}
-            <span className="font-mono text-[0.625rem] text-ink-muted">{roleTarget?.user.email}</span>
-          </FieldRow>
-          <SelectInput
-            label="Organization role"
-            value={roleDraft}
-            onChange={(event) => setRoleDraft(event.target.value as MembershipRole)}
-            options={ROLE_OPTIONS}
-            hint="A change that transfers ownership is confirmed before it is applied."
-          />
-          {changeRole.isError && roleTarget !== null ? (
-            <p className="text-[0.6875rem] font-semibold text-attention">{messageOf(changeRole.error)}</p>
-          ) : null}
-        </div>
+          </DialogFooter>
+        </DialogContent>
       </Dialog>
 
       <ConfirmDialog

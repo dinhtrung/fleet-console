@@ -24,8 +24,17 @@ import {
   Checkbox,
   ConfirmDialog,
   Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   FieldRow,
-  Menu,
+  IconButton,
   Panel,
   SelectInput,
   StatusMagnet,
@@ -177,33 +186,15 @@ function KeyDialog({
   return (
     <Dialog
       open
-      onClose={() => {
-        if (!busy) onClose();
+      onOpenChange={(next) => {
+        if (!next && !busy) onClose();
       }}
-      title={title}
-      description={description}
-      width="md"
-      footer={
-        secret ? (
-          <Button variant="primary" onClick={onClose}>
-            Done
-          </Button>
-        ) : readOnly ? (
-          <Button variant="primary" onClick={onClose}>
-            Close
-          </Button>
-        ) : (
-          <>
-            <Button variant="quiet" onClick={onClose} disabled={busy}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={() => void submit()} busy={busy}>
-              {target ? "Save changes" : "Issue key"}
-            </Button>
-          </>
-        )
-      }
     >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
       {secret ? (
         <div className="flex flex-col gap-3">
           <p className="text-body text-ink">
@@ -290,6 +281,27 @@ function KeyDialog({
           />
         </form>
       )}
+        <DialogFooter>
+          {secret ? (
+            <Button variant="primary" onClick={onClose}>
+              Done
+            </Button>
+          ) : readOnly ? (
+            <Button variant="primary" onClick={onClose}>
+              Close
+            </Button>
+          ) : (
+            <>
+              <Button variant="quiet" onClick={onClose} disabled={busy}>
+                Cancel
+              </Button>
+              <Button variant="primary" onClick={() => void submit()} busy={busy}>
+                {target ? "Save changes" : "Issue key"}
+              </Button>
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
     </Dialog>
   );
 }
@@ -312,18 +324,33 @@ function KeyActions({
     { id: "revoke", label: "Revoke key", destructive: true, onSelect: () => onRevoke(row) },
   ];
   const label = `Actions for ${row.name}`;
+  const menu = (entries: { id: string; label: string; destructive?: boolean; onSelect: () => void }[]) => (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <IconButton label={label}>
+            <MoreHorizontal size={14} />
+          </IconButton>
+        }
+      />
+      <DropdownMenuContent align="end">
+        {entries.map((entry) => (
+          <DropdownMenuItem
+            key={entry.id}
+            variant={entry.destructive ? "destructive" : "default"}
+            onClick={entry.onSelect}
+          >
+            {entry.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 
   return (
     <div className="flex justify-end">
-      <Gate
-        permission="apikeys.write"
-        fallback={<Menu label={label} trigger={<MoreHorizontal size={14} />} items={[view]} />}
-      >
-        <Menu
-          label={label}
-          trigger={<MoreHorizontal size={14} />}
-          items={row.status === "revoked" ? [view] : writeItems}
-        />
+      <Gate permission="apikeys.write" fallback={menu([view])}>
+        {menu(row.status === "revoked" ? [view] : writeItems)}
       </Gate>
     </div>
   );

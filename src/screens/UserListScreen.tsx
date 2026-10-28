@@ -32,6 +32,11 @@ import {
   Button,
   ConfirmDialog,
   Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   Panel,
   SelectInput,
   StatusMagnet,
@@ -467,32 +472,21 @@ export function UserListScreen() {
 
       <Dialog
         open={creating}
-        onClose={() => {
-          if (!createMutation.isPending) {
+        onOpenChange={(next) => {
+          if (!next && !createMutation.isPending) {
             setCreating(false);
             setFormError({});
           }
         }}
-        title="Invite a user"
-        description="The account is created in the invited state and appears in the directory immediately. The person sets their own password the first time they sign in."
-        footer={
-          <>
-            <Button
-              variant="quiet"
-              onClick={() => {
-                setCreating(false);
-                setFormError({});
-              }}
-              disabled={createMutation.isPending}
-            >
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={() => void submitCreate()} busy={createMutation.isPending}>
-              Invite user
-            </Button>
-          </>
-        }
       >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Invite a user</DialogTitle>
+            <DialogDescription>
+              The account is created in the invited state and appears in the directory immediately. The
+              person sets their own password the first time they sign in.
+            </DialogDescription>
+          </DialogHeader>
         <form
           className="flex flex-col gap-3"
           onSubmit={(e) => {
@@ -526,6 +520,22 @@ export function UserListScreen() {
             hint="The role can be changed later from the user's record."
           />
         </form>
+          <DialogFooter>
+            <Button
+              variant="quiet"
+              onClick={() => {
+                setCreating(false);
+                setFormError({});
+              }}
+              disabled={createMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={() => void submitCreate()} busy={createMutation.isPending}>
+              Invite user
+            </Button>
+          </DialogFooter>
+        </DialogContent>
       </Dialog>
     </RequirePermission>
   );
