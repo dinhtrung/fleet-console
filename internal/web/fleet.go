@@ -224,7 +224,25 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 		sort.Slice(bp.Items, func(i, j int) bool { return bp.Items[i].Number < bp.Items[j].Number })
 		result = append(result, bp)
 	}
-	return c.JSON(fiber.Map{"projects": result, "synced_at": f.now().UTC().Format(time.RFC3339)})
+	// The mirror's stamps decide the board's sync time and stale flag. A failed
+	// forge read keeps the previous items and stamp; it never reads as an empty board.
+	synced := time.Time{}
+	stale := false
+	for _, p := range projects {
+		status, err := f.Store.MirrorStatus(ctx, p.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		if status.LastForgeAt != nil && status.LastForgeAt.After(synced) {
+			synced = *status.LastForgeAt
+		}
+		stale = stale || status.ForgeStale
+	}
+	syncedAt := f.now().UTC().Format(time.RFC3339)
+	if !synced.IsZero() {
+		syncedAt = synced.UTC().Format(time.RFC3339)
+	}
+	return c.JSON(fiber.Map{"projects": result, "synced_at": syncedAt, "stale": stale})
 }
 
 type checkOut struct {
@@ -442,7 +460,27 @@ func (f *Fleet) Seats(c fiber.Ctx) error {
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Session < out[j].Session })
-	return c.JSON(fiber.Map{"seats": out})
+	projects, err := f.Store.Projects(c.Context())
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	synced := time.Time{}
+	stale := false
+	for _, project := range projects {
+		status, err := f.Store.MirrorStatus(c.Context(), project.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		if status.LastRigAt != nil && status.LastRigAt.After(synced) {
+			synced = *status.LastRigAt
+		}
+		stale = stale || status.RigStale
+	}
+	syncedAt := f.now().UTC().Format(time.RFC3339)
+	if !synced.IsZero() {
+		syncedAt = synced.UTC().Format(time.RFC3339)
+	}
+	return c.JSON(fiber.Map{"seats": out, "synced_at": syncedAt, "stale": stale})
 }
 
 // SeatTail reads a read-only pane tail.

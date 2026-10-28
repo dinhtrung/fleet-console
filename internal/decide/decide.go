@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Forge selects the one-directional blocking rule. The decide loop never mixes them.
@@ -79,12 +80,14 @@ func (i Item) onHold() bool {
 // Row is a rig queue row. The rig spells the transport state `terminal` and the row
 // state `canceled`; both vocabularies are kept here because the snapshot is a mirror.
 type Row struct {
-	QItemID     string `json:"qitem_id"`
-	State       string `json:"state"`
-	Pickup      string `json:"pickup"`
-	Destination string `json:"destination"`
-	Body        string `json:"body"`
-	Summary     string `json:"summary"`
+	QItemID     string    `json:"qitem_id"`
+	State       string    `json:"state"`
+	Pickup      string    `json:"pickup"`
+	Destination string    `json:"destination"`
+	Body        string    `json:"body"`
+	Summary     string    `json:"summary"`
+	CreatedAt   time.Time `json:"created_at,omitempty"`
+	LastNudgeAt time.Time `json:"last_nudge_at,omitempty"`
 }
 
 // Branch is one origin branch the mirror saw. A branch named feature/<n>-* belongs to
@@ -107,6 +110,10 @@ type Snapshot struct {
 	Dispatched []int    `json:"dispatched,omitempty"` // item numbers an earlier tick dispatched
 	ForgeOK    bool     `json:"forge_ok"`
 	ForgeError string   `json:"forge_error,omitempty"`
+
+	Dispatches []DispatchState `json:"dispatches,omitempty"`
+	CRs        []CRState       `json:"change_requests,omitempty"`
+	Verdicts   []VerdictState  `json:"verdicts,omitempty"`
 }
 
 // Reason is a skip reason. Every candidate carries one; a candidate with no reason is a

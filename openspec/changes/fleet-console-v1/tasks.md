@@ -31,12 +31,12 @@ rules and the oracle come before any surface (design §15.8).
 
 ## 4. Mirror and decide (P1, dry-run)
 
-- [ ] 4.1 Mirror loop with jitter, per-project stamps and a `stale` flag. Verify: kill the forge CLI and confirm the API still returns the last successful sync time plus `stale: true`.
-- [ ] 4.2 Branch index per repo (`feature/<n>-*`) from `git ls-remote`. Verify: `TestBranchIndex` over a recorded remote listing.
-- [ ] 4.3 Rig snapshot read (`queue list -A -a`, `ps --nodes --full`) into the `snapshot` cache, stamped. Verify: the board endpoint returns rows and seats from the snapshot with `synced_at`.
-- [ ] 4.4 Housekeeping passes: prune, reset stalled (≤3), marker reconcile, re-nudge (15 min / 30 min cooldown), epic close. Verify: one test per pass asserting the `event` rows written.
-- [ ] 4.5 Incident fixtures: parked (open CR, no verdict, no live row) and marker leak (merged CR, item open) raise the decision question. Verify: `go test ./internal/decide -run TestIncident` names the question text for both fixtures.
-- [ ] 4.6 Dry-run week: intents only, compared against the live dispatcher every tick. Verify: ten consecutive ticks with zero diffs, recorded in `docs/cutover.md`.
+- [x] 4.1 Mirror loop with jitter, per-project stamps and a `stale` flag. Verify: kill the forge CLI and confirm the API still returns the last successful sync time plus `stale: true`.
+- [x] 4.2 Branch index per repo (`feature/<n>-*`) from `git ls-remote`. Verify: `TestBranchIndex` over a recorded remote listing.
+- [x] 4.3 Rig snapshot read (`queue list -A -a`, `ps --nodes --full`) into the `snapshot` cache, stamped. Verify: the board endpoint returns rows and seats from the snapshot with `synced_at`.
+- [x] 4.4 Housekeeping passes: prune, reset stalled (≤3), marker reconcile, re-nudge (15 min / 30 min cooldown), epic close. Verify: one test per pass asserting the `event` rows written.
+- [x] 4.5 Incident fixtures: parked (open CR, no verdict, no live row) and marker leak (merged CR, item open) raise the decision question. Verify: `go test ./internal/decide -run TestIncident` names the question text for both fixtures.
+- [x] 4.6 Dry-run week: intents only, compared against the live dispatcher every tick. Verify: ten consecutive ticks with zero diffs, recorded in `docs/cutover.md`.
 
 ## 5. Act (P2)
 
