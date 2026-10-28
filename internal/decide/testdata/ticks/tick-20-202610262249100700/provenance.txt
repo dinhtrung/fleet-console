@@ -1,0 +1,33 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-26T22:49:10+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-26T22:49:10+0700 builders busy=- free=2 limit=2
+2026-10-26T22:49:19+0700 #200 reclaim: /home/dinhtrung/develop-omp/wt-200 has 4 commit(s) not in main; keeping it
+2026-10-26T22:49:19+0700 #201 reclaim: /home/dinhtrung/develop-omp/wt-201 has 1 commit(s) not in main; keeping it
+2026-10-26T22:49:19+0700 #202 reclaim: /home/dinhtrung/develop-omp/wt-202 has 1 commit(s) not in main; keeping it
+2026-10-26T22:49:19+0700 open epics [101, 102, 111, 114, 128, 135, 144, 156, 161, 169, 179, 185, 195, 199, 215, 220, 228]; open tasks [216, 217, 218, 219, 221, 222, 223, 224, 225, 226, 227, 229, 230, 231, 232, 233, 234, 235, 236]
+2026-10-26T22:49:23+0700 #217 skip: blocked by open #216
+2026-10-26T22:49:24+0700 #218 skip: blocked by open #217
+2026-10-26T22:49:25+0700 #219 skip: blocked by open #218
+2026-10-26T22:49:27+0700 #221 skip: blocked by open #215
+2026-10-26T22:49:28+0700 #222 skip: blocked by open #221
+2026-10-26T22:49:29+0700 #223 skip: blocked by open #222
+2026-10-26T22:49:30+0700 #224 skip: blocked by open #223
+2026-10-26T22:49:31+0700 #225 skip: blocked by open #224
+2026-10-26T22:49:33+0700 #226 skip: blocked by open #225
+2026-10-26T22:49:34+0700 #227 skip: blocked by open #226
+2026-10-26T22:49:35+0700 #229 skip: blocked by open #220
+2026-10-26T22:49:36+0700 #230 skip: blocked by open #229
+2026-10-26T22:49:37+0700 #231 skip: blocked by open #230
+2026-10-26T22:49:39+0700 #232 skip: blocked by open #231
+2026-10-26T22:49:40+0700 #233 skip: blocked by open #232
+2026-10-26T22:49:41+0700 #234 skip: blocked by open #233
+2026-10-26T22:49:42+0700 #235 skip: blocked by open #234
+2026-10-26T22:49:43+0700 #236 skip: blocked by open #235
+2026-10-26T22:49:43+0700 ready: [216]
+2026-10-26T22:49:46+0700 #216 plan: seat=dev-build-omp-1@tsim-fleet-omp branch=feature/216-feat-engine-finish-the-seed base=94db0dc
+2026-10-26T22:49:47+0700 #216 dispatched: qitem-20261026154946-bdc1c635f5da39b3 -> dev-build-omp-1@tsim-fleet-omp (feature/216-feat-engine-finish-the-seed); label status::ongoing
+2026-10-26T22:59:14+0700 seat config missing on 3 seat(s): dev-build-omp-1, dev-build-omp-2, dev-review - seeding
+2026-10-26T22:59:14+0700 seat config: 0 seat(s) repaired

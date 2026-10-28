@@ -1,0 +1,178 @@
+{
+  "project": {
+    "key": "horisen/mnp/engine/traffic-simulator-v2",
+    "forge": "gitlab",
+    "enabled": true,
+    "onhold": false,
+    "concurrency_cap": 2
+  },
+  "items": [
+    {
+      "number": 101,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 101"
+    },
+    {
+      "number": 102,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 102"
+    },
+    {
+      "number": 111,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 111"
+    },
+    {
+      "number": 114,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 114"
+    },
+    {
+      "number": 128,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 128"
+    },
+    {
+      "number": 135,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 135"
+    },
+    {
+      "number": 144,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 144"
+    },
+    {
+      "number": 156,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 156"
+    },
+    {
+      "number": 161,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 161"
+    },
+    {
+      "number": 169,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 169"
+    },
+    {
+      "number": 170,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 170"
+    },
+    {
+      "number": 171,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 171",
+      "related": [
+        {
+          "number": 170,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 172,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 172",
+      "related": [
+        {
+          "number": 170,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 173,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 173",
+      "related": [
+        {
+          "number": 171,
+          "state": "open"
+        },
+        {
+          "number": 172,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 174,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 174",
+      "related": [
+        {
+          "number": 173,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 175,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 175",
+      "related": [
+        {
+          "number": 174,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 176,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 176",
+      "related": [
+        {
+          "number": 175,
+          "state": "open"
+        }
+      ]
+    }
+  ],
+  "rows": [],
+  "branches": [],
+  "builders": [
+    "free-0@fixture",
+    "free-1@fixture"
+  ],
+  "dispatched": [],
+  "forge_ok": true
+}

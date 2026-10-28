@@ -1,0 +1,26 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-23T22:46:49+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-23T22:46:49+0700 builders busy=- free=2 limit=2
+2026-10-23T22:46:52+0700 #166 ongoing cleared (row not in flight)
+2026-10-23T22:46:52+0700 #165 ongoing cleared (row not in flight)
+2026-10-23T22:46:52+0700 #164 ongoing cleared (row not in flight)
+2026-10-23T22:46:52+0700 #163 ongoing cleared (row not in flight)
+2026-10-23T22:46:52+0700 #155 ongoing cleared (row not in flight)
+2026-10-23T22:46:52+0700 #153 ongoing cleared (row not in flight)
+2026-10-23T22:46:52+0700 #152 ongoing cleared (row not in flight)
+2026-10-23T22:46:59+0700 #151 reclaim: /home/dinhtrung/develop-pi/wt-151 has uncommitted changes; keeping it
+2026-10-23T22:46:59+0700 open epics [101, 102, 111, 114, 128, 135, 144, 156, 161]; open tasks [152, 153, 155, 163, 164, 165, 166, 167, 168]
+2026-10-23T22:47:07+0700 #163 adopt: branch feature/163-* on origin but no MR; continuing it
+2026-10-23T22:47:08+0700 #164 skip: branch feature/164-* is in an open MR
+2026-10-23T22:47:13+0700 ready: [152, 153]
+2026-10-23T22:47:15+0700 #152 plan: seat=dev-build-omp-1@tsim-fleet-omp branch=feature/152-pools-db-without-the-plan base=74e3b22
+2026-10-23T22:47:15+0700 #152 dry-run: git worktree add /home/dinhtrung/develop-omp/wt-152 -b feature/152-pools-db-without-the-plan origin/main
+2026-10-23T22:47:15+0700 #152 dry-run: brief /home/dinhtrung/tasks-omp/task-152.md → queue dev-build-omp-1@tsim-fleet-omp
+2026-10-23T22:47:16+0700 #153 plan: seat=dev-build-omp-2@tsim-fleet-omp branch=feature/153-run-report-and-pools-api base=74e3b22
+2026-10-23T22:47:16+0700 #153 dry-run: git worktree add /home/dinhtrung/develop-omp/wt-153 -b feature/153-run-report-and-pools-api origin/main
+2026-10-23T22:47:16+0700 #153 dry-run: brief /home/dinhtrung/tasks-omp/task-153.md → queue dev-build-omp-2@tsim-fleet-omp
+2026-10-23T22:48:55+0700 seat config missing on 3 seat(s): dev-build-omp-1, dev-build-omp-2, dev-review - seeding
+2026-10-23T22:48:55+0700 seat config: 0 seat(s) repaired

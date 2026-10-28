@@ -1,0 +1,21 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-25T20:23:55+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-25T20:23:55+0700 builders busy=- free=2 limit=2
+2026-10-25T20:24:06+0700 epic #185 done but carries onhold: left open
+2026-10-25T20:24:06+0700 #194 skip: parent #185 carries onhold
+2026-10-25T20:24:06+0700 #193 skip: parent #185 carries onhold
+2026-10-25T20:24:06+0700 #192 skip: parent #185 carries onhold
+2026-10-25T20:24:06+0700 #191 skip: label onhold
+2026-10-25T20:24:06+0700 #190 skip: label onhold
+2026-10-25T20:24:06+0700 #189 skip: label onhold
+2026-10-25T20:24:06+0700 #188 skip: label onhold
+2026-10-25T20:24:06+0700 #187 skip: label onhold
+2026-10-25T20:24:06+0700 open epics [101, 102, 111, 114, 128, 135, 144, 156, 161, 169, 179, 185, 195]; open tasks [196]
+2026-10-25T20:24:08+0700 ready: [196]
+2026-10-25T20:24:11+0700 #196 plan: seat=dev-build-omp-1@tsim-fleet-omp branch=feature/196-feat-scenarios-the-wizard-writes base=3b39f94
+2026-10-25T20:24:13+0700 #196 dispatched: qitem-20261025132411-d4adde6e730c2a65 -> dev-build-omp-1@tsim-fleet-omp (feature/196-feat-scenarios-the-wizard-writes); label status::ongoing
+2026-10-25T20:24:16+0700 seat config missing on 4 seat(s): dev-build18, dev-build19, dev-build20, dev-review - seeding
+2026-10-25T20:24:16+0700 seat config: 0 seat(s) repaired

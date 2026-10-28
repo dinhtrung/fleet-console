@@ -1,0 +1,138 @@
+{
+  "project": {
+    "key": "horisen/mnp/engine/traffic-simulator-v2",
+    "forge": "gitlab",
+    "enabled": true,
+    "onhold": false,
+    "concurrency_cap": 5
+  },
+  "items": [
+    {
+      "number": 101,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 101"
+    },
+    {
+      "number": 102,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 102"
+    },
+    {
+      "number": 111,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 111"
+    },
+    {
+      "number": 114,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 114"
+    },
+    {
+      "number": 127,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 127"
+    },
+    {
+      "number": 128,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 128"
+    },
+    {
+      "number": 129,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 129"
+    },
+    {
+      "number": 130,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 130",
+      "related": [
+        {
+          "number": 129,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 131,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 131",
+      "related": [
+        {
+          "number": 129,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 132,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 132",
+      "related": [
+        {
+          "number": 129,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 133,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 133",
+      "related": [
+        {
+          "number": 130,
+          "state": "open"
+        },
+        {
+          "number": 131,
+          "state": "open"
+        },
+        {
+          "number": 132,
+          "state": "open"
+        }
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "qitem_id": "fixture-live-127",
+      "state": "pending",
+      "pickup": "",
+      "destination": "row-holder@fixture",
+      "body": "Continuing #127",
+      "summary": ""
+    }
+  ],
+  "branches": [],
+  "builders": [
+    "free-0@fixture",
+    "free-1@fixture",
+    "free-2@fixture"
+  ],
+  "dispatched": [],
+  "forge_ok": true
+}

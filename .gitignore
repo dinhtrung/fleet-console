@@ -38,3 +38,7 @@ dist-ssr
 .vercel
 
 .env*
+
+# Python bytecode from the tick recorder
+__pycache__/
+*.pyc

@@ -1,0 +1,17 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-26T18:15:08+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-26T18:15:08+0700 builders busy=- free=2 limit=2
+2026-10-26T18:15:16+0700 open epics [101, 102, 111, 114, 128, 135, 144, 156, 161, 169, 179, 185, 195, 199]; open tasks [200, 201, 202, 203, 204, 205]
+2026-10-26T18:15:22+0700 #203 skip: blocked by open #202
+2026-10-26T18:15:23+0700 #204 skip: blocked by open #200, #201, #202, #203
+2026-10-26T18:15:25+0700 #205 skip: blocked by open #204
+2026-10-26T18:15:25+0700 ready: [200, 201]
+2026-10-26T18:15:27+0700 #200 plan: seat=dev-build-omp-1@tsim-fleet-omp branch=feature/200-feat-engine-the-http-server base=2b7494c
+2026-10-26T18:15:29+0700 #200 dispatched: qitem-20261026111527-fe1fe00b3a3cc8c6 -> dev-build-omp-1@tsim-fleet-omp (feature/200-feat-engine-the-http-server); label status::ongoing
+2026-10-26T18:15:30+0700 #201 plan: seat=dev-build-omp-2@tsim-fleet-omp branch=feature/201-feat-api-concurrency-is-refused base=2b7494c
+2026-10-26T18:15:32+0700 #201 dispatched: qitem-20261026111530-9b8f7d0220c57009 -> dev-build-omp-2@tsim-fleet-omp (feature/201-feat-api-concurrency-is-refused); label status::ongoing
+2026-10-26T18:25:12+0700 seat config missing on 3 seat(s): dev-build-omp-1, dev-build-omp-2, dev-review - seeding
+2026-10-26T18:25:12+0700 seat config: 0 seat(s) repaired

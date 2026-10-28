@@ -1,0 +1,15 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-23T16:03:31+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-23T16:03:31+0700 builders busy=- free=3 limit=3
+2026-10-23T16:03:40+0700 #132 watchdog: ACCEPT 30f826ea + pipeline green + mergeable -> merging MR !393
+2026-10-23T16:03:43+0700 #132 watchdog: MR !393 merged at 95978a4f
+2026-10-23T16:03:45+0700 #130 reclaim: removed /home/dinhtrung/develop/wt-130 and branch feature/130-dialog-on-base-ui-props
+2026-10-23T16:03:46+0700 #131 reclaim: removed /home/dinhtrung/develop/wt-131 and branch feature/131-menus-on-base-ui-actionsmenu
+2026-10-23T16:03:46+0700 open epics [101, 102, 111, 114, 128]; open tasks [132, 133]
+2026-10-23T16:03:46+0700 #132 skip: already in a live queue row
+2026-10-23T16:03:49+0700 ready: [133]
+2026-10-23T16:03:50+0700 #133 plan: seat=dev-build18@tsim-fleet branch=feature/133-gates-and-visual-evidence-tick base=95978a4
+2026-10-23T16:03:52+0700 #133 dispatched: qitem-20261023090350-54f09899583b48ce -> dev-build18@tsim-fleet (feature/133-gates-and-visual-evidence-tick); label status::ongoing

@@ -1,0 +1,17 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-23T07:10:30+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-23T07:10:30+0700 builders busy=- free=3 limit=3
+2026-10-23T07:10:30+0700 #115 state pruned (closed)
+2026-10-23T07:10:33+0700 open epics [101, 102, 111, 114]; open tasks [116, 117, 118, 119, 120, 121, 122]
+2026-10-23T07:10:37+0700 #117 skip: blocked by open #116
+2026-10-23T07:10:38+0700 #118 skip: blocked by open #117
+2026-10-23T07:10:40+0700 #119 skip: blocked by open #116
+2026-10-23T07:10:41+0700 #120 skip: blocked by open #119, #118
+2026-10-23T07:10:42+0700 #121 skip: blocked by open #119
+2026-10-23T07:10:44+0700 #122 skip: blocked by open #120, #121
+2026-10-23T07:10:44+0700 ready: [116]
+2026-10-23T07:10:45+0700 #116 plan: seat=dev-build18@tsim-fleet branch=feature/116-the-grid-column-contract-shell base=b9b9a7b
+2026-10-23T07:10:47+0700 #116 dispatched: qitem-20261023001045-aa6ce44c3b68f5b5 -> dev-build18@tsim-fleet (feature/116-the-grid-column-contract-shell); label status::ongoing
