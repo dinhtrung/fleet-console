@@ -135,12 +135,20 @@ func (cr ChangeRequest) HeadGreen() (bool, string) {
 	return true, "all checks passed"
 }
 
+// Comment is one reviewer note on an item.
+type Comment struct {
+	ID        string `json:"id"`
+	Body      string `json:"body"`
+	CreatedAt string `json:"created_at"`
+}
+
 // Forge is the whole interface the app has to a forge. Exactly four writes: the marker
 // label, a comment, closing an item, and merging a change request at a sha.
 type Forge interface {
 	Kind() Kind
 	Items(ctx context.Context) ([]Item, error)
 	ChangeRequests(ctx context.Context) ([]ChangeRequest, error)
+	Notes(ctx context.Context, number int) ([]Comment, error)
 	SetMarker(ctx context.Context, number int, present bool) error
 	Comment(ctx context.Context, number int, body string) error
 	CloseItem(ctx context.Context, number int) error
