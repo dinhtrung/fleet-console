@@ -94,7 +94,7 @@ func TestGitHubItems(t *testing.T) {
 
 func TestGitHubChangeRequests(t *testing.T) {
 	runner := githubFixtures()
-	runner.exact["gh api repos/dinhtrung/fleet-console/pulls?state=open&per_page=100&page=1"] = "github/pulls-open.json"
+	runner.exact["gh api repos/dinhtrung/fleet-console/pulls?state=all&per_page=100&page=1"] = "github/pulls-open.json"
 	runner.exact["gh api repos/dinhtrung/fleet-console/pulls/14"] = "github/pull-14.json"
 	runner.exact["gh api repos/dinhtrung/fleet-console/pulls/14/files?per_page=100"] = "github/pull-files.json"
 	runner.exact["gh api repos/dinhtrung/fleet-console/commits/a21e0626300f54f2c062bbb8026fe67bbdf47c3d/check-runs"] = "github/check-runs.json"
@@ -175,7 +175,7 @@ func TestGitLabItems(t *testing.T) {
 func TestGitLabChangeRequests(t *testing.T) {
 	runner := gitlabFixtures()
 	runner.fallback = append(runner.fallback,
-		fallbackFile{contains: "merge_requests?state=opened", file: "gitlab/merge-requests.json"},
+		fallbackFile{contains: "merge_requests?state=all", file: "gitlab/merge-requests.json"},
 		fallbackFile{contains: "/changes", file: "gitlab/merge-request-changes.json"},
 		fallbackFile{contains: "/jobs?", file: "gitlab/pipeline-jobs.json"},
 		fallbackFile{contains: "/pipelines", file: "gitlab/pipelines.json"},

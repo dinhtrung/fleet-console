@@ -19,7 +19,11 @@ import (
 	// Embedded so a release binary keeps time-zone data on a bare box.
 	_ "time/tzdata"
 
+	"github.com/dinhtrung/fleet-console/internal/decide"
+	"github.com/dinhtrung/fleet-console/internal/forge"
+	"github.com/dinhtrung/fleet-console/internal/git"
 	"github.com/dinhtrung/fleet-console/internal/hostcheck"
+	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/dinhtrung/fleet-console/internal/web"
@@ -47,6 +51,80 @@ func main() {
 	}
 }
 
+// runTick reads the forge/rig/git, writes only the mirror caches, and prints the
+// decide plan. It performs no forge, rig or git writes.
+func projectSources(ctx context.Context, db *store.Store) ([]mirror.Project, error) {
+	projects, err := db.Projects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	specs := make([]mirror.Project, 0, len(projects))
+	for _, project := range projects {
+		repoPath, err := db.RepoPath(ctx, project.ID)
+		if err != nil {
+			return nil, err
+		}
+		budget := &forge.Budget{Max: 400}
+		var source forge.Forge
+		switch forge.Kind(project.ForgeKind) {
+		case forge.KindGitHub:
+			source = forge.NewGitHub(project.ForgeProject, forge.CLIRunner{}, budget)
+		case forge.KindGitLab:
+			source = forge.NewGitLab(project.ForgeProject, forge.CLIRunner{}, budget)
+		default:
+			return nil, fmt.Errorf("tick: project %s has unknown forge %q", project.Key, project.ForgeKind)
+		}
+		spec := mirror.Project{ID: project.ID, Key: project.Key, Forge: source, Rig: project.Rig}
+		if repoPath != "" {
+			spec.Git = git.ExecRunner{RepoPath: repoPath}
+		}
+		specs = append(specs, spec)
+	}
+	return specs, nil
+}
+
+func runTick(ctx context.Context, db *store.Store, out io.Writer) error {
+	projects, err := db.Projects(ctx)
+	if err != nil {
+		return err
+	}
+	adapter := rig.NewAdapter(rig.ExecRunner{})
+	mirrorer := &mirror.Mirror{Store: db, Rig: adapter}
+	specs, err := projectSources(ctx, db)
+	if err != nil {
+		return err
+	}
+	read, err := mirrorer.Tick(ctx, specs)
+	if err != nil {
+		return err
+	}
+	type tickOutput struct {
+		At       string                 `json:"at"`
+		RigStale bool                   `json:"rig_stale"`
+		RigError string                 `json:"rig_error,omitempty"`
+		Projects map[string]decide.Plan `json:"projects"`
+	}
+	output := tickOutput{
+		At: read.At.UTC().Format(time.RFC3339), RigStale: read.RigStale, RigError: read.RigError,
+		Projects: make(map[string]decide.Plan, len(projects)),
+	}
+	for _, project := range projects {
+		dispatches, err := db.DispatchesForProject(ctx, project.ID)
+		if err != nil {
+			return err
+		}
+		verdicts, err := db.VerdictsForProject(ctx, project.ID)
+		if err != nil {
+			return err
+		}
+		snapshot := mirror.BuildSnapshot(project, read.Projects[project.Key], dispatches, verdicts)
+		output.Projects[project.Key] = decide.PlanTick(snapshot, read.At)
+	}
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(output)
+}
+
 func run(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("fleet-console", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -54,6 +132,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	asJSON := flags.Bool("json", false, "with --version, print JSON")
 	compat := flags.Bool("compat", false, "probe the rig CLI, print the compat report and exit")
 	migrate := flags.Bool("migrate", false, "open the database, apply migrations and exit")
+	tick := flags.Bool("tick", false, "run one mirror + decide pass in dry-run and print the plan")
 	addr := flags.String("addr", "127.0.0.1:8787", "listen address")
 	dbPath := flags.String("db", "fleet-console.db", "SQLite database path")
 	if err := flags.Parse(args); err != nil {
@@ -103,6 +182,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
+	if *tick {
+		db, err := store.Open(ctx, *dbPath)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		return runTick(ctx, db, stdout)
+	}
+
 	token := os.Getenv("FLEET_CONSOLE_TOKEN")
 	if token == "" {
 		return errors.New("FLEET_CONSOLE_TOKEN is required")
@@ -128,6 +216,29 @@ func run(args []string, stdout, stderr io.Writer) error {
 	} else {
 		fmt.Fprintf(stderr, "fleet-console: compat: rig %s at or above floor %s\n", report.Version, report.Floor)
 	}
+
+	// The mirror runs in the server: read-only, jittered, and dry-run only for
+	// decide until the act loop lands.
+	go (&mirror.Mirror{Store: db, Rig: rig.NewAdapter(rig.ExecRunner{})}).Loop(
+		ctx,
+		func(ctx context.Context) ([]mirror.Project, error) { return projectSources(ctx, db) },
+		15*time.Second, 5*time.Second,
+		func(read mirror.TickResult) {
+			rows, err := db.Projects(ctx)
+			if err != nil {
+				return
+			}
+			for _, project := range rows {
+				dispatches, err1 := db.DispatchesForProject(ctx, project.ID)
+				verdicts, err2 := db.VerdictsForProject(ctx, project.ID)
+				if err1 != nil || err2 != nil {
+					continue
+				}
+				plan := decide.PlanTick(mirror.BuildSnapshot(project, read.Projects[project.Key], dispatches, verdicts), read.At)
+				fmt.Fprintf(stderr, "mirror: %s status=%s intents=%d\n", project.Key, plan.Status, len(plan.Intents))
+			}
+		},
+	)
 
 	app, err := web.New(web.Config{
 		Token:  token,

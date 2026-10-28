@@ -232,6 +232,7 @@ func (g *GitLab) related(ctx context.Context, number int) ([]Link, error) {
 
 type glMergeRequest struct {
 	IID         int    `json:"iid"`
+	State       string `json:"state"`
 	SHA         string `json:"sha"`
 	Draft       bool   `json:"draft"`
 	MergeStatus string `json:"merge_status"`
@@ -244,7 +245,7 @@ type glMergeRequest struct {
 func (g *GitLab) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 	var requests []ChangeRequest
 	for page := 1; ; page++ {
-		path := fmt.Sprintf("projects/%s/merge_requests?state=opened&per_page=100&page=%d", g.enc, page)
+		path := fmt.Sprintf("projects/%s/merge_requests?state=all&per_page=100&page=%d", g.enc, page)
 		raw, err := g.cli.api(ctx, path)
 		if err != nil {
 			return nil, err
@@ -263,7 +264,8 @@ func (g *GitLab) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 				return nil, err
 			}
 			requests = append(requests, ChangeRequest{
-				Number: mr.IID, HeadSHA: mr.SHA, Draft: mr.Draft,
+				Number: mr.IID, State: mr.State, Merged: strings.EqualFold(mr.State, "merged"),
+				HeadSHA: mr.SHA, Draft: mr.Draft,
 				Mergeable: strings.EqualFold(mr.MergeStatus, "can_be_merged"),
 				Body:      mr.Description, ClosesItem: ParseCloses(mr.Description),
 				Checks: checks, DocsOnly: DocsOnly(paths), URL: mr.WebURL,

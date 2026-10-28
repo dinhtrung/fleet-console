@@ -102,6 +102,8 @@ func (c Check) Pending() bool {
 // ChangeRequest is the normalized pull/merge request.
 type ChangeRequest struct {
 	Number     int     `json:"number"`
+	State      string  `json:"state"`  // open | closed | merged
+	Merged     bool    `json:"merged"` // the change landed
 	HeadSHA    string  `json:"head_sha"`
 	Draft      bool    `json:"draft"`
 	Mergeable  bool    `json:"mergeable"`

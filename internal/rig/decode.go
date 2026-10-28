@@ -14,6 +14,9 @@ type QueueRow struct {
 	State       string `json:"state"`
 	PickupState string `json:"pickup_state"`
 	Summary     string `json:"summary,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
+	LastNudgeAt string `json:"last_nudge_at,omitempty"`
+	Body        string `json:"body,omitempty"`
 }
 
 // Seat is one node from `rig ps --nodes --full --json`.
@@ -56,6 +59,9 @@ type queueRowWire struct {
 	Destination string `json:"destinationSession"`
 	State       string `json:"state"`
 	Summary     string `json:"summary"`
+	CreatedAt   string `json:"tsCreated"`
+	LastNudge   string `json:"lastNudgeAttempt"`
+	Body        string `json:"body"`
 }
 
 type seatWire struct {
@@ -112,6 +118,9 @@ func ParseQueueList(data []byte, unknown func(key string)) ([]QueueRow, error) {
 			State:       wire.State,
 			PickupState: wire.Pickup.State,
 			Summary:     wire.Summary,
+			CreatedAt:   wire.CreatedAt,
+			LastNudgeAt: wire.LastNudge,
+			Body:        wire.Body,
 		}
 		for _, check := range []struct {
 			field, path, value string

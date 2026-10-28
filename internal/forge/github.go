@@ -178,11 +178,13 @@ func (g *GitHub) blockedBy(ctx context.Context, number int) ([]Link, error) {
 }
 
 type ghPull struct {
-	Number    int    `json:"number"`
-	Draft     bool   `json:"draft"`
-	Body      string `json:"body"`
-	HTMLURL   string `json:"html_url"`
-	Mergeable *bool  `json:"mergeable"`
+	Number    int     `json:"number"`
+	Draft     bool    `json:"draft"`
+	Body      string  `json:"body"`
+	HTMLURL   string  `json:"html_url"`
+	Mergeable *bool   `json:"mergeable"`
+	State     string  `json:"state"`
+	MergedAt  *string `json:"merged_at"`
 	Head      struct {
 		SHA string `json:"sha"`
 	} `json:"head"`
@@ -192,7 +194,7 @@ type ghPull struct {
 func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 	var pulls []ghPull
 	for page := 1; ; page++ {
-		path := fmt.Sprintf("repos/%s/pulls?state=open&per_page=100&page=%d", g.slug, page)
+		path := fmt.Sprintf("repos/%s/pulls?state=all&per_page=100&page=%d", g.slug, page)
 		raw, err := g.cli.api(ctx, path)
 		if err != nil {
 			return nil, err
@@ -234,7 +236,8 @@ func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 			mergeable = detail.Mergeable != nil && *detail.Mergeable
 		}
 		requests = append(requests, ChangeRequest{
-			Number: pull.Number, HeadSHA: pull.Head.SHA, Draft: pull.Draft,
+			Number: pull.Number, State: pull.State, Merged: pull.MergedAt != nil,
+			HeadSHA: pull.Head.SHA, Draft: pull.Draft,
 			Mergeable: mergeable, Body: pull.Body, ClosesItem: ParseCloses(pull.Body),
 			Checks: checks, DocsOnly: DocsOnly(paths), URL: pull.HTMLURL,
 		})
