@@ -8,6 +8,7 @@ type Fake struct {
 	KindValue     Kind
 	ItemsValue    []Item
 	RequestsValue []ChangeRequest
+	NotesValue    []Comment
 	ReadErr       error
 	WriteErr      error
 	Writes        []Write
@@ -40,6 +41,14 @@ func (f *Fake) ChangeRequests(context.Context) ([]ChangeRequest, error) {
 		return nil, f.ReadErr
 	}
 	return append([]ChangeRequest(nil), f.RequestsValue...), nil
+}
+
+// Notes returns the configured reviewer notes.
+func (f *Fake) Notes(context.Context, int) ([]Comment, error) {
+	if f.ReadErr != nil {
+		return nil, f.ReadErr
+	}
+	return append([]Comment(nil), f.NotesValue...), nil
 }
 
 // SetMarker records a marker write.

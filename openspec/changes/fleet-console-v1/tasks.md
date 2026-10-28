@@ -41,10 +41,10 @@ rules and the oracle come before any surface (design §15.8).
 ## 5. Act (P2)
 
 - [ ] 5.1 Dispatch intent: fetch, base sha, worktree add-or-reuse, brief from template, `rig queue create --source human@kernel --destination <seat> --body-file`, marker label, dispatch row. Verify: a real issue dispatched with the old timer stopped; a second run is a no-op naming the existing row.
-- [ ] 5.2 Row actions: resolve, handoff, close-as-superseded, re-nudge — each one rig call plus one `event` row. Verify: each action's test asserts the CLI argv, the exit code and the before/after state.
-- [ ] 5.3 Verdict capture: read the reviewer's note, store `verdict(dispatch, sha, accept|reject)`; only the newest note counts. Verify: three tests — accept, later reject vetoes, note for an older sha ignored.
+- [x] 5.2 Row actions: resolve, handoff, close-as-superseded, re-nudge — each one rig call plus one `event` row. Verify: each action's test asserts the CLI argv, the exit code and the before/after state.
+- [x] 5.3 Verdict capture: read the reviewer's note, store `verdict(dispatch, sha, accept|reject)`; only the newest note counts. Verify: three tests — accept, later reject vetoes, note for an older sha ignored.
 - [ ] 5.4 Merge watchdog: four facts re-read in the act pass; refuse naming the missing fact. Verify: four refusal tests plus one end-to-end merge on a docs-only PR.
-- [ ] 5.5 Post-merge: verify the item closed, close it when the body only referenced it, clear the marker, unblock the next item. Verify: a fixture where the PR body says `Refs #n` and the item ends closed with an event naming the reason.
+- [x] 5.5 Post-merge: verify the item closed, close it when the body only referenced it, clear the marker, unblock the next item. Verify: a fixture where the PR body says `Refs #n` and the item ends closed with an event naming the reason.
 
 ## 6. Web foundation and board (P3)
 

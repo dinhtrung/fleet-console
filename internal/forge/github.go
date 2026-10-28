@@ -320,6 +320,27 @@ func (g *GitHub) checks(ctx context.Context, sha string) ([]Check, error) {
 	return checks, nil
 }
 
+// Notes reads an item's comments (issue and PR conversation).
+func (g *GitHub) Notes(ctx context.Context, number int) ([]Comment, error) {
+	raw, err := g.cli.api(ctx, fmt.Sprintf("repos/%s/issues/%d/comments?per_page=100", g.slug, number))
+	if err != nil {
+		return nil, err
+	}
+	var batch []struct {
+		ID        int64  `json:"id"`
+		Body      string `json:"body"`
+		CreatedAt string `json:"created_at"`
+	}
+	if err := json.Unmarshal(raw, &batch); err != nil {
+		return nil, fmt.Errorf("forge: decode GitHub comments: %w", err)
+	}
+	out := make([]Comment, 0, len(batch))
+	for _, note := range batch {
+		out = append(out, Comment{ID: fmt.Sprint(note.ID), Body: note.Body, CreatedAt: note.CreatedAt})
+	}
+	return out, nil
+}
+
 // SetMarker adds or removes the in-flight marker label.
 func (g *GitHub) SetMarker(ctx context.Context, number int, present bool) error {
 	flag := "--remove-label"
