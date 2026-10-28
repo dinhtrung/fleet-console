@@ -8,6 +8,7 @@ import (
 	"errors"
 
 	"github.com/dinhtrung/fleet-console/internal/rig"
+	"github.com/dinhtrung/fleet-console/internal/webui"
 	"github.com/gofiber/fiber/v3"
 )
 
@@ -42,5 +43,8 @@ func New(cfg Config) (*fiber.App, error) {
 	api.Get("/compat", func(c fiber.Ctx) error {
 		return c.JSON(compat(c.Context()))
 	})
+	if board, ok := webui.FS(); ok {
+		app.Use(boardHandler(board))
+	}
 	return app, nil
 }
