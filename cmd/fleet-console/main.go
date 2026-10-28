@@ -134,6 +134,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	compat := flags.Bool("compat", false, "probe the rig CLI, print the compat report and exit")
 	migrate := flags.Bool("migrate", false, "open the database, apply migrations and exit")
 	tick := flags.Bool("tick", false, "run one mirror + decide pass in dry-run and print the plan")
+	importState := flags.String("import-dispatch-state", "", "import the old dispatcher state JSON and exit")
+	projectKey := flags.String("project-key", "fleet-console", "project key for --import-dispatch-state")
 	addr := flags.String("addr", "127.0.0.1:8787", "listen address")
 	dbPath := flags.String("db", "fleet-console.db", "SQLite database path")
 	if err := flags.Parse(args); err != nil {
@@ -190,6 +192,35 @@ func run(args []string, stdout, stderr io.Writer) error {
 		}
 		defer db.Close()
 		return runTick(ctx, db, stdout)
+	}
+
+	if *importState != "" {
+		db, err := store.Open(ctx, *dbPath)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		data, err := os.ReadFile(*importState)
+		if err != nil {
+			return err
+		}
+		state, err := store.ParseDispatcherState(data)
+		if err != nil {
+			return err
+		}
+		project, err := db.ProjectByKey(ctx, *projectKey)
+		if err != nil {
+			return err
+		}
+		if project == nil {
+			return fmt.Errorf("import: project %q is not registered; add it first", *projectKey)
+		}
+		inserted, err := db.ImportDispatches(ctx, project.ID, state)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "imported %d dispatch row(s) into %s\n", inserted, project.Key)
+		return nil
 	}
 
 	token := os.Getenv("FLEET_CONSOLE_TOKEN")

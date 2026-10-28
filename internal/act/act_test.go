@@ -369,3 +369,46 @@ func (q *queueStub) QueueUpdate(context.Context, string, rig.UpdateRequest) (*ri
 	return q.item, nil
 }
 func (q *queueStub) Send(context.Context, string, string) error { return nil }
+
+func TestTwoProjectsDispatchIsolatedWorktrees(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	appID := newProject(t, st)
+	docsID, err := st.CreateProject(ctx, store.ProjectInput{
+		Key: "docs", Name: "docs", ForgeKind: "github", ForgeProject: "o/docs",
+		Rig: "docs-rig", ConcurrencyCap: 1, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("docs project: %v", err)
+	}
+	git := &fakeGit{}
+	fake := forge.NewFake(forge.KindGitHub)
+	queue := &queueStub{item: &rig.QueueItem{ID: "qitem-1", State: "pending"}, created: &rig.CreateRequest{}}
+	actions := &Actions{Store: st, Forge: fake, Rig: queue, Git: git}
+	root := t.TempDir()
+	first, err := actions.Dispatch(ctx, DispatchInput{
+		ProjectID: appID, ProjectKey: "app", Item: forge.Item{Number: 1, Kind: forge.KindTask, Title: "One"},
+		Seat: "seat@rig", WorktreeRoot: root,
+	})
+	if err != nil {
+		t.Fatalf("app dispatch: %v", err)
+	}
+	second, err := actions.Dispatch(ctx, DispatchInput{
+		ProjectID: docsID, ProjectKey: "docs", Item: forge.Item{Number: 1, Kind: forge.KindTask, Title: "One"},
+		Seat: "seat@rig", WorktreeRoot: root,
+	})
+	if err != nil {
+		t.Fatalf("docs dispatch: %v", err)
+	}
+	if first.Worktree == second.Worktree {
+		t.Fatalf("projects share a worktree: %s", first.Worktree)
+	}
+	if !strings.HasSuffix(first.Worktree, "wt-app-1") || !strings.HasSuffix(second.Worktree, "wt-docs-1") {
+		t.Fatalf("worktrees = %s / %s", first.Worktree, second.Worktree)
+	}
+	appRows, _ := st.Dispatches(ctx, appID, 1)
+	docsRows, _ := st.Dispatches(ctx, docsID, 1)
+	if len(appRows) != 1 || len(docsRows) != 1 || appRows[0].ID == docsRows[0].ID {
+		t.Fatalf("dispatch rows collided: app=%+v docs=%+v", appRows, docsRows)
+	}
+}

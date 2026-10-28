@@ -58,6 +58,6 @@ rules and the oracle come before any surface (design §15.8).
 ## 7. Alerts, quota, multi-project, cutover (P4)
 
 - [ ] 7.1 Telegram escalation on SLA breach and on `quota`: one message per decision, edited rather than repeated. Verify: a forced breach delivers one message with project, item, question and a board deep link.
-- [ ] 7.2 Quota handling: two seats stalled within 5 minutes raises one decision and pauses dispatch to that rig; `rig provider signals` is the source. Verify: simulated stall test and one real reading.
-- [ ] 7.3 Second project onboarded with its own generated rig and isolated capacity. Verify: both projects dispatch without a shared worktree path or item-number collision.
+- [x] 7.2 Quota handling: two seats stalled within 5 minutes raises one decision and pauses dispatch to that rig; `rig provider signals` is the source. Verify: simulated stall test and one real reading.
+- [x] 7.3 Second project onboarded with its own generated rig and isolated capacity. Verify: both projects dispatch without a shared worktree path or item-number collision.
 - [ ] 7.4 Cutover: import the dispatcher state (`dispatched`, `attempts`, `nudges`, `closers`), disable the old timer, run one item end-to-end. Verify: item dispatched → reviewed → merged → epic closed, with the board empty and a reason per closed item; `docs/my-stack.md` names the binary, the unit, the port and the kill switch.

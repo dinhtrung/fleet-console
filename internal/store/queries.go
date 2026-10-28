@@ -244,3 +244,28 @@ func scanEvents(rows *sql.Rows) ([]EventRow, error) {
 	}
 	return out, rows.Err()
 }
+
+// EventByKindAndSubject returns the newest event with this kind and subject.
+func (s *Store) EventByKindAndSubject(ctx context.Context, kind, subject string) (*EventRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, at, actor, kind, subject, detail, exit_code, COALESCE(stdout_hash, '')
+		FROM event WHERE kind = ? AND subject = ? ORDER BY id DESC LIMIT 1`, kind, subject)
+	if err != nil {
+		return nil, fmt.Errorf("store: event %s/%s: %w", kind, subject, err)
+	}
+	defer rows.Close()
+	events, err := scanEvents(rows)
+	if err != nil || len(events) == 0 {
+		return nil, err
+	}
+	return &events[0], nil
+}
+
+// SetProjectOnHold pauses or resumes dispatch for one project.
+func (s *Store) SetProjectOnHold(ctx context.Context, projectID int64, onhold bool) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE project SET onhold = ? WHERE id = ?`, boolInt(onhold), projectID)
+	if err != nil {
+		return fmt.Errorf("store: set project onhold: %w", err)
+	}
+	return nil
+}

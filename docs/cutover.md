@@ -100,3 +100,54 @@ ten consecutive ticks with zero diffs.
 
 The act loop is a separate change: this dry-run writes no marker, comment, close or merge, creates no queue row and
 does not touch a worktree. A week of ticks with the same zero-diff result is the precondition for enabling it.
+
+## P4 cutover (issue #10)
+
+### Dispatcher state import
+
+```
+$ fleet-console --import-dispatch-state ~/.local/state/gh-autodispatch.json \
+    --project-key fleet-console --db cutover.db
+imported 1 dispatch row(s) into fleet-console
+
+sqlite> select item_number,attempt,seat,branch,qitem_id,base_sha,worktree from dispatch;
+10|1|dev-build-1@fleet-console|feature/10-p4-alerts-quota-second-project|qitem-20261028190805-ec177bebfc5be46e|79acffb1643a19fdc6d6d8bdc3f4c10ca2bc13a8|/home/dinhtrung/develop/wt-fc-10
+
+$ fleet-console --import-dispatch-state ~/.local/state/gh-autodispatch.json ...   # again
+imported 0 dispatch row(s) into fleet-console
+```
+
+The old dispatcher's GitHub state carries `dispatched` only (no `attempts`, `nudges` or `closers` keys); the
+import maps those when present and ignores the rest. The imported dispatch stays open, so the next tick sees the
+item as in flight.
+
+### Old timer
+
+```
+$ systemctl --user is-active gh-autodispatch   -> inactive
+$ systemctl --user is-enabled gh-autodispatch  -> static
+```
+
+The old GitHub timer is not running and is not enabled, so no double dispatch is possible. The kill switch for the
+new unit is `systemctl --user stop fleet-console && systemctl --user disable fleet-console`.
+
+### Quota, real reading
+
+`rig provider signals --json` on this box returned 9 signals and **0** seats with an unknown source inside the
+5-minute window, so no quota decision was raised. The simulated two-stalled-seat test
+(`internal/quota`) raises exactly one decision, pauses the project and writes `quota.decision` + `quota.pause`;
+a repeat inside the window writes nothing.
+
+### Telegram
+
+`internal/alert` sends one message per decision and edits that message on later breaches
+(`TestEscalationSendsOnceThenEdits`: one send, then one edit of message id 42 from the test Bot API server).
+A real message id is **not** available here: `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are not present in this
+seat. The client reads both from the environment; no token is stored or logged.
+
+### End-to-end item
+
+Not run from this seat: a builder never merges, and the act loop is not wired into the server until this cutover
+is signed off. The components are proven separately — the merge watchdog's five refusals and fake docs-only merge
+(`internal/act`), the dispatch no-op, the verdict capture and the post-merge `Refs` close. The reviewer/owner runs
+the one-item end-to-end with the kill switch above.
