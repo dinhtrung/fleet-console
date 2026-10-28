@@ -41,6 +41,12 @@ func newIdemLedger() *idemLedger {
 func idempotency() fiber.Handler {
 	ledger := newIdemLedger()
 	return func(c fiber.Ctx) error {
+		// Session endpoints are idempotent by nature and are reached by a plain
+		// HTML form, which cannot set a header.
+		switch c.Path() {
+		case "/login", "/logout", "/api/session":
+			return c.Next()
+		}
 		switch c.Method() {
 		case fiber.MethodGet, fiber.MethodHead, fiber.MethodOptions:
 			return c.Next()

@@ -6,7 +6,6 @@ package web
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
@@ -43,17 +42,16 @@ func New(cfg Config) (*fiber.App, error) {
 	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub}
 
 	app.Use(idempotency())
-	// The board talks to the API with a session cookie derived from the token;
-	// the token itself never reaches the browser.
-	app.Use(func(c fiber.Ctx) error {
-		if !strings.HasPrefix(c.Path(), "/api/") {
-			issueBoardCookie(c, cfg.Token)
-		}
-		return c.Next()
-	})
 	app.Get("/api/health", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
+	// A board session is minted only after the token is presented. The board page
+	// itself is public; it must sign in to call /api.
+	app.Get("/login", loginPage)
+	app.Post("/login", loginSubmit(cfg.Token))
+	app.Post("/logout", logout)
+	app.Post("/api/session", sessionCreate(cfg.Token))
+	app.Delete("/api/session", sessionDelete)
 	api := app.Group("/api", bearerAuth(cfg.Token))
 	api.Get("/compat", func(c fiber.Ctx) error {
 		return c.JSON(compat(c.Context()))
