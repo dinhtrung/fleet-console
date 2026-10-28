@@ -26,7 +26,7 @@ rules and the oracle come before any surface (design §15.8).
 - [x] 3.1 Normalized model + interface (`Item`, `ChangeRequest`, `Check`, writes) with a fake implementation. Verify: `go test ./internal/forge` exercises the interface through the fake for decide-loop tests.
 - [x] 3.2 GitHub reader: issues, sub-issues (epic → children), issue dependencies (`blocked_by`), PRs, check runs / commit statuses. Verify: recorded payload fixtures from `dinhtrung/fleet-console`; `TestGitHubItems` reproduces an epic with children and one blocked task.
 - [ ] 3.3 GitHub writes: label set/clear, comment, close item, `gh pr merge --squash --match-head-commit <sha>`. Verify: one real issue labelled and one docs-only PR merged by the watchdog path on a throwaway branch.
-- [ ] 3.4 GitLab reader/writer parity: `glab api` items with `related_items` (smaller-iid rule), MRs, head pipeline jobs with `allow_failure`, `glab mr merge --sha`. Verify: fixture tests from `traffic-simulator-v2` payloads, and the same decide test passes for both adapters.
+- [x] 3.4 GitLab reader/writer parity: `glab api` items with `related_items` (smaller-iid rule), MRs, head pipeline jobs with `allow_failure`, `glab mr merge --sha`. Verify: fixture tests from `traffic-simulator-v2` payloads, and the same decide test passes for both adapters.
 - [x] 3.5 Auth and rate limits: token from the CLI's own store (never the repo), one retry on 5xx, a bounded per-tick request budget. Verify: `TestBudget` refuses the 101st call in a tick; a 401 surfaces as a project-level `stale` state, not an empty board.
 
 ## 4. Mirror and decide (P1, dry-run)
