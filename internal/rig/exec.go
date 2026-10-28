@@ -5,19 +5,34 @@ package rig
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+// DefaultTimeout bounds one rig CLI call. A rig command reads a local daemon;
+// a wedged daemon must fail the caller, not hang the request or the tick.
+const DefaultTimeout = 20 * time.Second
 
 // Runner executes one rig command and returns its stdout.
 type Runner interface {
 	Run(ctx context.Context, args ...string) ([]byte, error)
 }
 
-// ExecRunner runs the installed rig binary. An empty Path means "rig" on PATH.
+// ExecRunner runs the installed rig binary. An empty Path means "rig" on PATH;
+// a zero Timeout means DefaultTimeout. A shorter parent deadline wins.
 type ExecRunner struct {
-	Path string
+	Path    string
+	Timeout time.Duration
+}
+
+func (r ExecRunner) limit() time.Duration {
+	if r.Timeout > 0 {
+		return r.Timeout
+	}
+	return DefaultTimeout
 }
 
 // Run implements Runner.
@@ -26,18 +41,37 @@ func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	if path == "" {
 		path = "rig"
 	}
-	cmd := exec.CommandContext(ctx, path, args...)
+	limit := r.limit()
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < limit {
+			limit = remaining
+		}
+	}
+	runCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, path, args...)
+	// A killed CLI can leave a child holding the output pipes; WaitDelay keeps
+	// Run from waiting on that child after the deadline.
+	cmd.WaitDelay = 200 * time.Millisecond
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	command := strings.TrimSpace(path + " " + strings.Join(args, " "))
 	if err := cmd.Run(); err != nil {
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			return stdout.Bytes(), fmt.Errorf("%s: timed out after %s", command, limit.Round(time.Millisecond))
+		}
+		if errors.Is(runCtx.Err(), context.Canceled) {
+			return stdout.Bytes(), fmt.Errorf("%s: canceled before the deadline: %w", command, err)
+		}
 		msg := strings.TrimSpace(stderr.String())
 		// Keep stdout: commands such as `spec validate` report their verdict
 		// as JSON and still exit non-zero.
 		if msg == "" {
-			return stdout.Bytes(), fmt.Errorf("%s %s: %w", path, strings.Join(args, " "), err)
+			return stdout.Bytes(), fmt.Errorf("%s: %w", command, err)
 		}
-		return stdout.Bytes(), fmt.Errorf("%s %s: %w: %s", path, strings.Join(args, " "), err, msg)
+		return stdout.Bytes(), fmt.Errorf("%s: %w: %s", command, err, msg)
 	}
 	return stdout.Bytes(), nil
 }
