@@ -9,29 +9,27 @@
    detector then reported them as off-ramp values. Explicit sources keep the stylesheet equal to
    what the interface actually uses. */
 @import "tailwindcss" source(none);
+@import "tw-animate-css";
 @source "../src";
 @source "../index.html";
 
-@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
-
 /*
-  Handover — palette roles.
-  Source palette: COLOURlovers 1004609 "Yoko Hanako 1109" by _Mac_DyE_
-  (#181818 #F0F0F0 #D5DEF0 #903078 #483048). Provenance: docs/design/palette.md
+  Handover — palette roles, one appearance.
+
+  Source palette: COLOURlovers 1077213 "Limelicious" by gracefulNothing
+  (#535735 #ADB08B #729478 #EB4123 #31114D). Provenance: docs/design/palette.md
   Derived values are tints of the palette only; no sixth hue is introduced.
 
-  This file is the whole registry's token side: the light appearance is the block below, and each
-  `[data-theme="…"]` block remaps the same semantic roles for one more appearance. Adding an
-  appearance is a block here plus an entry in src/lib/appearance.ts — no component changes.
-  The role names are the contract: every appearance must define every role below.
+  Sage is the board's only appearance, so its block is `:root`: there is no `data-theme` attribute
+  and no second palette to resolve. The attention magenta and the plum are the committed semantic
+  hues from the handover palette — a state that changes colour with the lighting is a state you
+  cannot learn.
 
-  The light block is selected by `:root, [data-theme="light"]` on purpose. The switcher previews an
-  appearance by rendering a subtree that carries its `data-theme`, so with `:root` alone a nested
-  `data-theme="light"` scope had nothing of its own to resolve and inherited whichever appearance was
-  applied — the Light row previewed the active appearance's colours. Keep the second selector.
+  The role names are the contract. The shadcn semantic variables at the end of the block are a
+  bridge, not a second palette: every one resolves to a sage role, so a generated component that
+  says `bg-popover` or `border-input` paints in the board's colours without carrying a value.
 */
-:root,
-[data-theme="light"] {
+:root {
   color-scheme: light;
 
   /* Display density: the two values the interface actually reflows by. Comfortable is the default;
@@ -39,177 +37,17 @@
   --density-row-pad-y: 0.5rem;
   --density-control-h: 2.25rem;
 
-  --palette-ink: #181818;
-  --palette-ground: #f0f0f0;
-  --palette-tint: #d5def0;
-  --palette-attention: #903078;
-  --palette-plum: #483048;
-
-  /* surfaces */
-  --board-ground: var(--palette-ground);
-  --board-panel: #ffffff;
-  --board-rail: var(--palette-ink);
-  --board-rail-ink: var(--palette-ground);
-  --board-hover: color-mix(in srgb, var(--palette-ink) 6%, transparent);
-  --board-selected: var(--palette-tint);
-
-  /* text */
-  --ink: var(--palette-ink);
-  --ink-muted: var(--palette-plum);
-
-  /* lines: the board is ruled, not shadowed */
-  --rule: color-mix(in srgb, var(--palette-ink) 16%, transparent);
-  --rule-strong: color-mix(in srgb, var(--palette-ink) 34%, transparent);
-
-  /* semantic roles */
-  --attention: var(--palette-attention);
-  --on-attention: #ffffff;
-  --plum: var(--palette-plum);
-  --on-plum: var(--palette-ground);
-  --focus: var(--palette-attention);
-  /* The ring is drawn on whatever surface sits behind the control, and the rail is a different
-     surface from the panels: one colour cannot serve both. Rail controls take the tint (13.14:1 on
-     ink) instead of the attention plum (2.44:1 there). */
-  --focus-rail: var(--palette-tint);
-
-  /* one elevation, overlays only */
-  --overlay-shadow: 0 10px 24px -12px rgb(0 0 0 / 0.45);
-}
-
-[data-theme="dark"] {
-  color-scheme: dark;
-  --board-ground: var(--palette-ink);
-  --board-panel: color-mix(in srgb, var(--palette-plum) 24%, var(--palette-ink));
-  --board-rail: var(--palette-plum);
-  --board-rail-ink: var(--palette-ground);
-  --board-hover: color-mix(in srgb, var(--palette-ground) 10%, transparent);
-  --board-selected: color-mix(in srgb, var(--palette-tint) 24%, var(--palette-ink));
-
-  --ink: var(--palette-ground);
-  --ink-muted: var(--palette-tint);
-
-  --rule: color-mix(in srgb, var(--palette-ground) 18%, transparent);
-  --rule-strong: color-mix(in srgb, var(--palette-ground) 34%, transparent);
-
-  /* #903078 is 2.44:1 on the dark ground: fill only here, never text and never a ring. */
-  --attention: var(--palette-attention);
-  --on-attention: #ffffff;
-  --plum: var(--palette-plum);
-  --on-plum: var(--palette-ground);
-  --focus: var(--palette-tint);
-  --focus-rail: var(--palette-tint);
-
-  --overlay-shadow: 0 12px 28px -12px rgb(0 0 0 / 0.7);
-}
-
-/* The third appearance, seeded by a second pinned palette: COLOURlovers 100429 "Stormy Dusk" by junyr
-   (#0E7583 #ABC5C9 #4A4B4B #083A52 #1A3E42) — provenance and measured pairs in
-   docs/design/palette.md. A low-glare appearance for dim rooms: the clinical white is punishing at
-   night and the full-ink appearance loses the printed-board feel, so this one sits between them.
-   Composed, not inverted: its own mist ground, its own deep-teal rail, its own ink. The semantic
-   hues (attention, plum) stay the colours they are in every appearance, because a state that changes
-   colour when you change the lighting is a state you cannot learn. */
-[data-theme="dusk"] {
-  color-scheme: light;
-
-  --palette-dusk-teal: #0e7583;
-  --palette-dusk-mist: #abc5c9;
-  --palette-dusk-slate: #4a4b4b;
-  --palette-dusk-deep: #083a52;
-  --palette-dusk-charcoal: #1a3e42;
-
-  --board-ground: var(--palette-dusk-mist);
-  --board-panel: color-mix(in srgb, var(--palette-dusk-mist) 32%, #ffffff);
-  --board-rail: var(--palette-dusk-deep);
-  --board-rail-ink: var(--palette-dusk-mist);
-  --board-hover: color-mix(in srgb, var(--palette-dusk-charcoal) 12%, transparent);
-  --board-selected: color-mix(in srgb, var(--palette-dusk-teal) 30%, var(--palette-dusk-mist));
-
-  --ink: var(--palette-dusk-charcoal);
-  --ink-muted: var(--palette-dusk-slate);
-
-  --rule: color-mix(in srgb, var(--palette-dusk-charcoal) 24%, transparent);
-  --rule-strong: color-mix(in srgb, var(--palette-dusk-charcoal) 48%, transparent);
-
-  --attention: var(--palette-attention);
-  --on-attention: #ffffff;
-  --plum: var(--palette-plum);
-  --on-plum: var(--palette-ground);
-  /* #903078 measures under the ring threshold on this ground; the deep swatch carries focus instead,
-     the same way the dark appearance hands focus to the tint rather than to the attention colour. */
-  --focus: var(--palette-dusk-deep);
-  /* On the rail the deep swatch would be its own background — a 1.00:1 ring, i.e. no ring at all.
-     The mist carries it there (6.65:1). */
-  --focus-rail: var(--palette-dusk-mist);
-
-  --overlay-shadow: 0 10px 24px -12px rgb(0 0 0 / 0.45);
-}
-
-/* The fourth appearance, seeded by a third pinned palette: COLOURlovers 1001576 "Clay" by eponine
-   (#AD5207 #F77D19 #BF7436 #8C5223 #703E14) — provenance and measured pairs in docs/design/palette.md.
-   A warm light for a warm-lit room: the cool daylight, the dim cool room and the dark already have
-   appearances of their own. Composed, not inverted — pale surfaces mixed from the palette's tan, ink
-   from its dark brown, and the rail in that dark brown, which is the one region that owns a saturated
-   ground. The palette's vivid #F77D19 is deliberately unused: at any structural size a chroma that
-   high competes with the attention fill, which must stay the one thing that shouts. */
-[data-theme="ember"] {
-  color-scheme: light;
-
-  --palette-clay-orange: #ad5207;
-  --palette-clay-tan: #bf7436;
-  --palette-clay-brown: #8c5223;
-  --palette-clay-dark: #703e14;
-
-  --ember-ground: color-mix(in srgb, var(--palette-clay-tan) 30%, #ffffff);
-  --ember-panel: color-mix(in srgb, var(--palette-clay-tan) 12%, #ffffff);
-
-  --board-ground: var(--ember-ground);
-  --board-panel: var(--ember-panel);
-  --board-rail: var(--palette-clay-dark);
-  --board-rail-ink: var(--ember-ground);
-  --board-hover: color-mix(in srgb, var(--palette-clay-dark) 10%, transparent);
-  --board-selected: color-mix(in srgb, var(--palette-clay-orange) 24%, var(--ember-ground));
-
-  --ink: var(--palette-clay-dark);
-  /* The palette has no mid neutral, so secondary text is mixed between two of its own swatches rather
-     than borrowed from another palette. */
-  --ink-muted: color-mix(in srgb, var(--palette-clay-brown) 70%, var(--palette-clay-dark));
-
-  --rule: color-mix(in srgb, var(--palette-clay-dark) 24%, transparent);
-  --rule-strong: color-mix(in srgb, var(--palette-clay-dark) 48%, transparent);
-
-  --attention: var(--palette-attention);
-  --on-attention: #ffffff;
-  --plum: var(--palette-plum);
-  --on-plum: var(--palette-ground);
-  --focus: var(--palette-clay-orange);
-  /* The rail's own pale surface carries the ring there — a ring measured against the panels would sit
-     on the rail at close to its own value. */
-  --focus-rail: var(--ember-ground);
-
-  --overlay-shadow: 0 10px 24px -12px rgb(0 0 0 / 0.45);
-}
-
-/* The fifth appearance, seeded by a fourth pinned palette: COLOURlovers 1077213 "Limelicious" by
-   gracefulNothing (#535735 #ADB08B #729478 #EB4123 #31114D) — provenance and measured pairs in
-   docs/design/palette.md. The first tinted-paper appearance: the other four answer a cool daylight, the
-   dark, a dim cool room and a warm light, and every one of their grounds is a near-neutral white, a
-   mist or a tan — none is the tinted stock a printed form is drawn on. Composed, not inverted: the pale
-   surfaces are mixed from the palette's sage, ink is its violet, and the rail is that violet, which is
-   the one region that owns a saturated ground. The palette's red-orange #EB4123 is deliberately unused:
-   at any structural size it competes with the attention fill, which must stay the one thing that
-   shouts. */
-[data-theme="sage"] {
-  color-scheme: light;
-
   --palette-sage-olive: #535735;
   --palette-sage: #adb08b;
-  --palette-sage-leaf: #729478;
   --palette-sage-violet: #31114d;
+  --palette-attention: #903078;
+  --palette-plum: #483048;
+  --palette-ground: #f0f0f0;
 
   --sage-ground: color-mix(in srgb, var(--palette-sage) 30%, #ffffff);
   --sage-panel: color-mix(in srgb, var(--palette-sage) 12%, #ffffff);
 
+  /* surfaces */
   --board-ground: var(--sage-ground);
   --board-panel: var(--sage-panel);
   --board-rail: var(--palette-sage-violet);
@@ -217,26 +55,51 @@
   --board-hover: color-mix(in srgb, var(--palette-sage-violet) 10%, transparent);
   --board-selected: color-mix(in srgb, var(--palette-sage-violet) 24%, var(--sage-ground));
 
+  /* text */
   --ink: var(--palette-sage-violet);
   /* The palette's nearest neutral is an olive, not a grey, so secondary text is mixed between two of
      its own swatches rather than borrowed from another palette. */
   --ink-muted: color-mix(in srgb, var(--palette-sage-olive) 70%, var(--palette-sage-violet));
 
+  /* lines: the board is ruled, not shadowed */
   --rule: color-mix(in srgb, var(--palette-sage-violet) 24%, transparent);
   --rule-strong: color-mix(in srgb, var(--palette-sage-violet) 48%, transparent);
 
+  /* semantic roles */
   --attention: var(--palette-attention);
   --on-attention: #ffffff;
   --plum: var(--palette-plum);
   --on-plum: var(--palette-ground);
-  /* The ring changes carrier between the board and the rail, as it already does in the dark, dusk and
-     warm appearances. The palette's violet carries neither: on the panel it would be a second reading
-     of the ink, and on the rail it would be the rail's own colour — 1.00:1, no ring at all. The olive
-     carries it on the board and the sage on the rail. */
+  /* The ring changes carrier between the board and the rail. The palette's violet carries neither: on
+     the panel it would be a second reading of the ink, and on the rail it would be the rail's own
+     colour — 1.00:1, no ring at all. The olive carries it on the board and the sage on the rail. */
   --focus: var(--palette-sage-olive);
   --focus-rail: var(--palette-sage);
 
+  /* one elevation, overlays only */
   --overlay-shadow: 0 10px 24px -12px rgb(0 0 0 / 0.45);
+
+  /* shadcn semantic variables — the bridge onto the sage roles above. */
+  --background: var(--board-ground);
+  --foreground: var(--ink);
+  --card: var(--board-panel);
+  --card-foreground: var(--ink);
+  --popover: var(--board-panel);
+  --popover-foreground: var(--ink);
+  --primary: var(--plum);
+  --primary-foreground: var(--on-plum);
+  --secondary: var(--board-selected);
+  --secondary-foreground: var(--ink);
+  --muted: var(--board-hover);
+  --muted-foreground: var(--ink-muted);
+  --accent: var(--board-selected);
+  --accent-foreground: var(--ink);
+  --destructive: var(--attention);
+  --border: var(--rule-strong);
+  --input: var(--rule-strong);
+  --ring: var(--focus);
+  /* The board is square; 2px is the chip radius and the ceiling for a generated panel. */
+  --radius: 0.125rem;
 }
 
 /* The compact step, chosen in Settings and applied before the first paint by the inline script. */
@@ -264,8 +127,35 @@
   --color-on-plum: var(--on-plum);
   --color-focus: var(--focus);
 
+  /* The shadcn names, bridged. A generated component uses these, never a palette value. */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+
   --font-sans: "Archivo Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Azeret Mono Variable", ui-monospace, "SFMono-Regular", monospace;
+  --font-heading: var(--font-sans);
 
   /* A board has square corners; a 2px chip radius is the only rounding in the system. */
   --radius-chip: 2px;
@@ -286,9 +176,9 @@
 @layer base {
   /* A native dropdown list is painted by the platform, not by the page. A select with a transparent
      background therefore hands the popup the platform's white while keeping the select's own text
-     colour — which is white-on-white in the dark rail, and light-on-white in dark theme. So: every
-     select carries an opaque background, and every option states both of its colours. The rail's
-     select overrides the background with a utility class; the popup stays a readable system surface. */
+     colour — which is white-on-white on the rail. So: every select carries an opaque background, and
+     every option states both of its colours. The rail's select overrides the background with a
+     utility class; the popup stays a readable system surface. */
   select {
     background-color: var(--board-panel);
     color: var(--ink);
@@ -322,11 +212,11 @@
   /* Browser surfaces belong to the design too. */
   ::selection {
     background-color: var(--board-selected);
-    color: var(--palette-ink);
+    color: var(--ink);
   }
 
   ::placeholder {
-    color: color-mix(in srgb, var(--palette-plum) 78%, transparent);
+    color: color-mix(in srgb, var(--ink-muted) 78%, transparent);
     opacity: 1;
   }
 
@@ -343,6 +233,7 @@
   aside,
   [data-rail-surface] {
     --focus: var(--focus-rail);
+    --ring: var(--focus-rail);
   }
 
   a {

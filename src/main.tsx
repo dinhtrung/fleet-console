@@ -5,7 +5,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import "./index.css";
 import { AuthProvider } from "./auth/session";
 import { ScopeProvider } from "./shell/scope";
-import { ToastProvider } from "./components/ui/Toast";
+import { AppToastProvider } from "./components/ui";
 import { router } from "./router";
 
 const queryClient = new QueryClient({
@@ -24,9 +24,9 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <ScopeProvider>
-          <ToastProvider>
+          <AppToastProvider>
             <RouterProvider router={router} />
-          </ToastProvider>
+          </AppToastProvider>
         </ScopeProvider>
       </AuthProvider>
     </QueryClientProvider>

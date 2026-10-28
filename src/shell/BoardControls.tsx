@@ -7,8 +7,15 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Database, TriangleAlert } from "lucide-react";
 import { configure, currentRuntime, databaseInfo, resetDatabase, type FailureMode } from "../mock/api";
-import { ConfirmDialog, Menu } from "../components/ui";
-import { useToast } from "../components/ui/Toast";
+import {
+  ConfirmDialog,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  IconButton,
+  useToast,
+} from "../components/ui";
 import { dateTime } from "../lib/format";
 
 export function BoardControls() {
@@ -47,29 +54,38 @@ export function BoardControls() {
 
   return (
     <>
-      <Menu
-        label={failure === "off" ? "Board controls" : "Board controls — requests are set to fail"}
-        trigger={
-          <span className="relative inline-flex">
-            <Database size={14} />
-            {failure !== "off" ? (
-              <span aria-hidden="true" className="absolute -top-1 -right-1 block size-1.5 bg-attention" />
-            ) : null}
-          </span>
-        }
-        triggerClassName="text-rail-ink hover:bg-rail-ink/15"
-        items={[
-          { id: "fail-next", label: "Fail the next request", onSelect: () => setFailure("next") },
-          { id: "fail-always", label: "Fail every request", destructive: true, onSelect: () => setFailure("always") },
-          { id: "fail-off", label: "Stop failing", disabled: failure === "off", onSelect: () => setFailure("off") },
-          {
-            id: "latency",
-            label: latency > 0 ? "Remove simulated latency" : "Restore simulated latency",
-            onSelect: toggleLatency,
-          },
-          { id: "reset", label: "Reset the board…", destructive: true, onSelect: () => setResetOpen(true) },
-        ]}
-      />
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <IconButton
+              label={failure === "off" ? "Board controls" : "Board controls — requests are set to fail"}
+              className="text-rail-ink hover:bg-rail-ink/15"
+            >
+              <span className="relative inline-flex">
+                <Database size={14} />
+                {failure !== "off" ? (
+                  <span aria-hidden="true" className="absolute -top-1 -right-1 block size-1.5 bg-attention" />
+                ) : null}
+              </span>
+            </IconButton>
+          }
+        />
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={() => setFailure("next")}>Fail the next request</DropdownMenuItem>
+          <DropdownMenuItem variant="destructive" onClick={() => setFailure("always")}>
+            Fail every request
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={failure === "off"} onClick={() => setFailure("off")}>
+            Stop failing
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={toggleLatency}>
+            {latency > 0 ? "Remove simulated latency" : "Restore simulated latency"}
+          </DropdownMenuItem>
+          <DropdownMenuItem variant="destructive" onClick={() => setResetOpen(true)}>
+            Reset the board…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
       <ConfirmDialog
         open={resetOpen}
         onClose={() => setResetOpen(false)}

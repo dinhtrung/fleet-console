@@ -2,40 +2,24 @@
 name: admin-panel
 description: An operable admin board — ruled surfaces, magnet state tokens, one committed palette.
 colors:
-  board-ground: "#F0F0F0"
-  board-panel: "#FFFFFF"
-  board-rail: "#181818"
-  board-rail-ink: "#F0F0F0"
-  board-selected: "#D5DEF0"
-  ink: "#181818"
-  ink-muted: "#483048"
+  board-ground: "#E6E7DC"
+  board-panel: "#F5F6F1"
+  board-rail: "#31114D"
+  board-rail-ink: "#E6E7DC"
+  board-selected: "#BBB4BA"
+  ink: "#31114D"
+  ink-muted: "#49423C"
   plum: "#483048"
   on-plum: "#F0F0F0"
   attention: "#903078"
   on-attention: "#FFFFFF"
-  overlay-scrim: "#1818188C"
+  overlay-scrim: "#31114D8C"
   shadow-soft: "#00000073"
   shadow-deep: "#000000B3"
-  # The third appearance's seed palette (COLOURlovers 100429 "Stormy Dusk" by junyr). Recorded here
-  # because these five swatches are the appearance's whole colour vocabulary — provenance and the
-  # role each took are in docs/design/palette.md.
-  dusk-mist: "#ABC5C9"
-  dusk-teal: "#0E7583"
-  dusk-slate: "#4A4B4B"
-  dusk-deep: "#083A52"
-  dusk-charcoal: "#1A3E42"
-  # The fourth appearance's seed palette (COLOURlovers 1001576 "Clay" by eponine). The palette's fifth
-  # swatch, #F77D19, is deliberately not used and so is not a token: see docs/design/palette.md.
-  clay-orange: "#AD5207"
-  clay-tan: "#BF7436"
-  clay-brown: "#8C5223"
-  clay-dark: "#703E14"
-  # The fifth appearance's seed palette (COLOURlovers 1077213 "Limelicious" by gracefulNothing). The
-  # palette's fifth swatch, #EB4123, is deliberately not used and so is not a token: see
-  # docs/design/palette.md.
+  # Sage seed palette (COLOURlovers 1077213 "Limelicious" by gracefulNothing). The palette's fifth
+  # swatch, #EB4123, is deliberately not used and so is not a token: see docs/design/palette.md.
   sage-olive: "#535735"
   sage: "#ADB08B"
-  sage-leaf: "#729478"
   sage-violet: "#31114D"
 typography:
   display:
@@ -253,42 +237,30 @@ shadow only when the region floats above the board and can be dismissed.
 
 ## Appearances
 
-Appearance is a **registry**, not a light/dark pair. An appearance is a named set of the semantic role
-tokens in `src/index.css`; registering one is a token block plus an entry in `src/lib/appearance.ts`,
-and no component, screen or shell file changes. The control lists the registry, and a stored id that is
-no longer registered falls back to the machine's preference instead of leaving the board unstyled.
-
-Five ship today:
+The board ships one appearance: **Sage**. It is fixed, not a preference — there is no registry, no
+switcher and no `data-theme` attribute, and the sage token block is `:root` in `src/index.css`.
 
 | Appearance | Seed | Ground | Rail — the one saturated region | Use scene |
 |---|---|---|---|---|
-| **Light** | "Yoko Hanako 1109", COLOURlovers 1004609 | `#F0F0F0` | ink `#181818` | the workstation in daylight |
-| **Dark** | the same palette, roles remapped | `#181818` | plum `#483048` | a dark room, a screen at night |
-| **Dusk** | "Stormy Dusk", COLOURlovers 100429 | mist `#ABC5C9` | deep `#083A52` | dim light: less glare than Light, still a printed board rather than a black screen |
-| **Ember** | "Clay", COLOURlovers 1001576 | clay `#ECD5C3` | dark brown `#703E14` | a warm light — the one scene the other three do not cover |
-| **Sage** | "Limelicious", COLOURlovers 1077213 | sage `#E6E7DC` | violet `#31114D` | a tinted form paper — the first appearance whose ground is neither a neutral, a mist nor a tan |
+| **Sage** | "Limelicious", COLOURlovers 1077213 | sage `#E6E7DC` | violet `#31114D` | a tinted form paper: the board reads as a printed document |
 
-The control that presents them is a **switcher**, not a row of segments: a row is sized for a fixed
-number of appearances and quietly stops working as the registry grows, which is the opposite of what a
-registry is for. Each row in the switcher previews its own appearance — the swatch carries that
-appearance's `data-theme`, so it is the appearance's real tokens resolved in a subtree rather than a
-copy of its colours kept somewhere else, and a preview cannot drift from what choosing it does.
+A stored appearance id from the retired five-appearance build is cleared before the first paint by the
+inline script in `index.html`, so a dead preference cannot survive or flash another palette.
 
-Rules that hold in every appearance:
+Rules that hold:
 
-- **Composed, never inverted.** Each appearance defines its own surfaces, ink and rules from its own
-  seed. Dusk is not "Light, but blue", and Dark is not Light flipped.
+- **Composed, never inverted.** Surfaces, ink and rules are derived from the seed palette's own
+  swatches rather than from a generic light/dark pair.
 - **One saturated region.** Exactly one region owns a saturated ground, and it is the rail.
-- **Semantics do not move.** Attention and plum keep their hues in every appearance. A state that
-  changes colour when the lighting changes is a state the operator cannot learn — the appearance
-  changes the board, not the vocabulary of state.
+- **Semantics do not move.** Attention and plum keep their hues because the palette is closed. A state
+  that changes colour with the lighting is a state the operator cannot learn.
 - **Measured, not asserted.** Every text, control and focus pair is computed from the tokens as the
   browser resolves them, and recorded in [`docs/design/palette.md`](docs/design/palette.md).
 - **The ring belongs to the surface behind it.** A focus ring is drawn on whatever sits behind the
   control, so the rail — a saturated surface — takes its own ring colour (`--focus-rail`) while panels
   take `--focus`, and rail-surfaced regions re-point the token in one base-layer declaration rather
-  than per control. A ring the colour of its own background is not a ring: Dusk shipped exactly that
-  until the finish review caught it
+  than per control. A ring the colour of its own background is not a ring: an earlier appearance
+  shipped exactly that until the finish review caught it
   ([`docs/design/finish-review.md`](docs/design/finish-review.md)).
 
 ## Icons and marks
@@ -380,5 +352,5 @@ failure states is a picture of a product, so the failure switch is part of the i
 - **Don't** nest panels, and don't express status with a coloured left border on a row.
 - **Don't** use a magnet for something that is not a state (counts, plans and roles are badges).
 - **Don't** set prose in the mono face, or use a unicode glyph as an icon — icons are drawn.
-- **Don't** make light or dark a preference by category: the scene decides, and both themes are first
-  class, contrast-audited and shipped together.
+- **Don't** add a second appearance or make the palette a preference: sage is the board, and one
+  committed palette is what makes a colour mean something.

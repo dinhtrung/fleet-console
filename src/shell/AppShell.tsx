@@ -14,7 +14,6 @@ import { useAccess } from "../access/access";
 import { cn } from "../lib/cn";
 import { initials } from "../lib/format";
 import { IconButton } from "../components/ui";
-import { AppearanceControl } from "./AppearanceControl";
 import { BoardControls } from "./BoardControls";
 import { ScopeSwitcher } from "./ScopeSwitcher";
 
@@ -126,8 +125,7 @@ function IdentityBlock() {
           <span className="block truncate font-mono text-[0.625rem] text-rail-ink/65">{identity.email}</span>
         </span>
       </div>
-      <div className="mt-2.5 flex items-center justify-between gap-2">
-        <AppearanceControl compact />
+      <div className="mt-2.5 flex items-center justify-end gap-2">
         <button
           type="button"
           onClick={() => signOut("user")}

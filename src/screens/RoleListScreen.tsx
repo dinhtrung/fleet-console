@@ -16,6 +16,11 @@ import {
   Button,
   Checkbox,
   Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   Panel,
   SelectInput,
   TextArea,
@@ -275,23 +280,14 @@ function CreateRoleDialog({ open, onClose }: { open: boolean; onClose: () => voi
   };
 
   return (
-    <Dialog
-      open={open}
-      onClose={close}
-      title="New role"
-      description="A custom role: a name, what it is for, and the permissions it starts with."
-      width="lg"
-      footer={
-        <>
-          <Button variant="quiet" onClick={close}>
-            Cancel
-          </Button>
-          <Button variant="primary" busy={create.isPending} onClick={() => void submit()}>
-            Create role
-          </Button>
-        </>
-      }
-    >
+    <Dialog open={open} onOpenChange={(next) => { if (!next) close(); }}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>New role</DialogTitle>
+          <DialogDescription>
+            A custom role: a name, what it is for, and the permissions it starts with.
+          </DialogDescription>
+        </DialogHeader>
       <form
         className="flex flex-col gap-4"
         onSubmit={(event) => {
@@ -338,6 +334,15 @@ function CreateRoleDialog({ open, onClose }: { open: boolean; onClose: () => voi
           ))}
         </fieldset>
       </form>
+        <DialogFooter>
+          <Button variant="quiet" onClick={close}>
+            Cancel
+          </Button>
+          <Button variant="primary" busy={create.isPending} onClick={() => void submit()}>
+            Create role
+          </Button>
+        </DialogFooter>
+      </DialogContent>
     </Dialog>
   );
 }

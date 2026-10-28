@@ -1,4 +1,4 @@
-/** Settings: the workspace, your own profile, the appearance and the one destructive door.
+/** Settings: the workspace, your own profile, the density and the one destructive door.
  *
  *  One form, one save — and it will not let an edit vanish quietly: leaving with unsaved changes
  *  is blocked, cancelling asks first, and the destructive zone sits apart from everything else
@@ -15,11 +15,15 @@ import type { UserStatus, WorkspaceSettings } from "../mock/types";
 import { useAuth } from "../auth/session";
 import { RequirePermission } from "../components/RequirePermission";
 import { PageHeader } from "../shell/PageHeader";
-import { AppearanceControl } from "../shell/AppearanceControl";
 import {
   Button,
   ConfirmDialog,
   Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   ErrorState,
   FieldRow,
   LoadingRows,
@@ -50,8 +54,8 @@ function readDensity(): Density {
   }
 }
 
-/** Density is a personal preference with no service endpoint, so it is stored beside the
- *  appearance choice and announced on the document for the board's styles to pick up. */
+/** Density is a personal preference with no service endpoint, so it is stored in this browser and
+ *  announced on the document for the board's styles to pick up. */
 function writeDensity(density: Density): void {
   try {
     localStorage.setItem(DENSITY_KEY, density);
@@ -275,7 +279,7 @@ function SettingsForm({ settings }: { settings: WorkspaceSettings }) {
     <>
       <PageHeader
         title="Settings"
-        description="The workspace configuration, your own profile and preferences, the appearance, and a separated zone for actions that cannot be undone."
+        description="The workspace configuration, your own profile and preferences, and a separated zone for actions that cannot be undone."
         crumbs={[{ label: "Board", to: "/" }, { label: "Settings" }]}
       />
 
@@ -346,21 +350,6 @@ function SettingsForm({ settings }: { settings: WorkspaceSettings }) {
           </div>
         </Panel>
 
-        <Panel>
-          <PanelHead
-            title="Appearance"
-            description="Light, dark or follow the system. The choice is stored in this browser and restored on the next load."
-          />
-          <div className="flex flex-col gap-2 px-3 py-3">
-            {/* The control takes the panel tone here: on the rail it is drawn in rail colours, and on
-                a light panel those would be white on white. */}
-            <AppearanceControl tone="panel" />
-            <p className="max-w-[60ch] text-[0.6875rem] text-ink-muted">
-              Appearance applies as soon as it is chosen; it is not part of the unsaved changes above.
-            </p>
-          </div>
-        </Panel>
-
         <div className="flex flex-wrap items-center gap-2">
           <Button type="submit" variant="primary" busy={saving} disabled={!dirty}>
             Save changes
@@ -425,21 +414,27 @@ function SettingsForm({ settings }: { settings: WorkspaceSettings }) {
       {blocker.status === "blocked" ? (
         <Dialog
           open
-          onClose={() => blocker.reset?.()}
-          title="Leave settings without saving?"
-          description="You have unsaved changes. Leaving now discards them; stay here to keep editing."
-          width="sm"
-          footer={
-            <>
+          onOpenChange={(next) => {
+            if (!next) blocker.reset?.();
+          }}
+        >
+          <DialogContent className="sm:max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Leave settings without saving?</DialogTitle>
+              <DialogDescription>
+                You have unsaved changes. Leaving now discards them; stay here to keep editing.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
               <Button variant="quiet" onClick={() => blocker.reset?.()}>
                 Stay on settings
               </Button>
               <Button variant="attention" onClick={() => blocker.proceed?.()}>
                 Discard and leave
               </Button>
-            </>
-          }
-        />
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       ) : null}
     </>
   );

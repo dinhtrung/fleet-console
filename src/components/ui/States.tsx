@@ -4,7 +4,7 @@
 
 import type { ReactNode } from "react";
 import { cn } from "../../lib/cn";
-import { Button } from "./Button";
+import { Button } from "./button";
 
 export function LoadingRows({ rows = 6, className }: { rows?: number; className?: string }) {
   return (
