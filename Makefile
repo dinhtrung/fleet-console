@@ -8,7 +8,7 @@ VERSION ?= 0.1.0
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 RELEASE_COMMIT ?= release
-RELEASE_TIME ?= 2026-10-29T00:00:00Z
+RELEASE_TIME ?= 2026-10-28T17:00:00Z
 
 BINARY := fleet-console
 GOFLAGS := -trimpath -tags embedboard

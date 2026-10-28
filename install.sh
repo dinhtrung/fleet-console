@@ -285,9 +285,11 @@ seat_key_present() {
 binary_satisfied() {
   local target="$HOME/.local/bin/fleet-console"
   [[ -x $target ]] || return 1
-  local got
+  local got want_sha
   got=$(version_of_binary "$target") || return 1
-  [[ $got == "$(pin fleet_console)" ]]
+  [[ $got == "$(pin fleet_console)" ]] || return 1
+  want_sha=${LOCK[fleet_console_binary_sha256]:-}
+  [[ -z $want_sha || $want_sha == pending ]] || [[ $(sha256_of "$target") == "$want_sha" ]]
 }
 
 version_of_binary() {
@@ -474,12 +476,16 @@ artifact_source() {
     die "app tarball has no fleet-console binary"
   fi
   emit "app: verified tarball sha256=$sha"
+  local bin_sha=${LOCK[fleet_console_binary_sha256]:-}
+  if [[ -n $bin_sha && $bin_sha != pending ]]; then
+    [[ $(sha256_of "$tmp/fleet-console") == "$bin_sha" ]] || { rm -rf "$tmp"; die "app binary sha256 mismatch (want $bin_sha)"; }
+  fi
   ARTIFACT_TMP=$tmp
   ARTIFACT_PATH=$tmp/fleet-console
 }
 
 install_app() {
-  local src target tmp
+  local src target tmp changed=0
   mkdir -p "$HOME/.local/bin" "$HOME/.config/fleet-console" "$HOME/.local/state/fleet-console"
   artifact_source
   src=$ARTIFACT_PATH
@@ -488,6 +494,7 @@ install_app() {
     tmp=$(mktemp)
     install -m 0755 "$src" "$tmp"
     mv "$tmp" "$target"
+    changed=1
   fi
   if ! env_file_satisfied; then
     local envf="$HOME/.config/fleet-console/fleet-console.env"
@@ -495,17 +502,25 @@ install_app() {
       echo "FLEET_CONSOLE_TOKEN=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
     } >"$envf")
     chmod 600 "$envf"
+    changed=1
   fi
   if ! unit_file_satisfied fleet-console; then
     mkdir -p "$HOME/.config/systemd/user"
     local dst="$HOME/.config/systemd/user/fleet-console.service"
     [[ -f $dst ]] && cp -p "$dst" "$dst.bak-$(date -u +%Y%m%dT%H%M%SZ)"
     install -m 0644 "$SELF_DIR/deploy/fleet-console.service" "$dst"
+    changed=1
   fi
   mkdir -p "$HOME/.local/share/fleet-console/templates"
   install -m 0644 "$SELF_DIR/deploy/rig.yaml.tmpl" "$HOME/.local/share/fleet-console/templates/rig.yaml.tmpl"
   [[ -n $ARTIFACT_TMP ]] && rm -rf "$ARTIFACT_TMP"
   ARTIFACT_TMP=
+  if ((changed)); then
+    systemctl --user daemon-reload 2>/dev/null || true
+    if systemctl --user is-active fleet-console >/dev/null 2>&1; then
+      systemctl --user restart fleet-console
+    fi
+  fi
 }
 
 install_units() {
@@ -657,13 +672,20 @@ verify_compat() {
   verify_ok compat "rig ${version:-?} floor ${floor:-?}"
 }
 
+wait_health() {
+  local i
+  for i in $(seq 1 50); do
+    curl -fsS --max-time 1 http://127.0.0.1:8787/api/health >/dev/null 2>&1 && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
 verify_health() {
-  local code
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:8787/api/health || true)
-  if [[ $code == 200 ]]; then
+  if wait_health; then
     verify_ok health "GET /api/health 200"
   else
-    verify_fail health "GET /api/health returned ${code:-no answer}" "systemctl --user restart fleet-console"
+    verify_fail health "GET /api/health did not answer 200" "systemctl --user restart fleet-console"
   fi
 }
 
@@ -755,8 +777,7 @@ upgrade() {
   install -m 0755 "$new" "$target"
   [[ -n $ARTIFACT_TMP ]] && rm -rf "$ARTIFACT_TMP"
   systemctl --user start fleet-console
-  sleep 1
-  if ! curl -fsS --max-time 3 http://127.0.0.1:8787/api/health >/dev/null 2>&1; then
+  if ! wait_health; then
     install -m 0755 "$prev" "$target"
     systemctl --user restart fleet-console
     emit "upgrade: health check failed; previous binary restored; database backup $backup"

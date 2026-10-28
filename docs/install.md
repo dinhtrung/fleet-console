@@ -12,6 +12,10 @@ default; `--verify` is the only definition of success.
 
 Every version comes from [`stack.lock`](../stack.lock). The script installs the
 pinned version and fails when the installed binary answers a different one.
+The app artifact is `fleet-console-0.1.0-linux-amd64.tar.gz` from `make
+release`, checked against both the tarball sha256 and the binary sha256 in the
+lock. Publish that asset at the `fleet_console_url` release, or pass
+`--app-tarball PATH` (or `--app-binary PATH` for a development build).
 `x` is a wildcard (`24.x`), everything else must match exactly. The app pin is
 the release tarball produced by `make release`, with its sha256.
 
