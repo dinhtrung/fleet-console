@@ -55,5 +55,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.x'
-      - run: npm install -g @fission-ai/openspec@1.14.2
+      - run: npm install -g --no-audit --no-fund @fission-ai/openspec@1.14.3
       - run: openspec validate --all --strict
