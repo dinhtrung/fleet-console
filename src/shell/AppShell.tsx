@@ -26,34 +26,10 @@ interface NavItem {
 const NAV: { group: string; items: NavItem[] }[] = [
   {
     group: "Board",
-    items: [{ to: "/", label: "Overview", permission: "dashboard.read" }],
-  },
-  {
-    group: "People",
     items: [
-      { to: "/users", label: "Users", permission: "users.read" },
-      { to: "/roles", label: "Roles", permission: "roles.read" },
-    ],
-  },
-  {
-    group: "Access",
-    items: [
-      { to: "/organizations", label: "Organizations", permission: "orgs.read" },
-      { to: "/api-keys", label: "API keys", permission: "apikeys.read" },
-    ],
-  },
-  {
-    group: "Security",
-    items: [
-      { to: "/sessions", label: "Sessions", permission: "sessions.read" },
-      { to: "/audit", label: "Audit record", permission: "audit.read" },
-    ],
-  },
-  {
-    group: "Workspace",
-    items: [
-      { to: "/feature-flags", label: "Feature flags", permission: "flags.read" },
-      { to: "/settings", label: "Settings", permission: "settings.write" },
+      { to: "/", label: "Board", permission: "dashboard.read" },
+      { to: "/decisions", label: "Decisions", permission: "dashboard.read" },
+      { to: "/seats", label: "Seats", permission: "dashboard.read" },
     ],
   },
 ];

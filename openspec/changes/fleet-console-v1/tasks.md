@@ -52,8 +52,8 @@ rules and the oracle come before any surface (design §15.8).
 - [x] 6.2 Sage as the only appearance: delete the light/dark/dusk/ember token blocks, their registry entries, the appearance menu and the `dark` custom variant; `:root` carries sage. Verify: `grep -rn 'data-theme="\(light\|dark\|dusk\|ember\)"' src index.html` returns nothing; a screenshot shows the sage board.
 - [x] 6.3 Token bridge: map shadcn semantic variables onto the sage roles (`--background`, `--foreground`, `--primary`, `--border`, `--ring`, `--radius`), no component-level colour overrides. Verify: the board and a shadcn `Dialog`/`Menu` use only bridge variables (`grep -rn 'bg-\|text-' src/components/ui` shows token classes, not palette hex).
 - [x] 6.4 Replace the inherited primitives that shadcn now owns (Button, Dialog, Menu, Field, Toast) and delete the replaced files. Verify: no screen imports a deleted path (`npx tsc -b` green) and the accessibility checks on the swapped Dialog/Menu pass.
-- [ ] 6.5 Embedded board: `go:embed dist`, SPA fallback, SSE at `/api/stream`. Verify: `go build` then `./fleet-console` serves the board with no Node at runtime; `curl -N /api/stream` prints one event on a state change.
-- [ ] 6.6 Board, decisions, seats and task drawer screens. Verify: one screenshot per screen on sage tokens — two projects, one paused, one parked decision; the seat screen shows a real omp seat; the drawer shows branch, PR, checks, verdict and events.
+- [x] 6.5 Embedded board: `go:embed dist`, SPA fallback, SSE at `/api/stream`. Verify: `go build` then `./fleet-console` serves the board with no Node at runtime; `curl -N /api/stream` prints one event on a state change.
+- [x] 6.6 Board, decisions, seats and task drawer screens. Verify: one screenshot per screen on sage tokens — two projects, one paused, one parked decision; the seat screen shows a real omp seat; the drawer shows branch, PR, checks, verdict and events.
 
 ## 7. Alerts, quota, multi-project, cutover (P4)
 
