@@ -1,0 +1,31 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-23T22:45:01+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-23T22:45:01+0700 builders busy=['dev-build-pi-2@tsim-fleet-pi'] free=2 limit=2
+2026-10-23T22:45:18+0700 #151 reclaim: /home/dinhtrung/develop-pi/wt-151 has uncommitted changes; keeping it
+2026-10-23T22:45:18+0700 WARN: qitem-20261023154338-e467e52b57366126 is waiting on human@kernel - #166 5.1-5.3 blocked: needs #164 (section 3 DataGrid tabs + pool dialog) and #165 (section 4 content pools tab
+2026-10-23T22:45:18+0700 WARN: qitem-20261023153238-446649d95b3ab2b0 is waiting on human@kernel - #165 4.1-4.3 blocked: needs #163 (section 2 API: placeholders/preview/usedBy) and #164 (section 3 dialog, pend
+2026-10-23T22:45:19+0700 WARN: qitem-20261023152143-79266121dafc2895 is waiting on human@kernel - #163 2.2-2.3 blocked: origin/main is red — #146 spike (74e3b22) merged prefixtrie.go that redeclares trieSampl
+2026-10-23T22:45:19+0700 WARN: qitem-20261023140001-1c65b2c3 is waiting on human@kernel - Blocked: numbers-from-libphonenumber change set is sequenced; this task needs earlier sibling tasks merged (se
+2026-10-23T22:45:19+0700 WARN: qitem-20261023140001-2bfa884d is waiting on human@kernel - Blocked: numbers-from-libphonenumber change set is sequenced; this task needs earlier sibling tasks merged (se
+2026-10-23T22:45:20+0700 WARN: qitem-20261023135248-6c01e781f8794cd5 is waiting on human@kernel - Integration task 8.1-8.2 still blocked: prerequisites 1.x-7.x not merged into main.
+2026-10-23T22:45:20+0700 owner action needed: 6 row(s) parked on a human
+2026-10-23T22:45:22+0700 open epics [101, 102, 111, 114, 128, 135, 144, 156, 161]; open tasks [152, 153, 155, 163, 164, 165, 166, 167, 168]
+2026-10-23T22:45:22+0700 #152 skip: already in a live queue row
+2026-10-23T22:45:22+0700 #153 skip: already in a live queue row
+2026-10-23T22:45:22+0700 #155 skip: already in a live queue row
+2026-10-23T22:45:22+0700 #163 skip: already in a live queue row
+2026-10-23T22:45:22+0700 #164 skip: already in a live queue row
+2026-10-23T22:45:22+0700 #165 skip: already in a live queue row
+2026-10-23T22:45:22+0700 #166 skip: already in a live queue row
+2026-10-23T22:45:25+0700 ready: [167, 168]
+2026-10-23T22:45:27+0700 #167 plan: seat=dev-build-omp-1@tsim-fleet-omp branch=feature/167-numbering-plan-panel-sources-line base=74e3b22
+2026-10-23T22:45:27+0700 #167 dry-run: git worktree add /home/dinhtrung/develop-omp/wt-167 -b feature/167-numbering-plan-panel-sources-line origin/main
+2026-10-23T22:45:27+0700 #167 dry-run: brief /home/dinhtrung/tasks-omp/task-167.md → queue dev-build-omp-1@tsim-fleet-omp
+2026-10-23T22:45:28+0700 #168 plan: seat=dev-build-omp-2@tsim-fleet-omp branch=feature/168-gates-and-visual-evidence-tick base=74e3b22
+2026-10-23T22:45:28+0700 #168 dry-run: git worktree add /home/dinhtrung/develop-omp/wt-168 -b feature/168-gates-and-visual-evidence-tick origin/main
+2026-10-23T22:45:28+0700 #168 dry-run: brief /home/dinhtrung/tasks-omp/task-168.md → queue dev-build-omp-2@tsim-fleet-omp
+2026-10-23T22:45:51+0700 seat config missing on 3 seat(s): dev-build-omp-1, dev-build-omp-2, dev-review - seeding
+2026-10-23T22:45:51+0700 seat config: 0 seat(s) repaired

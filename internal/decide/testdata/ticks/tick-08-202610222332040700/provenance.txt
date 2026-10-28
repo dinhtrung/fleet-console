@@ -1,0 +1,14 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-22T23:32:04+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-22T23:32:04+0700 builders busy=- free=3 limit=3
+2026-10-22T23:32:07+0700 open epics [101, 102, 111]; open tasks [106, 108, 109, 110]
+2026-10-22T23:32:10+0700 #108 skip: blocked by open #106
+2026-10-22T23:32:12+0700 #109 skip: blocked by open #108
+2026-10-22T23:32:13+0700 #110 skip: blocked by open #109
+2026-10-22T23:32:13+0700 ready: [106]
+2026-10-22T23:32:14+0700 #106 plan: seat=dev-build18@tsim-fleet branch=feature/106-feat-web-scenario-wizard-traffic base=2fa2e74
+2026-10-22T23:32:14+0700 #106 reuse worktree /home/dinhtrung/develop/wt-106 (branch feature/106-feat-web-scenario-wizard-traffic, clean)
+2026-10-22T23:32:16+0700 #106 dispatched: qitem-20261022163214-04172c3343684007 -> dev-build18@tsim-fleet (feature/106-feat-web-scenario-wizard-traffic); label status::ongoing

@@ -1,0 +1,379 @@
+{
+  "project": {
+    "key": "horisen/mnp/engine/traffic-simulator-v2",
+    "forge": "gitlab",
+    "enabled": true,
+    "onhold": false,
+    "concurrency_cap": 2
+  },
+  "items": [
+    {
+      "number": 101,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 101"
+    },
+    {
+      "number": 102,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 102"
+    },
+    {
+      "number": 111,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 111"
+    },
+    {
+      "number": 114,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 114"
+    },
+    {
+      "number": 128,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 128"
+    },
+    {
+      "number": 135,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 135"
+    },
+    {
+      "number": 144,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 144"
+    },
+    {
+      "number": 156,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 156"
+    },
+    {
+      "number": 161,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 161"
+    },
+    {
+      "number": 169,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 169"
+    },
+    {
+      "number": 179,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 179"
+    },
+    {
+      "number": 185,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 185"
+    },
+    {
+      "number": 195,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 195"
+    },
+    {
+      "number": 199,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 199"
+    },
+    {
+      "number": 215,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 215"
+    },
+    {
+      "number": 216,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 216"
+    },
+    {
+      "number": 217,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 217",
+      "related": [
+        {
+          "number": 216,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 218,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 218",
+      "related": [
+        {
+          "number": 217,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 219,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 219",
+      "related": [
+        {
+          "number": 218,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 220,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 220"
+    },
+    {
+      "number": 221,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 221",
+      "related": [
+        {
+          "number": 215,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 222,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 222",
+      "related": [
+        {
+          "number": 221,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 223,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 223",
+      "related": [
+        {
+          "number": 222,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 224,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 224",
+      "related": [
+        {
+          "number": 223,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 225,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 225",
+      "related": [
+        {
+          "number": 224,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 226,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 226",
+      "related": [
+        {
+          "number": 225,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 227,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 227",
+      "related": [
+        {
+          "number": 226,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 228,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 228"
+    },
+    {
+      "number": 229,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 229",
+      "related": [
+        {
+          "number": 220,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 230,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 230",
+      "related": [
+        {
+          "number": 229,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 231,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 231",
+      "related": [
+        {
+          "number": 230,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 232,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 232",
+      "related": [
+        {
+          "number": 231,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 233,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 233",
+      "related": [
+        {
+          "number": 232,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 234,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 234",
+      "related": [
+        {
+          "number": 233,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 235,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 235",
+      "related": [
+        {
+          "number": 234,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 236,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 236",
+      "related": [
+        {
+          "number": 235,
+          "state": "open"
+        }
+      ]
+    }
+  ],
+  "rows": [],
+  "branches": [],
+  "builders": [
+    "free-0@fixture",
+    "free-1@fixture"
+  ],
+  "dispatched": [],
+  "forge_ok": true
+}

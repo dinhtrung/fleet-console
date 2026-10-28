@@ -1,0 +1,33 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-28T19:41:59+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-28T19:41:59+0700 builders busy=- free=2 limit=2
+2026-10-28T19:42:06+0700 #200 reclaim: /home/dinhtrung/develop-omp/wt-200 has 4 commit(s) not in main; keeping it
+2026-10-28T19:42:07+0700 #201 reclaim: /home/dinhtrung/develop-omp/wt-201 has 1 commit(s) not in main; keeping it
+2026-10-28T19:42:07+0700 #202 reclaim: /home/dinhtrung/develop-omp/wt-202 has 1 commit(s) not in main; keeping it
+2026-10-28T19:42:07+0700 WARN: qitem-20261028120506-984fc839 is waiting on human@kernel - Decision owed on #259 (MR !518, REJECTed at 66e5f85): close #259 as a measured no (recommended), or try a rest
+2026-10-28T19:42:07+0700 owner action needed: 1 row(s) parked on a human
+2026-10-28T19:42:07+0700 open epics [101, 102, 111, 114, 128, 135, 144, 156, 161, 169, 179, 185, 195, 199, 215, 220, 228, 238, 244, 250, 256, 260]; open tasks [259, 261, 262, 263, 264, 265, 266, 267, 268]
+2026-10-28T19:42:07+0700 #259 skip: already in a live queue row
+2026-10-28T19:42:12+0700 #200 reclaim: /home/dinhtrung/develop-omp/wt-200 has 4 commit(s) not in main; keeping it
+2026-10-28T19:42:12+0700 #201 reclaim: /home/dinhtrung/develop-omp/wt-201 has 1 commit(s) not in main; keeping it
+2026-10-28T19:42:12+0700 #202 reclaim: /home/dinhtrung/develop-omp/wt-202 has 1 commit(s) not in main; keeping it
+2026-10-28T19:42:12+0700 WARN: qitem-20261028120506-984fc839 is waiting on human@kernel - Decision owed on #259 (MR !518, REJECTed at 66e5f85): close #259 as a measured no (recommended), or try a rest
+2026-10-28T19:42:12+0700 owner action needed: 1 row(s) parked on a human
+2026-10-28T19:42:12+0700 open epics [101, 102, 111, 114, 128, 135, 144, 156, 161, 169, 179, 185, 195, 199, 215, 220, 228, 238, 244, 250, 256, 260]; open tasks []
+2026-10-28T19:42:12+0700 nothing: no task is ready
+2026-10-28T19:42:14+0700 #263 skip: blocked by open #262
+2026-10-28T19:42:15+0700 #264 skip: blocked by open #261
+2026-10-28T19:42:17+0700 #265 skip: blocked by open #263
+2026-10-28T19:42:19+0700 #266 skip: blocked by open #263, #264
+2026-10-28T19:42:20+0700 #267 skip: blocked by open #265, #266
+2026-10-28T19:42:22+0700 #268 skip: blocked by open #266, #267
+2026-10-28T19:42:22+0700 ready: [261, 262]
+2026-10-28T19:42:25+0700 #261 plan: seat=dev-build-claude-1@tsim-fleet-claude branch=feature/261-api-pin-horisenlib-v2-at base=dbe25b3
+2026-10-28T19:42:27+0700 #261 dispatched: qitem-20261028124225-09acc1ca794143bd -> dev-build-claude-1@tsim-fleet-claude (feature/261-api-pin-horisenlib-v2-at); label status::ongoing
+2026-10-28T19:42:29+0700 #262 plan: seat=dev-build-claude-2@tsim-fleet-claude branch=feature/262-api-the-platform-connection-pool base=dbe25b3
+2026-10-28T19:42:31+0700 #262 dispatched: qitem-20261028124229-5f6ad9e6ea99530b -> dev-build-claude-2@tsim-fleet-claude (feature/262-api-the-platform-connection-pool); label status::ongoing
+2026-10-28T19:43:30+0700 seat config missing on 3 seat(s): dev-build-omp-1, dev-build-omp-2, dev-review - seeding
+2026-10-28T19:43:30+0700 seat config: 0 seat(s) repaired

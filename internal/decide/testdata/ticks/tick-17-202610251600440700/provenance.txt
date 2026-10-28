@@ -1,0 +1,25 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-25T16:00:44+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-25T16:00:44+0700 builders busy=- free=3 limit=3
+2026-10-25T16:00:45+0700 open epics [101, 102, 111, 114, 128, 135, 144, 156, 161, 169, 179]; open tasks [180, 181, 182, 183, 184]
+2026-10-25T16:00:48+0700 #181 skip: blocked by open #180
+2026-10-25T16:00:49+0700 #182 skip: blocked by open #180
+2026-10-25T16:00:50+0700 #183 skip: blocked by open #181, #182
+2026-10-25T16:00:51+0700 #184 skip: blocked by open #183
+2026-10-25T16:00:51+0700 ready: [180]
+2026-10-25T16:00:52+0700 open epics [101, 102, 111, 114, 128, 135, 144, 156, 161, 169, 179]; open tasks [180, 181, 182, 183, 184]
+2026-10-25T16:00:54+0700 #180 plan: seat=dev-build-omp-1@tsim-fleet-omp branch=feature/180-feat-ui-card-flush-18 base=6e1db19
+2026-10-25T16:00:55+0700 #180 dispatched: qitem-20261025090054-2e49a74c1ece78bb -> dev-build-omp-1@tsim-fleet-omp (feature/180-feat-ui-card-flush-18); label status::ongoing
+2026-10-25T16:00:56+0700 #181 skip: blocked by open #180
+2026-10-25T16:00:57+0700 #182 skip: blocked by open #180
+2026-10-25T16:00:58+0700 #183 skip: blocked by open #181, #182
+2026-10-25T16:00:59+0700 #184 skip: blocked by open #183
+2026-10-25T16:00:59+0700 ready: [180]
+2026-10-25T16:01:04+0700 #180 plan: seat=dev-build18@tsim-fleet branch=feature/180-feat-ui-card-flush-18 base=6e1db19
+2026-10-25T16:01:04+0700 #180 dry-run: git worktree add /home/dinhtrung/develop/wt-180 -b feature/180-feat-ui-card-flush-18 origin/main
+2026-10-25T16:01:04+0700 #180 dry-run: brief /home/dinhtrung/tasks/task-180.md → queue dev-build18@tsim-fleet
+2026-10-25T16:01:14+0700 seat config missing on 3 seat(s): dev-build-omp-1, dev-build-omp-2, dev-review - seeding
+2026-10-25T16:01:14+0700 seat config: 0 seat(s) repaired
