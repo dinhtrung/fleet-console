@@ -26,15 +26,24 @@ function deadline(decision: Decision): { label: string; overdue: boolean } | nul
 
 function DecisionCard({ decision }: { decision: Decision }) {
   const [text, setText] = useState("");
+  const [selections, setSelections] = useState<Record<string, string>>({});
   const queryClient = useQueryClient();
   const toast = useToast();
   const due = deadline(decision);
+  const questions = decision.questions ?? [];
+  const answered = questions.every((question) => selections[question.id]);
+  const composed = questions
+    .map((question) => `${question.question}: ${selections[question.id] ?? ""}`)
+    .join("\n");
+  const value = questions.length > 0 ? [composed, text.trim()].filter(Boolean).join("\n") : text.trim();
+  const ready = questions.length > 0 ? answered : text.trim().length > 0;
 
   const answer = useMutation({
-    mutationFn: (value: string) => answerDecision(decision.id, value),
+    mutationFn: (next: string) => answerDecision(decision.id, next),
     onSuccess: (result) => {
       toast.done("Decision recorded", `The rig row is ${result.state}; event ${result.event_id}.`);
       setText("");
+      setSelections({});
       void queryClient.invalidateQueries({ queryKey: ["decisions"] });
       void queryClient.invalidateQueries({ queryKey: ["board"] });
     },
@@ -73,38 +82,58 @@ function DecisionCard({ decision }: { decision: Decision }) {
         </div>
         <div className="flex flex-col gap-2">
           <p className="label text-ink-muted">Answer</p>
-          <div className="flex flex-wrap gap-1.5">
-            {decision.options.map((option, index) => (
-              <Button
-                key={option}
-                size="sm"
-                variant={index === 0 ? "primary" : "outline"}
-                busy={answer.isPending}
-                onClick={() => answer.mutate(option)}
-              >
-                {option}
-              </Button>
-            ))}
-          </div>
-          <Textarea
-            aria-label={`Free-text answer for ${decision.summary}`}
-            placeholder="Or type the answer the rig should record"
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            rows={3}
-          />
+          {questions.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              {questions.map((question) => (
+                <fieldset key={question.id}>
+                  <legend className="text-[0.6875rem] text-ink">{question.question}</legend>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {question.options.map((option) => (
+                      <Button
+                        key={option.id}
+                        size="sm"
+                        variant={selections[question.id] === option.label ? "primary" : "outline"}
+                        title={option.recommended ? "recommended" : undefined}
+                        onClick={() =>
+                          setSelections((previous) => ({ ...previous, [question.id]: option.label }))
+                        }
+                      >
+                        {option.label}
+                        {option.recommended ? " · recommended" : ""}
+                      </Button>
+                    ))}
+                  </div>
+                </fieldset>
+              ))}
+              <Textarea
+                aria-label={`Additional note for ${decision.summary}`}
+                placeholder="Additional note (optional)"
+                value={text}
+                onChange={(event) => setText(event.target.value)}
+                rows={2}
+              />
+            </div>
+          ) : (
+            <Textarea
+              aria-label={`Free-text answer for ${decision.summary}`}
+              placeholder="Type the answer the rig should record"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              rows={3}
+            />
+          )}
           <Button
             size="sm"
             variant="outline"
-            disabled={text.trim().length === 0}
+            disabled={!ready}
             busy={answer.isPending}
-            onClick={() => answer.mutate(text.trim())}
+            onClick={() => answer.mutate(value)}
           >
             Send answer
           </Button>
           <p className="text-[0.6875rem] text-ink-muted">
-            The answer is written with <span className="font-mono">rig queue resolve</span>; this board keeps no
-            decision table.
+            Options come from the rig row&apos;s questions; when it has none, the answer is free text. It is written
+            with <span className="font-mono">rig queue resolve</span>; this board keeps no decision table.
           </p>
         </div>
       </div>
