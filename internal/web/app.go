@@ -6,6 +6,7 @@ package web
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
@@ -36,7 +37,12 @@ func New(cfg Config) (*fiber.App, error) {
 	}
 
 	app := fiber.New(fiber.Config{
-		AppName: "fleet-console",
+		AppName:     "fleet-console",
+		ReadTimeout: 15 * time.Second,
+		// The event stream is long-lived, so the write timeout is long rather
+		// than absent; EventSource reconnects when a stream hits it.
+		WriteTimeout: 10 * time.Minute,
+		IdleTimeout:  60 * time.Second,
 	})
 	hub := NewHub()
 	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub}

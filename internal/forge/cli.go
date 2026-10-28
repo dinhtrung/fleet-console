@@ -8,25 +8,60 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
+
+// DefaultTimeout bounds one forge CLI call. A forge read crosses the network; it
+// gets more room than a local rig command, but never an unbounded wait.
+const DefaultTimeout = 60 * time.Second
 
 // MarkerLabel is the in-flight marker the app owns on both forges.
 const MarkerLabel = "status::ongoing"
 
 // CLIRunner executes the forge CLI with the parent environment, so gh/glab use their
-// own credential store. The app never reads a token.
-type CLIRunner struct{}
+// own credential store. The app never reads a token. A zero Timeout means
+// DefaultTimeout; a shorter parent deadline wins.
+type CLIRunner struct {
+	Timeout time.Duration
+}
+
+func (r CLIRunner) limit() time.Duration {
+	if r.Timeout > 0 {
+		return r.Timeout
+	}
+	return DefaultTimeout
+}
 
 // Run executes argv[0] with the rest as arguments and returns its streams.
-func (CLIRunner) Run(ctx context.Context, argv ...string) (string, string, error) {
+func (r CLIRunner) Run(ctx context.Context, argv ...string) (string, string, error) {
 	if len(argv) == 0 {
 		return "", "", errors.New("forge: empty command")
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	limit := r.limit()
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < limit {
+			limit = remaining
+		}
+	}
+	runCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
+	// A killed CLI can leave a child holding the output pipes; WaitDelay keeps
+	// Run from waiting on that child after the deadline.
+	cmd.WaitDelay = 200 * time.Millisecond
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		return stdout.String(), stderr.String(), fmt.Errorf(
+			"%s: timed out after %s", strings.Join(argv, " "), limit.Round(time.Millisecond))
+	}
+	if errors.Is(runCtx.Err(), context.Canceled) {
+		return stdout.String(), stderr.String(), fmt.Errorf(
+			"%s: canceled before the deadline: %w", strings.Join(argv, " "), err)
+	}
 	return stdout.String(), stderr.String(), err
 }
 

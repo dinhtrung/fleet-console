@@ -5,33 +5,65 @@ package git
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// DefaultTimeout bounds one git call. ls-remote crosses the network; a hung
+// origin must fail the tick, not stall it.
+const DefaultTimeout = 20 * time.Second
 
 // Runner executes one git command in a repository.
 type Runner interface {
 	Run(ctx context.Context, args ...string) ([]byte, error)
 }
 
-// ExecRunner runs git in RepoPath.
+// ExecRunner runs git in RepoPath. A zero Timeout means DefaultTimeout; a
+// shorter parent deadline wins.
 type ExecRunner struct {
 	RepoPath string
+	Timeout  time.Duration
+}
+
+func (r ExecRunner) limit() time.Duration {
+	if r.Timeout > 0 {
+		return r.Timeout
+	}
+	return DefaultTimeout
 }
 
 // Run implements Runner.
 func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
+	limit := r.limit()
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < limit {
+			limit = remaining
+		}
+	}
+	runCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+
 	full := append([]string{"-C", r.RepoPath}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd := exec.CommandContext(runCtx, "git", full...)
+	cmd.WaitDelay = 200 * time.Millisecond
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		command := "git " + strings.Join(args, " ")
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("%s: timed out after %s", command, limit.Round(time.Millisecond))
+		}
+		if errors.Is(runCtx.Err(), context.Canceled) {
+			return nil, fmt.Errorf("%s: canceled before the deadline: %w", command, err)
+		}
+		return nil, fmt.Errorf("%s: %w: %s", command, err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
 }
