@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "rigId": "01M61SSYBAKNXXPTMJQC7F5WKV",
+  "rigName": "demo-rig",
+  "pod": "dev",
+  "seats": ["dev.build-3"],
+  "source": "path:/home/dinhtrung/.local/lib/node_modules/@openrig/cli/daemon/specs/agents/orchestration/orchestrator",
+  "seat": "dev.build-3",
+  "node": {
+    "logicalId": "dev.build-3",
+    "sessionName": "dev-build-3@demo-rig",
+    "status": "launched"
+  },
+  "nodes": [
+    {
+      "logicalId": "dev.build-3",
+      "sessionName": "dev-build-3@demo-rig",
+      "status": "launched"
+    }
+  ],
+  "warnings": [],
+  "retryTargets": []
+}

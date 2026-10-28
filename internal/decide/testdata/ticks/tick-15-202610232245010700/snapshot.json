@@ -1,0 +1,211 @@
+{
+  "project": {
+    "key": "horisen/mnp/engine/traffic-simulator-v2",
+    "forge": "gitlab",
+    "enabled": true,
+    "onhold": false,
+    "concurrency_cap": 2
+  },
+  "items": [
+    {
+      "number": 101,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 101"
+    },
+    {
+      "number": 102,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 102"
+    },
+    {
+      "number": 111,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 111"
+    },
+    {
+      "number": 114,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 114"
+    },
+    {
+      "number": 128,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 128"
+    },
+    {
+      "number": 135,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 135"
+    },
+    {
+      "number": 144,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 144"
+    },
+    {
+      "number": 152,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 152"
+    },
+    {
+      "number": 153,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 153"
+    },
+    {
+      "number": 155,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 155"
+    },
+    {
+      "number": 156,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 156"
+    },
+    {
+      "number": 161,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 161"
+    },
+    {
+      "number": 163,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 163"
+    },
+    {
+      "number": 164,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 164"
+    },
+    {
+      "number": 165,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 165"
+    },
+    {
+      "number": 166,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 166"
+    },
+    {
+      "number": 167,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 167"
+    },
+    {
+      "number": 168,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 168"
+    }
+  ],
+  "rows": [
+    {
+      "qitem_id": "fixture-live-152",
+      "state": "pending",
+      "pickup": "",
+      "destination": "row-holder@fixture",
+      "body": "Continuing #152",
+      "summary": ""
+    },
+    {
+      "qitem_id": "fixture-live-153",
+      "state": "pending",
+      "pickup": "",
+      "destination": "row-holder@fixture",
+      "body": "Continuing #153",
+      "summary": ""
+    },
+    {
+      "qitem_id": "fixture-live-155",
+      "state": "pending",
+      "pickup": "",
+      "destination": "row-holder@fixture",
+      "body": "Continuing #155",
+      "summary": ""
+    },
+    {
+      "qitem_id": "fixture-live-163",
+      "state": "pending",
+      "pickup": "",
+      "destination": "row-holder@fixture",
+      "body": "Continuing #163",
+      "summary": ""
+    },
+    {
+      "qitem_id": "fixture-live-164",
+      "state": "pending",
+      "pickup": "",
+      "destination": "row-holder@fixture",
+      "body": "Continuing #164",
+      "summary": ""
+    },
+    {
+      "qitem_id": "fixture-live-165",
+      "state": "pending",
+      "pickup": "",
+      "destination": "row-holder@fixture",
+      "body": "Continuing #165",
+      "summary": ""
+    },
+    {
+      "qitem_id": "fixture-live-166",
+      "state": "pending",
+      "pickup": "",
+      "destination": "row-holder@fixture",
+      "body": "Continuing #166",
+      "summary": ""
+    },
+    {
+      "qitem_id": "fixture-busy-0",
+      "state": "in-progress",
+      "pickup": "working",
+      "destination": "dev-build-pi-2@tsim-fleet-pi",
+      "body": "Work on fixture item 900000",
+      "summary": ""
+    }
+  ],
+  "branches": [],
+  "builders": [
+    "dev-build-pi-2@tsim-fleet-pi",
+    "free-0@fixture",
+    "free-1@fixture"
+  ],
+  "dispatched": [],
+  "forge_ok": true
+}

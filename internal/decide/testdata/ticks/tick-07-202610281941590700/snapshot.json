@@ -1,0 +1,293 @@
+{
+  "project": {
+    "key": "horisen/mnp/engine/traffic-simulator-v2",
+    "forge": "gitlab",
+    "enabled": true,
+    "onhold": false,
+    "concurrency_cap": 2
+  },
+  "items": [
+    {
+      "number": 101,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 101"
+    },
+    {
+      "number": 102,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 102"
+    },
+    {
+      "number": 111,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 111"
+    },
+    {
+      "number": 114,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 114"
+    },
+    {
+      "number": 128,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 128"
+    },
+    {
+      "number": 135,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 135"
+    },
+    {
+      "number": 144,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 144"
+    },
+    {
+      "number": 156,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 156"
+    },
+    {
+      "number": 161,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 161"
+    },
+    {
+      "number": 169,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 169"
+    },
+    {
+      "number": 179,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 179"
+    },
+    {
+      "number": 185,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 185"
+    },
+    {
+      "number": 195,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 195"
+    },
+    {
+      "number": 199,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 199"
+    },
+    {
+      "number": 215,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 215"
+    },
+    {
+      "number": 220,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 220"
+    },
+    {
+      "number": 228,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 228"
+    },
+    {
+      "number": 238,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 238"
+    },
+    {
+      "number": 244,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 244"
+    },
+    {
+      "number": 250,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 250"
+    },
+    {
+      "number": 256,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 256"
+    },
+    {
+      "number": 259,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 259"
+    },
+    {
+      "number": 260,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 260"
+    },
+    {
+      "number": 261,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 261"
+    },
+    {
+      "number": 262,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 262"
+    },
+    {
+      "number": 263,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 263",
+      "related": [
+        {
+          "number": 262,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 264,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 264",
+      "related": [
+        {
+          "number": 261,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 265,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 265",
+      "related": [
+        {
+          "number": 263,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 266,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 266",
+      "related": [
+        {
+          "number": 263,
+          "state": "open"
+        },
+        {
+          "number": 264,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 267,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 267",
+      "related": [
+        {
+          "number": 265,
+          "state": "open"
+        },
+        {
+          "number": 266,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 268,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 268",
+      "related": [
+        {
+          "number": 266,
+          "state": "open"
+        },
+        {
+          "number": 267,
+          "state": "open"
+        }
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "qitem_id": "fixture-live-259",
+      "state": "pending",
+      "pickup": "",
+      "destination": "row-holder@fixture",
+      "body": "Continuing #259",
+      "summary": ""
+    }
+  ],
+  "branches": [],
+  "builders": [
+    "free-0@fixture",
+    "free-1@fixture"
+  ],
+  "dispatched": [],
+  "forge_ok": true
+}

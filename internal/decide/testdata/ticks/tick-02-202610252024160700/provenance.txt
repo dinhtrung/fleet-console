@@ -1,0 +1,26 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-25T20:24:16+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-25T20:24:16+0700 builders busy=['dev-build-omp-1@tsim-fleet-omp'] free=3 limit=3
+2026-10-25T20:24:27+0700 epic #185 done but carries onhold: left open
+2026-10-25T20:24:27+0700 #194 skip: parent #185 carries onhold
+2026-10-25T20:24:27+0700 #193 skip: parent #185 carries onhold
+2026-10-25T20:24:27+0700 #192 skip: parent #185 carries onhold
+2026-10-25T20:24:27+0700 #191 skip: label onhold
+2026-10-25T20:24:27+0700 #190 skip: label onhold
+2026-10-25T20:24:27+0700 #189 skip: label onhold
+2026-10-25T20:24:27+0700 #188 skip: label onhold
+2026-10-25T20:24:27+0700 #187 skip: label onhold
+2026-10-25T20:24:27+0700 open epics [101, 102, 111, 114, 128, 135, 144, 156, 161, 169, 179, 185, 195]; open tasks [196, 197, 198]
+2026-10-25T20:24:27+0700 #196 skip: already in a live queue row
+2026-10-25T20:24:31+0700 ready: [197, 198]
+2026-10-25T20:24:33+0700 #197 plan: seat=dev-build18@tsim-fleet branch=feature/197-chore-web-the-scenario-clients base=3b39f94
+2026-10-25T20:24:33+0700 #197 dry-run: git worktree add /home/dinhtrung/develop/wt-197 -b feature/197-chore-web-the-scenario-clients origin/main
+2026-10-25T20:24:33+0700 #197 dry-run: brief /home/dinhtrung/tasks/task-197.md → queue dev-build18@tsim-fleet
+2026-10-25T20:24:34+0700 #198 plan: seat=dev-build19@tsim-fleet branch=feature/198-test-scenarios-the-v5-upgrade base=3b39f94
+2026-10-25T20:24:34+0700 #198 dry-run: git worktree add /home/dinhtrung/develop/wt-198 -b feature/198-test-scenarios-the-v5-upgrade origin/main
+2026-10-25T20:24:34+0700 #198 dry-run: brief /home/dinhtrung/tasks/task-198.md → queue dev-build19@tsim-fleet
+2026-10-25T20:24:48+0700 seat config missing on 3 seat(s): dev-build-omp-1, dev-build-omp-2, dev-review - seeding
+2026-10-25T20:24:48+0700 seat config: 0 seat(s) repaired

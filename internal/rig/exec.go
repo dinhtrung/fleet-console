@@ -32,10 +32,12 @@ func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		msg := strings.TrimSpace(stderr.String())
+		// Keep stdout: commands such as `spec validate` report their verdict
+		// as JSON and still exit non-zero.
 		if msg == "" {
-			return nil, fmt.Errorf("%s %s: %w", path, strings.Join(args, " "), err)
+			return stdout.Bytes(), fmt.Errorf("%s %s: %w", path, strings.Join(args, " "), err)
 		}
-		return nil, fmt.Errorf("%s %s: %w: %s", path, strings.Join(args, " "), err, msg)
+		return stdout.Bytes(), fmt.Errorf("%s %s: %w: %s", path, strings.Join(args, " "), err, msg)
 	}
 	return stdout.Bytes(), nil
 }

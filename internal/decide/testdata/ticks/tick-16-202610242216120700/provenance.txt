@@ -1,0 +1,20 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-24T22:16:12+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-24T22:16:12+0700 builders busy=- free=2 limit=2
+2026-10-24T22:16:12+0700 #165 state pruned (closed)
+2026-10-24T22:16:20+0700 open epics [101, 102, 111, 114, 128, 135, 144, 156, 161, 169]; open tasks [170, 171, 172, 173, 174, 175, 176]
+2026-10-24T22:16:24+0700 #171 skip: blocked by open #170
+2026-10-24T22:16:25+0700 #172 skip: blocked by open #170
+2026-10-24T22:16:26+0700 #173 skip: blocked by open #171, #172
+2026-10-24T22:16:27+0700 #174 skip: blocked by open #173
+2026-10-24T22:16:29+0700 #175 skip: blocked by open #174
+2026-10-24T22:16:30+0700 #176 skip: blocked by open #175
+2026-10-24T22:16:30+0700 ready: [170]
+2026-10-24T22:16:32+0700 #170 plan: seat=dev-build-omp-1@tsim-fleet-omp branch=feature/170-feat-traffic-read-cdr-templates base=4d8321a
+2026-10-24T22:16:32+0700 #170 dry-run: git worktree add /home/dinhtrung/develop-omp/wt-170 -b feature/170-feat-traffic-read-cdr-templates origin/main
+2026-10-24T22:16:32+0700 #170 dry-run: brief /home/dinhtrung/tasks-omp/task-170.md → queue dev-build-omp-1@tsim-fleet-omp
+2026-10-24T22:16:42+0700 seat config missing on 3 seat(s): dev-build-omp-1, dev-build-omp-2, dev-review - seeding
+2026-10-24T22:16:42+0700 seat config: 0 seat(s) repaired

@@ -1,0 +1,38 @@
+version: "0.2"
+name: {{ quote .Name }}
+summary: {{ quote .Summary }}
+culture_file: CULTURE.md
+pods:
+{{- range .Pods }}
+  - id: {{ .ID }}
+    label: {{ quote .Label }}
+    members:
+{{- range .Members }}
+      - id: {{ .ID }}
+        agent_ref: {{ quote .AgentRef }}
+        runtime: {{ .Runtime }}
+        model: {{ .Model }}
+        profile: {{ .Profile }}
+        env:
+{{- range .Env }}
+          {{ .Name }}: {{ quote .Value }}
+{{- end }}
+        cwd: {{ quote .Cwd }}
+{{- if .StartupFiles }}
+        startup:
+          files:
+{{- range .StartupFiles }}
+            - path: {{ quote .Path }}
+              delivery_hint: send_text
+              required: {{ .Required }}
+{{- end }}
+{{- end }}
+{{- end }}
+    edges:
+{{- range .Edges }}
+      - kind: delegates_to
+        from: {{ .From }}
+        to: {{ .To }}
+{{- end }}
+{{- end }}
+permission_policy: {{ .PermissionPolicy }}

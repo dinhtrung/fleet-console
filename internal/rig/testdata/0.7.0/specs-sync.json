@@ -1,0 +1,24 @@
+[
+ {
+  "id": "e9aebbf1794477cc",
+  "kind": "agent",
+  "name": "vault-specialist",
+  "version": "1.0",
+  "sourceType": "builtin",
+  "sourcePath": "/home/dinhtrung/.local/lib/node_modules/@openrig/cli/daemon/specs/agents/apps/vault-specialist/agent.yaml",
+  "relativePath": "agents/apps/vault-specialist/agent.yaml",
+  "updatedAt": "2026-10-23T21:39:57.822Z",
+  "summary": "Vault specialist agent \u2014 manages HashiCorp Vault for this managed app"
+ },
+ {
+  "id": "f907bdab58b07cf2",
+  "kind": "agent",
+  "name": "conveyor-builder",
+  "version": "1.0",
+  "sourceType": "builtin",
+  "sourcePath": "/home/dinhtrung/.local/lib/node_modules/@openrig/cli/daemon/specs/agents/conveyor/builder/agent.yaml",
+  "relativePath": "agents/conveyor/builder/agent.yaml",
+  "updatedAt": "2026-10-23T21:39:57.822Z",
+  "summary": "Conveyor builder - executes the planned packet and prepares proof for review"
+ }
+]

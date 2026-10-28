@@ -1,0 +1,83 @@
+{
+  "project": {
+    "key": "horisen/mnp/engine/traffic-simulator-v2",
+    "forge": "gitlab",
+    "enabled": true,
+    "onhold": false,
+    "concurrency_cap": 2
+  },
+  "items": [
+    {
+      "number": 101,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 101"
+    },
+    {
+      "number": 102,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 102"
+    },
+    {
+      "number": 108,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 108"
+    },
+    {
+      "number": 109,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 109",
+      "related": [
+        {
+          "number": 108,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 110,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 110",
+      "related": [
+        {
+          "number": 109,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 111,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 111"
+    }
+  ],
+  "rows": [
+    {
+      "qitem_id": "fixture-busy-0",
+      "state": "in-progress",
+      "pickup": "working",
+      "destination": "dev-build18@tsim-fleet",
+      "body": "Work on fixture item 900000",
+      "summary": ""
+    }
+  ],
+  "branches": [],
+  "builders": [
+    "dev-build18@tsim-fleet",
+    "free-0@fixture",
+    "free-1@fixture"
+  ],
+  "dispatched": [],
+  "forge_ok": true
+}

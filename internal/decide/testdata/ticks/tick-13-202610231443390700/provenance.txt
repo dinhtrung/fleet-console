@@ -1,0 +1,17 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-23T14:43:39+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-23T14:43:39+0700 builders busy=- free=3 limit=3
+2026-10-23T14:43:39+0700 #129 state pruned (closed)
+2026-10-23T14:43:44+0700 #129 label cleared (closed)
+2026-10-23T14:43:45+0700 open epics [101, 102, 111, 114, 128]; open tasks [130, 131, 132, 133]
+2026-10-23T14:43:51+0700 #133 skip: blocked by open #130, #131, #132
+2026-10-23T14:43:51+0700 ready: [130, 131, 132]
+2026-10-23T14:43:53+0700 #130 plan: seat=dev-build18@tsim-fleet branch=feature/130-dialog-on-base-ui-props base=0f482fa
+2026-10-23T14:44:00+0700 #130 dispatched: qitem-20261023074353-02aa37e2466d9704 -> dev-build18@tsim-fleet (feature/130-dialog-on-base-ui-props); label status::ongoing
+2026-10-23T14:44:00+0700 #131 plan: seat=dev-build19@tsim-fleet branch=feature/131-menus-on-base-ui-actionsmenu base=0f482fa
+2026-10-23T14:44:02+0700 #131 dispatched: qitem-20261023074400-85de97496a77350c -> dev-build19@tsim-fleet (feature/131-menus-on-base-ui-actionsmenu); label status::ongoing
+2026-10-23T14:44:02+0700 #132 plan: seat=dev-build20@tsim-fleet branch=feature/132-filter-popover-on-base-ui base=0f482fa
+2026-10-23T14:44:03+0700 #132 dispatched: qitem-20261023074402-03240bfdecb9d119 -> dev-build20@tsim-fleet (feature/132-filter-popover-on-base-ui); label status::ongoing

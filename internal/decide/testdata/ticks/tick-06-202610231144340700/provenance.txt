@@ -1,0 +1,16 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-23T11:44:34+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-23T11:44:34+0700 builders busy=- free=3 limit=5
+2026-10-23T11:44:37+0700 open epics [101, 102, 111, 114, 128]; open tasks [127, 129, 130, 131, 132, 133]
+2026-10-23T11:44:37+0700 #127 skip: already in a live queue row
+2026-10-23T11:44:44+0700 #130 skip: blocked by open #129
+2026-10-23T11:44:45+0700 #131 skip: blocked by open #129
+2026-10-23T11:44:46+0700 #132 skip: blocked by open #129
+2026-10-23T11:44:47+0700 #133 skip: blocked by open #130, #131, #132
+2026-10-23T11:44:47+0700 ready: [129]
+2026-10-23T11:44:49+0700 #129 plan: seat=dev-build18@tsim-fleet branch=feature/129-spike-base-ui-under-react base=2239a7f
+2026-10-23T11:44:49+0700 #129 dry-run: git worktree add /home/dinhtrung/develop/wt-129 -b feature/129-spike-base-ui-under-react origin/main
+2026-10-23T11:44:49+0700 #129 dry-run: brief /home/dinhtrung/tasks/task-129.md → queue dev-build18@tsim-fleet

@@ -1,0 +1,141 @@
+{
+  "project": {
+    "key": "horisen/mnp/engine/traffic-simulator-v2",
+    "forge": "gitlab",
+    "enabled": true,
+    "onhold": false,
+    "concurrency_cap": 3
+  },
+  "items": [
+    {
+      "number": 101,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 101"
+    },
+    {
+      "number": 102,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 102"
+    },
+    {
+      "number": 111,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 111"
+    },
+    {
+      "number": 114,
+      "kind": "epic",
+      "state": "open",
+      "labels": [],
+      "title": "Epic 114"
+    },
+    {
+      "number": 116,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 116"
+    },
+    {
+      "number": 117,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 117",
+      "related": [
+        {
+          "number": 116,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 118,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 118",
+      "related": [
+        {
+          "number": 117,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 119,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 119",
+      "related": [
+        {
+          "number": 116,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 120,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 120",
+      "related": [
+        {
+          "number": 119,
+          "state": "open"
+        },
+        {
+          "number": 118,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 121,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 121",
+      "related": [
+        {
+          "number": 119,
+          "state": "open"
+        }
+      ]
+    },
+    {
+      "number": 122,
+      "kind": "task",
+      "state": "open",
+      "labels": [],
+      "title": "Task 122",
+      "related": [
+        {
+          "number": 120,
+          "state": "open"
+        },
+        {
+          "number": 121,
+          "state": "open"
+        }
+      ]
+    }
+  ],
+  "rows": [],
+  "branches": [],
+  "builders": [
+    "free-0@fixture",
+    "free-1@fixture",
+    "free-2@fixture"
+  ],
+  "dispatched": [],
+  "forge_ok": true
+}

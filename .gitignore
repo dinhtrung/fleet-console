@@ -39,6 +39,10 @@ dist-ssr
 
 .env*
 
+# Python bytecode from the tick recorder
+__pycache__/
+*.pyc
+
 # Go build and release artifacts
 /fleet-console
 /fleet-console-*

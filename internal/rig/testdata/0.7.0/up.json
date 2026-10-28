@@ -1,0 +1,10 @@
+{
+  "runId": "01M61SWJ1VY23RHYJVXHREYM6A",
+  "status": "completed",
+  "errors": [],
+  "warnings": [],
+  "stages": [
+    {"stage": "import_rig", "status": "ok", "detail": {"rigName": "fc-throwaway-4", "rigId": "01M61SWJ2E08D8PKVPX5JG4QEF"}},
+    {"stage": "start_seats", "status": "ok", "detail": {}}
+  ]
+}

@@ -1,0 +1,18 @@
+Recorded from /home/dinhtrung/logs/fleet-autodispatch.log at 2026-10-23T06:49:55+0700.
+Replay-verified against /home/dinhtrung/bin/fleet-autodispatch.py: True.
+snapshot.json is the decision-relevant projection of the inputs the dispatcher read on
+that tick; expected.json is the dispatcher's own output (ready/dispatched/skip reasons).
+
+2026-10-23T06:49:55+0700 builders busy=- free=3 limit=3
+2026-10-23T06:49:58+0700 open epics [101, 102, 111, 114]; open tasks [115, 116, 117, 118, 119, 120, 121, 122]
+2026-10-23T06:50:05+0700 #116 skip: blocked by open #115
+2026-10-23T06:50:06+0700 #117 skip: blocked by open #116
+2026-10-23T06:50:08+0700 #118 skip: blocked by open #117
+2026-10-23T06:50:09+0700 #119 skip: blocked by open #116
+2026-10-23T06:50:10+0700 #120 skip: blocked by open #119, #118
+2026-10-23T06:50:11+0700 #121 skip: blocked by open #119
+2026-10-23T06:50:12+0700 #122 skip: blocked by open #120, #121
+2026-10-23T06:50:12+0700 ready: [115]
+2026-10-23T06:50:14+0700 #115 plan: seat=dev-build18@tsim-fleet branch=feature/115-spike-tanstack-table-v9-under base=730782b
+2026-10-23T06:50:14+0700 #115 dry-run: git worktree add /home/dinhtrung/develop/wt-115 -b feature/115-spike-tanstack-table-v9-under origin/main
+2026-10-23T06:50:14+0700 #115 dry-run: brief /home/dinhtrung/tasks/task-115.md → queue dev-build18@tsim-fleet
