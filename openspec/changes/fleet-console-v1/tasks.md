@@ -5,12 +5,12 @@ rules and the oracle come before any surface (design §15.8).
 
 ## 1. Contract, skeleton, rules port (P0)
 
-- [ ] 1.1 Go module `github.com/dinhtrung/fleet-console`, `cmd/fleet-console`, `internal/{store,forge,rig,git,decide,act,web}`, Go 1.25. Verify: `go build ./...` and `go vet ./...` exit 0.
-- [ ] 1.2 Fiber v3 app skeleton: `/api/health`, `/api/compat`, bearer middleware, `Idempotency-Key` middleware, graceful shutdown on SIGTERM. Verify: `go test ./internal/web` covers 401 without token, 200 with, and a repeated key returning the first `event_id`.
-- [ ] 1.3 SQLite store with the schema of design §6 (`modernc.org/sqlite`, WAL, `busy_timeout`), migrations, one writer guard. Verify: `go test ./internal/store` creates, reopens and migrates a temp DB; `CGO_ENABLED=0 go build ./...` succeeds.
+- [x] 1.1 Go module `github.com/dinhtrung/fleet-console`, `cmd/fleet-console`, `internal/{store,forge,rig,git,decide,act,web}`, Go 1.25. Verify: `go build ./...` and `go vet ./...` exit 0.
+- [x] 1.2 Fiber v3 app skeleton: `/api/health`, `/api/compat`, bearer middleware, `Idempotency-Key` middleware, graceful shutdown on SIGTERM. Verify: `go test ./internal/web` covers 401 without token, 200 with, and a repeated key returning the first `event_id`.
+- [x] 1.3 SQLite store with the schema of design §6 (`modernc.org/sqlite`, WAL, `busy_timeout`), migrations, one writer guard. Verify: `go test ./internal/store` creates, reopens and migrates a temp DB; `CGO_ENABLED=0 go build ./...` succeeds.
 - [ ] 1.4 Port the dispatcher's rules as pure functions over a snapshot: epic skip, parent gate, `onhold` cascade, live-row-body idempotency, branch-on-origin, one-way blocking, ascending order, cap. Verify: table tests, one per rule, named after the rule.
 - [ ] 1.5 Oracle harness: run `~/bin/fleet-autodispatch.py --dry-run` and the Go plan against the same recorded inputs; diff task sets and skip reasons. Verify: `go test ./internal/decide -run TestOracle` passes on at least 20 recorded ticks checked into `testdata/ticks/`.
-- [ ] 1.6 Rig compat probe: version floor, one real `queue list` and `ps --nodes` read, required-field checks, unknown-key log. Verify: `fleet-console --compat` prints version, floor and the two parsed shapes; a fixture with a renamed field exits non-zero naming the field.
+- [x] 1.6 Rig compat probe: version floor, one real `queue list` and `ps --nodes` read, required-field checks, unknown-key log. Verify: `fleet-console --compat` prints version, floor and the two parsed shapes; a fixture with a renamed field exits non-zero naming the field.
 
 ## 2. Rig contract and lifecycle (P0)
 
