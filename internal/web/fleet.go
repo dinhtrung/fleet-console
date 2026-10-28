@@ -1,9 +1,6 @@
 package web
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -17,8 +14,6 @@ import (
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/gofiber/fiber/v3"
 )
-
-const boardCookieName = "fleet_session"
 
 // Fleet is the read model behind the product screens.
 type Fleet struct {
@@ -485,28 +480,4 @@ func (f *Fleet) Events(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
 	return c.JSON(fiber.Map{"events": events})
-}
-
-// boardCookieValue derives the board session from the API token, so rotating
-// the token invalidates every issued cookie.
-func boardCookieValue(token string) string {
-	mac := hmac.New(sha256.New, []byte(token))
-	mac.Write([]byte("fleet-console-board"))
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-func issueBoardCookie(c fiber.Ctx, token string) {
-	c.Cookie(&fiber.Cookie{
-		Name:     boardCookieName,
-		Value:    boardCookieValue(token),
-		Path:     "/",
-		HTTPOnly: true,
-		SameSite: fiber.CookieSameSiteStrictMode,
-		MaxAge:   12 * 60 * 60,
-	})
-}
-
-func isBoardCookie(c fiber.Ctx, token string) bool {
-	got := c.Cookies(boardCookieName)
-	return got != "" && hmac.Equal([]byte(got), []byte(boardCookieValue(token)))
 }
