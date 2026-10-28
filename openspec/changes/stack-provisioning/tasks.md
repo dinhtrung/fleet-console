@@ -18,7 +18,7 @@ before it is pointed at a box that runs a fleet.
 
 ## 3. Human stops
 
-- [ ] 3.1 Four stops: harness login, `gh auth login`, `glab auth login`, seat provider key. Each prints one copy-pasteable command, exits `3`, and writes nothing secret to the log. Verify: a run on a fresh box stops at the first one with exit 3, and `grep -i 'sk-\|ghp_\|api_key' latest.log` returns nothing.
+- [x] 3.1 Four stops: harness login, `gh auth login`, `glab auth login`, seat provider key. Each prints one copy-pasteable command, exits `3`, and writes nothing secret to the log. Verify: a run on a fresh box stops at the first one with exit 3, and `grep -i 'sk-\|ghp_\|api_key' latest.log` returns nothing.
 
 ## 4. Verify
 

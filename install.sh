@@ -317,6 +317,10 @@ unit_state() {
     systemctl --user is-enabled "$name" 2>/dev/null | grep -qx enabled
 }
 
+package_installed() {
+  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'
+}
+
 step_satisfied() {
   local name=$1
   case $name in
@@ -324,9 +328,10 @@ step_satisfied() {
     path) [[ $(awk -v s="$MARKER" 'index($0,s){n++} END{print n+0}' "$HOME/.profile" 2>/dev/null) == 1 ]] ;;
     packages)
       local p
-      for p in git tmux jq curl unzip sqlite3 ca-certificates; do
+      for p in git tmux jq curl unzip sqlite3; do
         command -v "$p" >/dev/null 2>&1 || return 1
       done
+      package_installed ca-certificates || return 1
       version_matches "$(pin node)" "$(installed_version node || true)" &&
         version_matches "$(pin go)" "$(installed_version go || true)"
       ;;
@@ -551,9 +556,10 @@ apply_step() {
       ;;
     packages)
       local missing=() p
-      for p in git tmux jq curl unzip sqlite3 ca-certificates; do
+      for p in git tmux jq curl unzip sqlite3; do
         command -v "$p" >/dev/null 2>&1 || missing+=("$p")
       done
+      package_installed ca-certificates || missing+=(ca-certificates)
       if ((${#missing[@]})); then
         require_root_or_sudo
         if [[ $EUID -eq 0 ]]; then
