@@ -61,6 +61,9 @@ func TestProbeParsesRecordedFixtures(t *testing.T) {
 	if !report.OK {
 		t.Fatalf("report not ok: %s", report.Error)
 	}
+	if report.Status != StatusOK {
+		t.Fatalf("status = %q, want %q", report.Status, StatusOK)
+	}
 	if report.Version != "0.7.0" || !report.VersionOK {
 		t.Fatalf("version = %q ok=%v, want 0.7.0 at or above floor", report.Version, report.VersionOK)
 	}
@@ -89,6 +92,9 @@ func TestProbeFailsWhenPickupStateIsRenamed(t *testing.T) {
 	report := NewProbe(runner, func(string, ...any) {}).Run(context.Background())
 	if report.OK {
 		t.Fatal("report is ok with a renamed pickup.state")
+	}
+	if report.Status != StatusBlocked {
+		t.Fatalf("status = %q, want %q", report.Status, StatusBlocked)
 	}
 	if !strings.Contains(report.Error, "pickup_state") {
 		t.Fatalf("error = %q, want it to name pickup_state", report.Error)

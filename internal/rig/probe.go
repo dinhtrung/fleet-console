@@ -21,10 +21,18 @@ type SeatsShape struct {
 	Sample *Seat `json:"sample,omitempty"`
 }
 
+// Compat status values. `blocked` is the act loop's hard refusal: the mirror
+// and board keep serving, but no write may run.
+const (
+	StatusOK      = "ok"
+	StatusBlocked = "blocked"
+)
+
 // Report is the compat probe result: boot check, GET /api/compat and
 // `fleet-console --compat` all print this value.
 type Report struct {
 	OK         bool        `json:"ok"`
+	Status     string      `json:"status"`
 	Version    string      `json:"version,omitempty"`
 	VersionRaw string      `json:"version_raw,omitempty"`
 	Floor      string      `json:"floor"`
@@ -54,7 +62,7 @@ func NewProbe(runner Runner, logf func(format string, args ...any)) *Probe {
 // Run executes the version check and the two required reads. It never returns
 // a raw payload; the report is the whole contract.
 func (p *Probe) Run(ctx context.Context) Report {
-	report := Report{Floor: Floor}
+	report := Report{Floor: Floor, Status: StatusBlocked}
 
 	raw, err := p.runner.Run(ctx, "--version")
 	if err != nil {
@@ -112,7 +120,13 @@ func (p *Probe) Run(ctx context.Context) Report {
 	}
 
 	report.OK = true
+	report.Status = StatusOK
 	return report
+}
+
+// Blocked reports whether the act loop must refuse to start.
+func (r Report) Blocked() bool {
+	return !r.OK || r.Status == StatusBlocked
 }
 
 func (p *Probe) logUnknown(version, key string) {
