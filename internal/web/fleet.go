@@ -352,16 +352,16 @@ func readCapped(path string, max int) (string, error) {
 }
 
 type decisionOut struct {
-	ID          string   `json:"id"`
-	Summary     string   `json:"summary"`
-	Body        string   `json:"body"`
-	Destination string   `json:"destination"`
-	State       string   `json:"state"`
-	CreatedAt   string   `json:"created_at"`
-	DeadlineAt  string   `json:"deadline_at,omitempty"`
-	Tier        string   `json:"tier,omitempty"`
-	EvidenceRef string   `json:"evidence_ref,omitempty"`
-	Options     []string `json:"options"`
+	ID          string              `json:"id"`
+	Summary     string              `json:"summary"`
+	Body        string              `json:"body"`
+	Destination string              `json:"destination"`
+	State       string              `json:"state"`
+	CreatedAt   string              `json:"created_at"`
+	DeadlineAt  string              `json:"deadline_at,omitempty"`
+	Tier        string              `json:"tier,omitempty"`
+	EvidenceRef string              `json:"evidence_ref,omitempty"`
+	Questions   []rig.HumanQuestion `json:"questions,omitempty"`
 }
 
 func humanDecision(destination string) bool {
@@ -379,21 +379,25 @@ func (f *Fleet) Decisions(c fiber.Ctx) error {
 	}
 	out := make([]decisionOut, 0)
 	for _, row := range rows {
-		if !humanDecision(row.Destination) {
+		if row.State != "pending" && row.State != "blocked" {
 			continue
 		}
-		if row.State != "blocked" {
+		// A pending human row is an obligation the moment it is created; a blocked
+		// row also counts when its blocker is a human seat, whatever its destination.
+		if row.State == "pending" && !humanDecision(row.Destination) {
 			continue
 		}
 		item, err := f.Rig.QueueShow(c.Context(), row.ID)
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
+		if !humanDecision(item.Destination) && !(item.State == "blocked" && humanDecision(item.BlockedOn)) {
+			continue
+		}
 		d := decisionOut{
 			ID: item.ID, Summary: item.Summary, Body: item.Body, Destination: item.Destination,
 			State: item.State, CreatedAt: item.CreatedAt, DeadlineAt: item.DeadlineAt,
-			Tier: item.Tier, EvidenceRef: item.EvidenceRef,
-			Options: []string{"Approve", "Reject"},
+			Tier: item.Tier, EvidenceRef: item.EvidenceRef, Questions: item.HumanQuestions,
 		}
 		out = append(out, d)
 	}

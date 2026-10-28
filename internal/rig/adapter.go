@@ -34,22 +34,37 @@ func decode(data []byte, v any) error {
 
 // QueueItem is one queue row as the board reads it.
 type QueueItem struct {
-	ID              string `json:"id"`
-	Source          string `json:"source"`
-	Destination     string `json:"destination"`
-	State           string `json:"state"`
-	PickupState     string `json:"pickup_state"`
-	Priority        string `json:"priority"`
-	Tier            string `json:"tier"`
-	Summary         string `json:"summary"`
-	Body            string `json:"body"`
-	BlockedOn       string `json:"blocked_on"`
-	ClosureReason   string `json:"closure_reason"`
-	ObligationOwner string `json:"obligation_owner"`
-	ObligationState string `json:"obligation_state"`
-	CreatedAt       string `json:"created_at"`
-	DeadlineAt      string `json:"deadline_at"`
-	EvidenceRef     string `json:"evidence_ref"`
+	ID              string          `json:"id"`
+	Source          string          `json:"source"`
+	Destination     string          `json:"destination"`
+	State           string          `json:"state"`
+	PickupState     string          `json:"pickup_state"`
+	Priority        string          `json:"priority"`
+	Tier            string          `json:"tier"`
+	Summary         string          `json:"summary"`
+	Body            string          `json:"body"`
+	BlockedOn       string          `json:"blocked_on"`
+	ClosureReason   string          `json:"closure_reason"`
+	ObligationOwner string          `json:"obligation_owner"`
+	ObligationState string          `json:"obligation_state"`
+	CreatedAt       string          `json:"created_at"`
+	DeadlineAt      string          `json:"deadline_at"`
+	EvidenceRef     string          `json:"evidence_ref"`
+	HumanQuestions  []HumanQuestion `json:"human_questions,omitempty"`
+}
+
+// HumanOption is one answer a rig question offers.
+type HumanOption struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Recommended bool   `json:"recommended,omitempty"`
+}
+
+// HumanQuestion is one question a human decision asks.
+type HumanQuestion struct {
+	ID       string        `json:"id"`
+	Question string        `json:"question"`
+	Options  []HumanOption `json:"options"`
 }
 
 type queueItemWire struct {
@@ -63,18 +78,27 @@ type queueItemWire struct {
 		State      string `json:"state"`
 		DeadlineAt string `json:"deadlineAt"`
 	} `json:"waiting"`
-	ID            string `json:"qitemId"`
-	CreatedAt     string `json:"tsCreated"`
-	EvidenceRef   string `json:"evidenceRef"`
-	Source        string `json:"sourceSession"`
-	Destination   string `json:"destinationSession"`
-	State         string `json:"state"`
-	Priority      string `json:"priority"`
-	Tier          string `json:"tier"`
-	Summary       string `json:"summary"`
-	Body          string `json:"body"`
-	BlockedOn     string `json:"blockedOn"`
-	ClosureReason string `json:"closureReason"`
+	ID             string `json:"qitemId"`
+	CreatedAt      string `json:"tsCreated"`
+	EvidenceRef    string `json:"evidenceRef"`
+	Source         string `json:"sourceSession"`
+	Destination    string `json:"destinationSession"`
+	State          string `json:"state"`
+	Priority       string `json:"priority"`
+	Tier           string `json:"tier"`
+	Summary        string `json:"summary"`
+	Body           string `json:"body"`
+	BlockedOn      string `json:"blockedOn"`
+	ClosureReason  string `json:"closureReason"`
+	HumanQuestions []struct {
+		ID       string `json:"id"`
+		Question string `json:"question"`
+		Options  []struct {
+			ID          string `json:"id"`
+			Label       string `json:"label"`
+			Recommended bool   `json:"recommended"`
+		} `json:"options"`
+	} `json:"humanQuestions"`
 }
 
 func (w queueItemWire) item() (*QueueItem, error) {
@@ -95,6 +119,13 @@ func (w queueItemWire) item() (*QueueItem, error) {
 		CreatedAt:       w.CreatedAt,
 		DeadlineAt:      w.Waiting.DeadlineAt,
 		EvidenceRef:     w.EvidenceRef,
+	}
+	for _, question := range w.HumanQuestions {
+		converted := HumanQuestion{ID: question.ID, Question: question.Question}
+		for _, option := range question.Options {
+			converted.Options = append(converted.Options, HumanOption{ID: option.ID, Label: option.Label, Recommended: option.Recommended})
+		}
+		item.HumanQuestions = append(item.HumanQuestions, converted)
 	}
 	for _, req := range []struct {
 		field, value string

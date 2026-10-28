@@ -33,6 +33,18 @@ export interface BoardResponse {
   synced_at: string;
 }
 
+export interface HumanOption {
+  id: string;
+  label: string;
+  recommended?: boolean;
+}
+
+export interface HumanQuestion {
+  id: string;
+  question: string;
+  options: HumanOption[];
+}
+
 export interface Decision {
   id: string;
   summary: string;
@@ -43,7 +55,7 @@ export interface Decision {
   deadline_at?: string;
   tier?: string;
   evidence_ref?: string;
-  options: string[];
+  questions?: HumanQuestion[];
 }
 
 export interface Seat {

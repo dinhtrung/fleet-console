@@ -3,13 +3,16 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/gofiber/fiber/v3"
 )
@@ -73,5 +76,109 @@ func TestBoardReportsStaleWithLastSyncAndCachedItems(t *testing.T) {
 	}
 	if len(board.Projects) != 1 || len(board.Projects[0].Items) != 1 || board.Projects[0].Items[0].Number != 7 {
 		t.Fatalf("cached items were lost: %s", body)
+	}
+}
+
+type decisionRunner func(args []string) ([]byte, error)
+
+func (f decisionRunner) Run(_ context.Context, args ...string) ([]byte, error) { return f(args) }
+
+type decisionsResponse struct {
+	Decisions []struct {
+		ID        string `json:"id"`
+		State     string `json:"state"`
+		Questions []struct {
+			ID       string `json:"id"`
+			Question string `json:"question"`
+			Options  []struct {
+				ID          string `json:"id"`
+				Label       string `json:"label"`
+				Recommended bool   `json:"recommended"`
+			} `json:"options"`
+		} `json:"questions"`
+	} `json:"decisions"`
+}
+
+func decisionsApp(t *testing.T, list, show string) *fiber.App {
+	t.Helper()
+	runner := decisionRunner(func(args []string) ([]byte, error) {
+		line := strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(line, "queue list"):
+			return []byte(list), nil
+		case strings.HasPrefix(line, "queue show"):
+			return []byte(show), nil
+		}
+		return nil, fmt.Errorf("unexpected call: %s", line)
+	})
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "fleet.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	app, err := New(Config{Token: "test-token", Store: st, Rig: rig.NewAdapter(runner)})
+	if err != nil {
+		t.Fatalf("app: %v", err)
+	}
+	return app
+}
+
+func getDecisions(t *testing.T, app *fiber.App) decisionsResponse {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/decisions", nil)
+	req.Header.Set(fiber.HeaderAuthorization, "Bearer test-token")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var out decisionsResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	return out
+}
+
+func TestDecisionsListsPendingHumanRow(t *testing.T) {
+	list := `[{"qitemId":"q1","sourceSession":"a","destinationSession":"human@kernel","state":"pending","pickup":{"state":"unclaimed"}}]`
+	show := `{"qitemId":"q1","sourceSession":"a","destinationSession":"human@kernel","state":"pending","pickup":{"state":"unclaimed"},"waiting":{"owner":"human@kernel","state":"pending"}}`
+	got := getDecisions(t, decisionsApp(t, list, show))
+	if len(got.Decisions) != 1 || got.Decisions[0].ID != "q1" {
+		t.Fatalf("decisions = %+v, want the pending human row", got.Decisions)
+	}
+}
+
+func TestDecisionsListsBlockedOnHumanRow(t *testing.T) {
+	list := `[{"qitemId":"q2","sourceSession":"a","destinationSession":"bot@rig","state":"blocked","pickup":{"state":"parked"}}]`
+	show := `{"qitemId":"q2","sourceSession":"a","destinationSession":"bot@rig","state":"blocked","pickup":{"state":"parked"},"blockedOn":"human@kernel"}`
+	got := getDecisions(t, decisionsApp(t, list, show))
+	if len(got.Decisions) != 1 || got.Decisions[0].ID != "q2" {
+		t.Fatalf("decisions = %+v, want the blocked-on-human row", got.Decisions)
+	}
+}
+
+func TestDecisionsUsesRowQuestions(t *testing.T) {
+	list := `[{"qitemId":"q3","sourceSession":"a","destinationSession":"human@kernel","state":"pending","pickup":{"state":"unclaimed"}}]`
+	show := `{"qitemId":"q3","sourceSession":"a","destinationSession":"human@kernel","state":"pending","pickup":{"state":"unclaimed"},"humanQuestions":[{"id":"q1","question":"What now?","options":[{"id":"rebase","label":"Rebase"},{"id":"redispatch","label":"Re-dispatch"},{"id":"close","label":"Close as superseded","recommended":true}]}]}`
+	got := getDecisions(t, decisionsApp(t, list, show))
+	if len(got.Decisions) != 1 || len(got.Decisions[0].Questions) != 1 {
+		t.Fatalf("decisions = %+v, want one question", got.Decisions)
+	}
+	options := got.Decisions[0].Questions[0].Options
+	if len(options) != 3 || options[2].Label != "Close as superseded" || !options[2].Recommended {
+		t.Fatalf("options = %+v, want the row's three options", options)
+	}
+	for _, option := range options {
+		if option.Label == "Approve" || option.Label == "Reject" {
+			t.Fatalf("invented option %q survived", option.Label)
+		}
+	}
+}
+
+func TestDecisionsSkipsPendingBotRow(t *testing.T) {
+	list := `[{"qitemId":"q4","sourceSession":"a","destinationSession":"bot@rig","state":"pending","pickup":{"state":"unclaimed"}}]`
+	show := `{"qitemId":"q4","sourceSession":"a","destinationSession":"bot@rig","state":"pending","pickup":{"state":"unclaimed"}}`
+	if got := getDecisions(t, decisionsApp(t, list, show)); len(got.Decisions) != 0 {
+		t.Fatalf("decisions = %+v, want no pending bot row", got.Decisions)
 	}
 }
