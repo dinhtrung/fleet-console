@@ -1,0 +1,12 @@
+# Rendered by fleet-console from a project row (design §12). Each field is an
+# input the app owns; a rendered spec is never hand-edited.
+rig: {{ .Rig }}
+pod: {{ .Pod }}
+culture: {{ .Culture }}
+seats:
+{{- range .Seats }}
+  - name: {{ .Name }}
+    cwd: {{ .Cwd }}
+    runtime: {{ .Runtime }}
+    model: {{ .Model }}
+{{- end }}
