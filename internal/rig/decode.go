@@ -1,6 +1,7 @@
 package rig
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -18,6 +19,7 @@ type QueueRow struct {
 // Seat is one node from `rig ps --nodes --full --json`.
 type Seat struct {
 	NodeID    string `json:"node_id"`
+	RigID     string `json:"rig_id"`
 	Rig       string `json:"rig"`
 	Session   string `json:"session"`
 	LogicalID string `json:"logical_id"`
@@ -53,6 +55,7 @@ type queueRowWire struct {
 
 type seatWire struct {
 	NodeID    string `json:"nodeId"`
+	RigID     string `json:"rigId"`
 	Rig       string `json:"rigName"`
 	Session   string `json:"canonicalSessionName"`
 	LogicalID string `json:"logicalId"`
@@ -119,17 +122,26 @@ func ParseQueueList(data []byte, unknown func(key string)) ([]QueueRow, error) {
 
 // ParseSeats decodes the node list and enforces the seat identity fields.
 func ParseSeats(data []byte, unknown func(key string)) ([]Seat, error) {
-	var payload struct {
-		Entries []json.RawMessage `json:"entries"`
+	var entries []json.RawMessage
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		if err := json.Unmarshal(trimmed, &entries); err != nil {
+			return nil, fmt.Errorf("ps --nodes: %w", err)
+		}
+	} else {
+		var payload struct {
+			Entries []json.RawMessage `json:"entries"`
+		}
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return nil, fmt.Errorf("ps --nodes: %w", err)
+		}
+		if payload.Entries == nil {
+			return nil, &FieldError{Command: "ps --nodes", Field: "entries", Path: "entries"}
+		}
+		entries = payload.Entries
 	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, fmt.Errorf("ps --nodes: %w", err)
-	}
-	if payload.Entries == nil {
-		return nil, &FieldError{Command: "ps --nodes", Field: "entries", Path: "entries"}
-	}
-	seats := make([]Seat, 0, len(payload.Entries))
-	for i, item := range payload.Entries {
+	seats := make([]Seat, 0, len(entries))
+	for i, item := range entries {
 		var top map[string]json.RawMessage
 		if err := json.Unmarshal(item, &top); err != nil {
 			return nil, fmt.Errorf("ps --nodes: entry %d: %w", i, err)
@@ -146,6 +158,7 @@ func ParseSeats(data []byte, unknown func(key string)) ([]Seat, error) {
 		}
 		seat := Seat{
 			NodeID:    wire.NodeID,
+			RigID:     wire.RigID,
 			Rig:       wire.Rig,
 			Session:   wire.Session,
 			LogicalID: wire.LogicalID,

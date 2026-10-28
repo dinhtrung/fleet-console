@@ -1,0 +1,55 @@
+version: "0.2"
+name: "demo-rig"
+summary: "Two omp implementers and one reviewer."
+culture_file: CULTURE.md
+pods:
+  - id: dev
+    label: "Issues"
+    members:
+      - id: build-1
+        agent_ref: "local:./agents/development/implementer"
+        runtime: omp
+        model: test/builder
+        profile: default
+        env:
+          TEST_API_KEY: "test-key-not-real"
+        cwd: "/srv/worktrees/wt-fleet-1"
+        startup:
+          files:
+            - path: "guidance/first-move.md"
+              delivery_hint: send_text
+              required: true
+      - id: build-2
+        agent_ref: "local:./agents/development/implementer"
+        runtime: omp
+        model: test/builder
+        profile: default
+        env:
+          TEST_API_KEY: "test-key-not-real"
+        cwd: "/srv/worktrees/wt-fleet-2"
+        startup:
+          files:
+            - path: "guidance/first-move.md"
+              delivery_hint: send_text
+              required: true
+      - id: review
+        agent_ref: "local:./agents/development/qa"
+        runtime: omp
+        model: test/reviewer
+        profile: default
+        env:
+          TEST_API_KEY: "test-key-not-real"
+        cwd: "/srv/repo"
+        startup:
+          files:
+            - path: "guidance/first-move.md"
+              delivery_hint: send_text
+              required: true
+    edges:
+      - kind: delegates_to
+        from: build-1
+        to: review
+      - kind: delegates_to
+        from: build-2
+        to: review
+permission_policy: builtin:yolo
