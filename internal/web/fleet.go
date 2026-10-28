@@ -152,18 +152,31 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 
 	result := make([]boardProject, 0, len(projects))
 	for _, p := range projects {
-		dispatches := map[int]store.DispatchRow{}
+		// One query per project, not per item: the newest attempt per item and the
+		// newest verdict per item are folded here.
+		allDispatches, err := f.Store.DispatchesForProject(ctx, p.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		dispatches := make(map[int]store.DispatchRow, len(allDispatches))
 		live := 0
-		for _, item := range byProject[p.ID] {
-			list, err := f.Store.Dispatches(ctx, p.ID, item.Number)
-			if err != nil {
-				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		for _, dispatch := range allDispatches {
+			if _, exists := dispatches[dispatch.ItemNumber]; exists {
+				continue
 			}
-			if len(list) > 0 {
-				dispatches[item.Number] = list[0]
-				if list[0].EndedAt == nil {
-					live++
-				}
+			dispatches[dispatch.ItemNumber] = dispatch
+			if dispatch.EndedAt == nil {
+				live++
+			}
+		}
+		projectVerdicts, err := f.Store.VerdictsForProject(ctx, p.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		verdictDecision := make(map[int]string, len(projectVerdicts))
+		for _, verdict := range projectVerdicts {
+			if _, exists := verdictDecision[verdict.Item]; !exists {
+				verdictDecision[verdict.Item] = verdict.Decision
 			}
 		}
 		bp := boardProject{Key: p.Key, Name: p.Name, Paused: p.OnHold, Status: rig.StatusOK, Items: []boardItem{}}
@@ -201,14 +214,10 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 				case d.EndedAt == nil:
 					row.State, row.Reason = "building", ""
 				case hasLabel(labels, "cr:open"):
-					verdicts, err := f.Store.Verdicts(ctx, d.ID)
-					if err != nil {
-						return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-					}
-					if len(verdicts) == 0 {
-						row.State, row.Reason = "parked", "parked: change request open, no verdict"
+					if decision, ok := verdictDecision[d.ItemNumber]; ok {
+						row.State, row.Reason = "review", "verdict "+decision+", waits for merge"
 					} else {
-						row.State, row.Reason = "review", "verdict "+verdicts[0].Decision+", waits for merge"
+						row.State, row.Reason = "parked", "parked: change request open, no verdict"
 					}
 				case d.EndReason == "merged":
 					row.State, row.Reason = "review", "merged"

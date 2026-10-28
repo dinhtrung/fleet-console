@@ -26,6 +26,19 @@ type Store struct {
 // Open creates or reopens the database at path, applies pending migrations
 // and returns it. The database is usable only through the returned Store.
 func Open(ctx context.Context, path string) (*Store, error) {
+	return open(ctx, path, "sqlite")
+}
+
+// OpenWithDriver opens the same store through another registered driver name.
+// It exists so a test can wrap the driver and count queries; production uses Open.
+func OpenWithDriver(ctx context.Context, path, driverName string) (*Store, error) {
+	if driverName == "" {
+		return nil, fmt.Errorf("store: empty driver name")
+	}
+	return open(ctx, path, driverName)
+}
+
+func open(ctx context.Context, path, driverName string) (*Store, error) {
 	if path == "" {
 		return nil, fmt.Errorf("store: empty database path")
 	}
@@ -36,7 +49,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	q.Add("_pragma", "foreign_keys(1)")
 	u.RawQuery = q.Encode()
 
-	db, err := sql.Open("sqlite", u.String())
+	db, err := sql.Open(driverName, u.String())
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
