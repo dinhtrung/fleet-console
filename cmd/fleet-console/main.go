@@ -1,5 +1,5 @@
 // Command fleet-console is the control plane: one static binary serving the
-// API and, later, the embedded board.
+// API and the embedded board.
 package main
 
 import (
@@ -12,14 +12,33 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	// Embedded so a release binary keeps time-zone data on a bare box.
+	_ "time/tzdata"
+
+	"github.com/dinhtrung/fleet-console/internal/hostcheck"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/dinhtrung/fleet-console/internal/web"
 	"github.com/gofiber/fiber/v3"
 )
+
+// Set by the release build.
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildTime = "unknown"
+)
+
+type buildInfo struct {
+	Version   string `json:"version"`
+	Commit    string `json:"commit"`
+	BuildTime string `json:"build_time"`
+	RigFloor  string `json:"rig_floor"`
+}
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -31,11 +50,29 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("fleet-console", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	showVersion := flags.Bool("version", false, "print build information and exit")
+	asJSON := flags.Bool("json", false, "with --version, print JSON")
 	compat := flags.Bool("compat", false, "probe the rig CLI, print the compat report and exit")
+	migrate := flags.Bool("migrate", false, "open the database, apply migrations and exit")
 	addr := flags.String("addr", "127.0.0.1:8787", "listen address")
 	dbPath := flags.String("db", "fleet-console.db", "SQLite database path")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+
+	if *asJSON && !*showVersion {
+		return errors.New("--json requires --version")
+	}
+	if *showVersion {
+		info := buildInfo{Version: version, Commit: commit, BuildTime: buildTime, RigFloor: rig.Floor}
+		if *asJSON {
+			encoder := json.NewEncoder(stdout)
+			encoder.SetIndent("", "  ")
+			return encoder.Encode(info)
+		}
+		fmt.Fprintf(stdout, "fleet-console %s (%s) built %s; rig floor %s\n",
+			info.Version, info.Commit, info.BuildTime, info.RigFloor)
+		return nil
 	}
 
 	probe := rig.NewProbe(rig.ExecRunner{}, log.New(stderr, "", 0).Printf)
@@ -53,13 +90,29 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if *migrate {
+		db, err := store.Open(ctx, *dbPath)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		fmt.Fprintln(stdout, "database migrated")
+		return nil
+	}
+
 	token := os.Getenv("FLEET_CONSOLE_TOKEN")
 	if token == "" {
 		return errors.New("FLEET_CONSOLE_TOKEN is required")
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	// Host tools are declared, not bundled. A missing one stops startup and
+	// names itself; nothing can be dispatched without it.
+	if missing := hostcheck.Missing(os.Getenv("PATH")); len(missing) > 0 {
+		return fmt.Errorf("missing host tools on PATH: %s; the act loop stays off", strings.Join(missing, ", "))
+	}
 
 	db, err := store.Open(ctx, *dbPath)
 	if err != nil {

@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenRig daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=%h/.local/bin/rig daemon start
+ExecStop=%h/.local/bin/rig daemon stop
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

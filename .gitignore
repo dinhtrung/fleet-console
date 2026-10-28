@@ -38,3 +38,8 @@ dist-ssr
 .vercel
 
 .env*
+
+# Go build and release artifacts
+/fleet-console
+/fleet-console-*
+/internal/webui/dist/

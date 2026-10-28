@@ -1,0 +1,17 @@
+[Unit]
+Description=fleet-console control plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=%h/.config/fleet-console/fleet-console.env
+ExecStart=%h/.local/bin/fleet-console --addr 127.0.0.1:8787 --db %h/.local/state/fleet-console/fleet-console.db
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
