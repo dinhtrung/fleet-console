@@ -22,6 +22,7 @@ import (
 
 	"github.com/dinhtrung/fleet-console/internal/act"
 	"github.com/dinhtrung/fleet-console/internal/config"
+	"github.com/dinhtrung/fleet-console/internal/dblock"
 	"github.com/dinhtrung/fleet-console/internal/decide"
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/git"
@@ -50,6 +51,11 @@ type buildInfo struct {
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "fleet-console:", err)
+		if errors.Is(err, dblock.ErrHeld) {
+			// 3 is distinct from a config or flag error (1) so a supervisor can
+			// tell "another instance owns this database" from a broken config.
+			os.Exit(3)
+		}
 		os.Exit(1)
 	}
 }
@@ -289,6 +295,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
+	apply := *applyFlag || eff.Act
+	if apply {
+		// D1: exactly one process ticks a database. Acquire before the probe,
+		// token check or any write so a second instance exits before doing work.
+		owner, err := dblock.Acquire(eff.Database)
+		if err != nil {
+			return err
+		}
+		defer owner.Release()
+	}
+
 	token := eff.Token
 	if token == "" {
 		return errors.New("token is required (FLEET_CONSOLE_TOKEN, token: or token_file:)")
@@ -336,7 +353,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if gateErr != nil {
 		fmt.Fprintf(stderr, "fleet-console: %v\n", gateErr)
 	}
-	apply := *applyFlag || eff.Act
 	if apply && gateErr != nil {
 		if _, err := db.AppendEvent(ctx, store.Event{
 			Actor: "act", Kind: "tick.blocked", Subject: "startup", Detail: gateErr.Error(),
