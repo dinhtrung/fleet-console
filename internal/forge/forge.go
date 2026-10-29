@@ -16,6 +16,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Kind is the forge a project is bound to. A project is never a mix of the two.
@@ -175,7 +177,7 @@ type CandidateReader interface {
 // label, a comment, closing an item, and merging a change request at a sha.
 type Forge interface {
 	Kind() Kind
-	Items(ctx context.Context) ([]Item, error)
+	Items(ctx context.Context, timeout Timeout) ([]Item, error)
 	ChangeRequests(ctx context.Context) ([]ChangeRequest, error)
 	Notes(ctx context.Context, number int) ([]Comment, error)
 	SetMarker(ctx context.Context, number int, present bool) error
@@ -184,20 +186,66 @@ type Forge interface {
 	Merge(ctx context.Context, number int, sha string) error
 }
 
+// Timeout scales one project's read deadline with the work in it:
+// base + per_item*items, capped at ceiling. The item count is only known after the
+// issues list, so Items applies it to the per-item phase itself.
+type Timeout struct {
+	Base, PerItem, Ceiling time.Duration
+}
+
+const (
+	DefaultTimeoutBase    = 30 * time.Second
+	DefaultTimeoutPerItem = 2 * time.Second
+	DefaultTimeoutCeiling = 2 * time.Minute
+)
+
+func (t Timeout) resolved() Timeout {
+	if t.Base <= 0 {
+		t.Base = DefaultTimeoutBase
+	}
+	if t.Ceiling <= 0 {
+		t.Ceiling = DefaultTimeoutCeiling
+	}
+	if t.Ceiling < t.Base {
+		t.Ceiling = t.Base
+	}
+	return t
+}
+
+// List is the deadline for the issue list (one paginated read).
+func (t Timeout) List() time.Duration { return t.resolved().Base }
+
+// For is the deadline for the per-item reads of a project with items items.
+func (t Timeout) For(items int) time.Duration {
+	t = t.resolved()
+	limit := t.Base + time.Duration(items)*t.PerItem
+	if limit > t.Ceiling {
+		return t.Ceiling
+	}
+	return limit
+}
+
+// Hard is the hard ceiling on one project's read.
+func (t Timeout) Hard() time.Duration { return t.resolved().Ceiling }
+
 // Runner executes one CLI command. It is the only seam between an adapter and the
 // forge: the adapters use gh/glab, which own the credentials.
 type Runner interface {
 	Run(ctx context.Context, argv ...string) (stdout, stderr string, err error)
 }
 
-// Budget bounds the forge requests in one tick. It counts reads and writes alike.
+// Budget bounds the forge requests in one tick. It counts reads and writes alike;
+// the per-item reads are parallel, so Take is serialized.
 type Budget struct {
+	mu   sync.Mutex
 	Max  int
 	Used int
 }
 
 // Take records one request or refuses it.
 func (b *Budget) Take() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.Max > 0 && b.Used >= b.Max {
 		return ErrBudget
 	}

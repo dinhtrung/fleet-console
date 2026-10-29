@@ -98,6 +98,7 @@ name the file and line.
 | `gh_binary` | `gh` | `FLEET_CONSOLE_GH_BIN` | — | GitHub CLI for `forge: github` |
 | `glab_binary` | `glab` | `FLEET_CONSOLE_GLAB_BIN` | — | GitLab CLI for `forge: gitlab` |
 | `tick_interval` | `15s` | `FLEET_CONSOLE_TICK_INTERVAL` | `--tick-interval` | mirror pass interval |
+| `project_timeout` | `base: 30s`, `per_item: 2s`, `ceiling: 2m` | — | — | one project's read deadline: `base + per_item*items`, capped at `ceiling`; per-item forge reads run 8-wide |
 | `act` | `false` | — | `--apply` | apply the decide plan through the act loop: worktree, queue row, verdict, merge. Off means the board is read-only |
 | `projects` | `[]` | — | — | the registry (file only) |
 
@@ -134,6 +135,11 @@ rig_binary: rig
 gh_binary: gh
 glab_binary: glab
 tick_interval: 15s
+# one project's forge/git read deadline; scaled by the cached item count.
+project_timeout:
+  base: 30s
+  per_item: 2s
+  ceiling: 2m
 # false: the board only reads and plans. true (or --apply) executes the plan.
 act: false
 
@@ -160,6 +166,16 @@ and `--apply-config --sync-onhold` is the one path that copies it into the
 database. `--apply-config` is idempotent: the second run prints `unchanged`.
 A project removed from `projects:` is disabled (paused on the board) rather than
 forgotten; `--prune` deletes it only once it has no live dispatch.
+
+### Two-phase dispatch
+
+Dispatch writes the app's dispatch row first (`state = pending`), creates the rig
+queue row, then stamps `qitem_id` and marks it active. Boot and every acting tick
+resolve a pending row: one queue row matching the exact brief summary (or the
+branch in its body) is stamped; no match is marked `abandoned`; more than one is
+abandoned and raises one queue decision for a human. A crash between the queue
+row and the stamp therefore never creates a second row, and an abandoned attempt
+does not block the next dispatch.
 
 ### Where state lives
 

@@ -31,7 +31,7 @@ func NewFake(kind Kind) *Fake { return &Fake{KindValue: kind} }
 func (f *Fake) Kind() Kind { return f.KindValue }
 
 // Items returns the configured items or the configured read error.
-func (f *Fake) Items(context.Context) ([]Item, error) {
+func (f *Fake) Items(context.Context, Timeout) ([]Item, error) {
 	if f.ItemsErr != nil {
 		return nil, f.ItemsErr
 	}

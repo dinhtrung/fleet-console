@@ -92,6 +92,16 @@ func projectSources(ctx context.Context, db *store.Store, runner forge.Runner) (
 	return specs, nil
 }
 
+// mirrorTimeouts passes the resolved project_timeout (base + per_item*items,
+// capped at ceiling) to both mirror constructions.
+func mirrorTimeouts(eff *config.Effective) mirror.TimeoutSettings {
+	return mirror.TimeoutSettings{
+		Base:    eff.ProjectTimeout.Base,
+		PerItem: eff.ProjectTimeout.PerItem,
+		Ceiling: eff.ProjectTimeout.Ceiling,
+	}
+}
+
 // worktreeRoot is the configured worktree root for a project, else the repo's
 // parent (the same layout the old dispatcher used).
 func worktreeRoot(eff *config.Effective, project store.ProjectRow, source mirror.Project) string {
@@ -106,13 +116,13 @@ func worktreeRoot(eff *config.Effective, project store.ProjectRow, source mirror
 	return ""
 }
 
-func runTick(ctx context.Context, db *store.Store, out io.Writer, runner forge.Runner, rigRunner rig.ExecRunner) error {
+func runTick(ctx context.Context, db *store.Store, out io.Writer, runner forge.Runner, rigRunner rig.ExecRunner, timeouts mirror.TimeoutSettings) error {
 	projects, err := db.Projects(ctx)
 	if err != nil {
 		return err
 	}
 	adapter := rig.NewAdapter(rigRunner)
-	mirrorer := &mirror.Mirror{Store: db, Rig: adapter}
+	mirrorer := &mirror.Mirror{Store: db, Rig: adapter, ProjectTimeout: timeouts}
 	specs, err := projectSources(ctx, db, runner)
 	if err != nil {
 		return err
@@ -283,7 +293,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		defer db.Close()
-		return runTick(ctx, db, stdout, forgeRunner, rigRunner)
+		return runTick(ctx, db, stdout, forgeRunner, rigRunner, mirrorTimeouts(eff))
 	}
 
 	if *importState != "" {
@@ -380,6 +390,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintf(stderr, "fleet-console: record blocked act: %v\n", err)
 		}
 	}
+	if apply && gateErr == nil {
+		// D6: boot reconciles a dispatch that was written before its queue row.
+		if err := adoptPendingDispatches(ctx, db, rig.NewAdapter(rigRunner), stderr); err != nil {
+			fmt.Fprintf(stderr, "fleet-console: adopt: %v\n", err)
+		}
+	}
 
 	// The mirror runs in the server: read-only and jittered. With apply, the same
 	// tick hands the plan to the act loop after the mirror has read every project.
@@ -396,6 +412,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	specByKey := map[string]mirror.Project{}
 	go (&mirror.Mirror{
 		Store: db, Rig: rig.NewAdapter(rigRunner),
+		ProjectTimeout: mirrorTimeouts(eff),
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(stderr, "mirror: %s\n", fmt.Sprintf(format, args...))
 		},
@@ -404,6 +421,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		sources,
 		eff.TickInterval, jitter,
 		func(read mirror.TickResult) {
+			if apply && gateErr == nil {
+				if err := adoptPendingDispatches(ctx, db, rig.NewAdapter(rigRunner), stderr); err != nil {
+					fmt.Fprintf(stderr, "adopt: %v\n", err)
+				}
+			}
 			rows, err := db.Projects(ctx)
 			if err != nil {
 				return
@@ -587,4 +609,24 @@ func pruneProjects(ctx context.Context, db *store.Store, projects []config.Proje
 		pruned = append(pruned, row.Key)
 	}
 	return pruned, nil
+}
+
+// adoptPendingDispatches resolves two-phase dispatches for every project. It is
+// called at boot and on each act tick, under the one-writer lock.
+func adoptPendingDispatches(ctx context.Context, db *store.Store, adapter *rig.Adapter, out io.Writer) error {
+	projects, err := db.Projects(ctx)
+	if err != nil {
+		return err
+	}
+	for _, project := range projects {
+		result, err := act.AdoptPending(ctx, db, adapter, project, "")
+		if err != nil {
+			return fmt.Errorf("project %s: %w", project.Key, err)
+		}
+		if len(result.Adopted) > 0 || len(result.Abandoned) > 0 || len(result.Decisions) > 0 {
+			fmt.Fprintf(out, "adopt: %s adopted=%d abandoned=%d decisions=%d\n",
+				project.Key, len(result.Adopted), len(result.Abandoned), len(result.Decisions))
+		}
+	}
+	return nil
 }

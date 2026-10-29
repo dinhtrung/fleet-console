@@ -56,19 +56,26 @@ type Mirror struct {
 	Store          *store.Store
 	Rig            *rig.Adapter
 	Now            func() time.Time
-	ProjectTimeout time.Duration
+	ProjectTimeout TimeoutSettings
 	Logf           func(format string, args ...any)
 }
 
-// defaultProjectTimeout bounds one project's forge and git reads. A forge that
-// hangs marks that project stale instead of stalling the tick.
-const defaultProjectTimeout = 30 * time.Second
+// TimeoutSettings scales one project's read deadline with its item count. The
+// forge adapter applies it to the per-item phase once it knows the count; the
+// cached count covers the change-request and git reads.
+type TimeoutSettings = forge.Timeout
 
-func (m *Mirror) projectTimeout() time.Duration {
-	if m.ProjectTimeout > 0 {
-		return m.ProjectTimeout
+// projectTimeoutFor returns base + per_item*items, capped at the ceiling, from
+// the cached item count. The first tick of a new project uses the base; the
+// adapter scales its own per-item phase from the count it just listed.
+func (m *Mirror) projectTimeoutFor(ctx context.Context, projectID int64) time.Duration {
+	items := 0
+	if m.Store != nil {
+		if count, err := m.Store.ItemCount(ctx, projectID); err == nil {
+			items = count
+		}
 	}
-	return defaultProjectTimeout
+	return m.ProjectTimeout.For(items)
 }
 
 func (m *Mirror) now() time.Time {
@@ -125,10 +132,13 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 			RigWarnings: missingRigs(project.Rigs, seats),
 		}
 
+		timeout := m.projectTimeoutFor(ctx, project.ID)
 		if project.Forge != nil {
 			accepted := m.acceptedSHAs(ctx, project.ID)
-			forgeCtx, cancel := context.WithTimeout(ctx, m.projectTimeout())
-			items, itemsErr := project.Forge.Items(forgeCtx)
+			// Items applies project_timeout to its per-item phase from the count it
+			// lists; the context below is the hard ceiling for the whole forge read.
+			forgeCtx, cancel := context.WithTimeout(ctx, m.ProjectTimeout.Hard())
+			items, itemsErr := project.Forge.Items(forgeCtx, m.ProjectTimeout)
 			var crs []forge.ChangeRequest
 			var crsErr error
 			if reader, ok := project.Forge.(forge.CandidateReader); ok {
@@ -178,7 +188,7 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 		}
 
 		if project.Git != nil {
-			gitCtx, cancel := context.WithTimeout(ctx, m.projectTimeout())
+			gitCtx, cancel := context.WithTimeout(ctx, timeout)
 			branches, err := git.Index(gitCtx, project.Git)
 			cancel()
 			if err != nil {

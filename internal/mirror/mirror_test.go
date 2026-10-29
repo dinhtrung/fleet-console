@@ -37,6 +37,36 @@ func project(t *testing.T, st *store.Store) int64 {
 	return id
 }
 
+func TestProjectTimeoutScalesFromCachedItems(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	id := project(t, st)
+	m := &Mirror{Store: st, ProjectTimeout: TimeoutSettings{
+		Base: 10 * time.Second, PerItem: time.Second, Ceiling: 20 * time.Second,
+	}}
+	if got := m.projectTimeoutFor(ctx, id); got != 10*time.Second {
+		t.Fatalf("first tick timeout = %s, want the base 10s", got)
+	}
+	records := make([]store.ItemRecord, 0, 15)
+	for number := 1; number <= 15; number++ {
+		records = append(records, store.ItemRecord{
+			Number: number, Kind: "task", State: "open", Title: "T", URL: "u", UpdatedAt: time.Now().UTC(),
+		})
+	}
+	if err := st.ReplaceItems(ctx, id, records); err != nil {
+		t.Fatalf("items: %v", err)
+	}
+	if got := m.projectTimeoutFor(ctx, id); got != 20*time.Second {
+		t.Fatalf("15 items timeout = %s, want the ceiling 20s", got)
+	}
+	if err := st.ReplaceItems(ctx, id, records[:3]); err != nil {
+		t.Fatalf("items: %v", err)
+	}
+	if got := m.projectTimeoutFor(ctx, id); got != 13*time.Second {
+		t.Fatalf("3 items timeout = %s, want base + 3*per_item = 13s", got)
+	}
+}
+
 func TestMirrorStaleKeepsCachedRowsAndStamp(t *testing.T) {
 	ctx := context.Background()
 	st := newStore(t)
@@ -217,9 +247,11 @@ func TestMirrorKeepsItemsWhenChangeRequestsFail(t *testing.T) {
 
 type hangingForge struct{ *forge.Fake }
 
-func (h hangingForge) Items(ctx context.Context) ([]forge.Item, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
+func (h hangingForge) Items(ctx context.Context, timeout forge.Timeout) ([]forge.Item, error) {
+	limitCtx, cancel := context.WithTimeout(ctx, timeout.List())
+	defer cancel()
+	<-limitCtx.Done()
+	return nil, limitCtx.Err()
 }
 
 func TestMirrorBoundsOneProjectRead(t *testing.T) {
@@ -227,7 +259,7 @@ func TestMirrorBoundsOneProjectRead(t *testing.T) {
 	st := newStore(t)
 	id := project(t, st)
 	slow := hangingForge{Fake: forge.NewFake(forge.KindGitLab)}
-	m := &Mirror{Store: st, ProjectTimeout: 30 * time.Millisecond}
+	m := &Mirror{Store: st, ProjectTimeout: TimeoutSettings{Base: 30 * time.Millisecond, Ceiling: 30 * time.Millisecond}}
 	started := time.Now()
 	if _, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: slow}}); err != nil {
 		t.Fatalf("tick: %v", err)

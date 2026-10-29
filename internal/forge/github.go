@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
 
 // GitHub reads and writes one repository through `gh api` and the gh CLI. REST is
@@ -42,9 +43,12 @@ type ghIssue struct {
 }
 
 // Items reads open issues, their sub-issues (the epic relation) and their blocked_by
-// dependencies.
-func (g *GitHub) Items(ctx context.Context) ([]Item, error) {
-	issues, err := g.openIssues(ctx)
+// dependencies. The per-item calls run through a small worker pool: with one CLI
+// process per item, a serial loop cannot fit a large repository into a tick.
+func (g *GitHub) Items(ctx context.Context, timeout Timeout) ([]Item, error) {
+	listCtx, cancelList := context.WithTimeout(ctx, timeout.List())
+	issues, err := g.openIssues(listCtx)
+	cancelList()
 	if err != nil {
 		return nil, err
 	}
@@ -74,40 +78,75 @@ func (g *GitHub) Items(ctx context.Context) ([]Item, error) {
 			}
 		}
 	}
+	total := len(numbers)
+	var completed atomic.Int64
+	itemsCtx, cancelItems := context.WithTimeout(ctx, timeout.For(total))
+	defer cancelItems()
 
-	// Sub-issues are the epic relation. A child named by its parent is a child even when
-	// it is closed and therefore absent from the open list.
-	for _, number := range numbers {
+	// Phase 1: sub-issues are the epic relation. A child named by its parent is a
+	// child even when it is closed and therefore absent from the open list.
+	var fetch []int
+	for index, number := range numbers {
 		if hasSummary[number] && !epics[number] {
 			continue
 		}
-		children, err := g.subIssues(ctx, number)
+		fetch = append(fetch, index)
+	}
+	children := make([][]ghChild, len(numbers))
+	if failed, err := parallelEach(itemsCtx, len(fetch), Parallelism, func(ctx context.Context, slot int) error {
+		index := fetch[slot]
+		result, err := g.subIssues(ctx, numbers[index])
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if len(children) == 0 {
+		children[index] = result
+		if len(result) > 0 {
+			completed.Add(1) // an epic is fully read here; its deps are not read
+		}
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("read %d of %d items, stopped at #%d: %w",
+			completed.Load(), total, numbers[fetch[failed]], err)
+	}
+	for _, index := range fetch {
+		number := numbers[index]
+		if len(children[index]) == 0 {
 			continue
 		}
 		epics[number] = true
 		byNumber[number].Kind = KindEpic
-		for _, child := range children {
+		for _, entry := range children[index] {
 			parent := number
-			if item, ok := byNumber[child.Number]; ok {
+			if item, ok := byNumber[entry.Number]; ok {
 				item.Parent = &parent
 			}
 		}
 	}
 
-	for _, number := range numbers {
-		item := byNumber[number]
-		if item.Kind == KindEpic {
+	// Phase 2: blocked_by for every non-epic item.
+	var tasks []int
+	for index, number := range numbers {
+		if epics[number] {
 			continue
 		}
-		blockers, err := g.blockedBy(ctx, number)
+		tasks = append(tasks, index)
+	}
+	links := make([][]Link, len(numbers))
+	if failed, err := parallelEach(itemsCtx, len(tasks), Parallelism, func(ctx context.Context, slot int) error {
+		index := tasks[slot]
+		result, err := g.blockedBy(ctx, numbers[index])
 		if err != nil {
-			return nil, err
+			return err
 		}
-		item.BlockedBy = blockers
+		links[index] = result
+		completed.Add(1)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("read %d of %d items, stopped at #%d: %w",
+			completed.Load(), total, numbers[tasks[failed]], err)
+	}
+	for _, index := range tasks {
+		byNumber[numbers[index]].BlockedBy = links[index]
 	}
 
 	sort.Ints(numbers)
@@ -138,19 +177,18 @@ func (g *GitHub) openIssues(ctx context.Context) ([]ghIssue, error) {
 	return all, nil
 }
 
-func (g *GitHub) subIssues(ctx context.Context, number int) ([]struct {
+type ghChild struct {
 	Number int    `json:"number"`
 	State  string `json:"state"`
-}, error) {
+}
+
+func (g *GitHub) subIssues(ctx context.Context, number int) ([]ghChild, error) {
 	path := fmt.Sprintf("repos/%s/issues/%d/sub_issues", g.slug, number)
 	raw, err := g.cli.api(ctx, path)
 	if err != nil {
 		return nil, err
 	}
-	var children []struct {
-		Number int    `json:"number"`
-		State  string `json:"state"`
-	}
+	var children []ghChild
 	if err := json.Unmarshal(raw, &children); err != nil {
 		return nil, fmt.Errorf("forge: decode GitHub sub-issues: %w", err)
 	}

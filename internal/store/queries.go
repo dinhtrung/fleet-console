@@ -54,6 +54,7 @@ type DispatchRow struct {
 	CreatedAt  string  `json:"created_at"`
 	EndedAt    *string `json:"ended_at,omitempty"`
 	EndReason  string  `json:"end_reason"`
+	State      string  `json:"state"`
 }
 
 // VerdictRow is one reviewer verdict.
@@ -131,6 +132,17 @@ func (s *Store) Items(ctx context.Context) ([]ItemRow, error) {
 	return out, rows.Err()
 }
 
+// ItemCount returns how many items are cached for a project. The mirror uses it
+// to scale the project deadline before the forge read (base + per-item).
+func (s *Store) ItemCount(ctx context.Context, projectID int64) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM item WHERE project_id = ?`, projectID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("store: item count: %w", err)
+	}
+	return count, nil
+}
+
 // Item finds one item by project and number.
 func (s *Store) Item(ctx context.Context, projectID int64, number int) (*ItemRow, error) {
 	var item ItemRow
@@ -158,7 +170,7 @@ func (s *Store) Item(ctx context.Context, projectID int64, number int) (*ItemRow
 func (s *Store) Dispatches(ctx context.Context, projectID int64, number int) ([]DispatchRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_id, item_number, attempt, seat, branch, worktree, base_sha,
-		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, '')
+		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, ''), state
 		FROM dispatch WHERE project_id = ? AND item_number = ? ORDER BY attempt DESC`, projectID, number)
 	if err != nil {
 		return nil, fmt.Errorf("store: dispatches: %w", err)
@@ -169,7 +181,7 @@ func (s *Store) Dispatches(ctx context.Context, projectID int64, number int) ([]
 		var d DispatchRow
 		var ended sql.NullString
 		if err := rows.Scan(&d.ID, &d.ProjectID, &d.ItemNumber, &d.Attempt, &d.Seat, &d.Branch, &d.Worktree,
-			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason); err != nil {
+			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason, &d.State); err != nil {
 			return nil, fmt.Errorf("store: dispatches: %w", err)
 		}
 		if ended.Valid {

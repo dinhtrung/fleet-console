@@ -54,16 +54,30 @@ type Project struct {
 
 // File is the YAML shape. KnownFields rejects anything else.
 type File struct {
-	Listen       string    `yaml:"listen"`
-	Database     string    `yaml:"database"`
-	Token        string    `yaml:"token"`
-	TokenFile    string    `yaml:"token_file"`
-	RigBinary    string    `yaml:"rig_binary"`
-	GhBinary     string    `yaml:"gh_binary"`
-	GlabBinary   string    `yaml:"glab_binary"`
-	TickInterval Duration  `yaml:"tick_interval"`
-	Act          bool      `yaml:"act"`
-	Projects     []Project `yaml:"projects"`
+	Listen         string         `yaml:"listen"`
+	Database       string         `yaml:"database"`
+	Token          string         `yaml:"token"`
+	TokenFile      string         `yaml:"token_file"`
+	RigBinary      string         `yaml:"rig_binary"`
+	GhBinary       string         `yaml:"gh_binary"`
+	GlabBinary     string         `yaml:"glab_binary"`
+	TickInterval   Duration       `yaml:"tick_interval"`
+	ProjectTimeout ProjectTimeout `yaml:"project_timeout"`
+	Act            bool           `yaml:"act"`
+	Projects       []Project      `yaml:"projects"`
+}
+
+// ProjectTimeout is the file form of the per-project read deadline:
+// base + per_item*items, capped at ceiling. The mirror resolves it per project.
+type ProjectTimeout struct {
+	Base    Duration `yaml:"base"`
+	PerItem Duration `yaml:"per_item"`
+	Ceiling Duration `yaml:"ceiling"`
+}
+
+// Timeouts is the resolved per-project read deadline.
+type Timeouts struct {
+	Base, PerItem, Ceiling time.Duration
 }
 
 // Options are the inputs to Load.
@@ -77,19 +91,20 @@ type Options struct {
 
 // Effective is the resolved configuration and where each value came from.
 type Effective struct {
-	Listen       string
-	Database     string
-	Token        string
-	TokenFile    string
-	RigBinary    string
-	GhBinary     string
-	GlabBinary   string
-	TickInterval time.Duration
-	Act          bool
-	Projects     []Project
-	ConfigPath   string
-	Sources      map[string]string
-	Warnings     []string
+	Listen         string
+	Database       string
+	Token          string
+	TokenFile      string
+	RigBinary      string
+	GhBinary       string
+	GlabBinary     string
+	TickInterval   time.Duration
+	ProjectTimeout Timeouts
+	Act            bool
+	Projects       []Project
+	ConfigPath     string
+	Sources        map[string]string
+	Warnings       []string
 }
 
 const (
@@ -209,6 +224,24 @@ func Load(opts Options) (*Effective, error) {
 		tick, tickSource = parsed, "flag"
 	}
 	eff.TickInterval, eff.Sources["tick_interval"] = tick, tickSource
+
+	base, perItem, ceiling := 30*time.Second, 2*time.Second, 2*time.Minute
+	timeoutSource := "default"
+	if file.ProjectTimeout.Base > 0 {
+		base, timeoutSource = time.Duration(file.ProjectTimeout.Base), "file"
+	}
+	if file.ProjectTimeout.PerItem > 0 {
+		perItem, timeoutSource = time.Duration(file.ProjectTimeout.PerItem), "file"
+	}
+	if file.ProjectTimeout.Ceiling > 0 {
+		ceiling, timeoutSource = time.Duration(file.ProjectTimeout.Ceiling), "file"
+	}
+	if ceiling < base {
+		return nil, fmt.Errorf("config: project_timeout.ceiling %s is below base %s", ceiling, base)
+	}
+	eff.ProjectTimeout = Timeouts{Base: base, PerItem: perItem, Ceiling: ceiling}
+	eff.Sources["project_timeout"] = timeoutSource
+
 	eff.Act = file.Act
 	if file.Act {
 		eff.Sources["act"] = "file"
@@ -380,25 +413,33 @@ func readTokenFile(path string) (string, error) {
 // with the source of every value.
 func (e *Effective) Print() ([]byte, error) {
 	type view struct {
-		Config     string            `yaml:"config"`
-		Listen     string            `yaml:"listen"`
-		Database   string            `yaml:"database"`
-		Token      string            `yaml:"token,omitempty"`
-		TokenFile  string            `yaml:"token_file,omitempty"`
-		RigBinary  string            `yaml:"rig_binary"`
-		GhBinary   string            `yaml:"gh_binary"`
-		GlabBinary string            `yaml:"glab_binary"`
-		Tick       string            `yaml:"tick_interval"`
-		Act        bool              `yaml:"act"`
-		Projects   []Project         `yaml:"projects,omitempty"`
-		Sources    map[string]string `yaml:"sources"`
-		Warnings   []string          `yaml:"warnings,omitempty"`
+		Config     string `yaml:"config"`
+		Listen     string `yaml:"listen"`
+		Database   string `yaml:"database"`
+		Token      string `yaml:"token,omitempty"`
+		TokenFile  string `yaml:"token_file,omitempty"`
+		RigBinary  string `yaml:"rig_binary"`
+		GhBinary   string `yaml:"gh_binary"`
+		GlabBinary string `yaml:"glab_binary"`
+		Tick       string `yaml:"tick_interval"`
+		Timeout    struct {
+			Base    string `yaml:"base"`
+			PerItem string `yaml:"per_item"`
+			Ceiling string `yaml:"ceiling"`
+		} `yaml:"project_timeout"`
+		Act      bool              `yaml:"act"`
+		Projects []Project         `yaml:"projects,omitempty"`
+		Sources  map[string]string `yaml:"sources"`
+		Warnings []string          `yaml:"warnings,omitempty"`
 	}
 	out := view{
 		Config: e.ConfigPath, Listen: e.Listen, Database: e.Database, TokenFile: e.TokenFile,
 		RigBinary: e.RigBinary, GhBinary: e.GhBinary, GlabBinary: e.GlabBinary,
 		Tick: e.TickInterval.String(), Act: e.Act, Projects: e.Projects, Sources: e.Sources, Warnings: e.Warnings,
 	}
+	out.Timeout.Base = e.ProjectTimeout.Base.String()
+	out.Timeout.PerItem = e.ProjectTimeout.PerItem.String()
+	out.Timeout.Ceiling = e.ProjectTimeout.Ceiling.String()
 	if out.Config == "" {
 		out.Config = "(none)"
 	}
