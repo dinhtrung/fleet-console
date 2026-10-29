@@ -15,7 +15,7 @@ type QueueShape struct {
 	Sample *QueueRow `json:"sample,omitempty"`
 }
 
-// SeatsShape is the parsed shape of `rig ps --nodes --full --json`.
+// SeatsShape is the parsed shape of `rig ps --nodes -A --full --json`.
 type SeatsShape struct {
 	Seats  int   `json:"seats"`
 	Sample *Seat `json:"sample,omitempty"`
@@ -104,7 +104,7 @@ func (p *Probe) Run(ctx context.Context) Report {
 		report.Queue.Sample = &rows[0]
 	}
 
-	data, err = p.runner.Run(ctx, "ps", "--nodes", "--full", "--json")
+	data, err = p.runner.Run(ctx, "ps", "--nodes", "-A", "--full", "--json")
 	if err != nil {
 		report.Error = fmt.Sprintf("rig ps --nodes: %v", err)
 		return report

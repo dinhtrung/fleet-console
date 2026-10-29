@@ -292,7 +292,7 @@ func (a *Adapter) writeItem(ctx context.Context, command string, args ...string)
 
 // Seats reads every node in every rig.
 func (a *Adapter) Seats(ctx context.Context) ([]Seat, error) {
-	data, err := a.run(ctx, "ps", "--nodes", "--full", "--json")
+	data, err := a.run(ctx, "ps", "--nodes", "-A", "--full", "--json")
 	if err != nil {
 		return nil, err
 	}

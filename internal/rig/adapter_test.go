@@ -103,6 +103,27 @@ func TestQueueWritesBuildExpectedArgv(t *testing.T) {
 	}
 }
 
+func TestSeatsTargetsFleetWide(t *testing.T) {
+	runner := &scriptedRunner{fn: func(args []string) ([]byte, error) {
+		for _, arg := range args {
+			if arg == "-A" {
+				return fixtureBytes(t, "ps-rig.json"), nil
+			}
+		}
+		return nil, fmt.Errorf("ps without a target: %s", strings.Join(args, " "))
+	}}
+	seats, err := NewAdapter(runner).Seats(context.Background())
+	if err != nil {
+		t.Fatalf("seats: %v", err)
+	}
+	if len(seats) != 3 {
+		t.Fatalf("seats = %d, want 3", len(seats))
+	}
+	if !runner.saw("ps --nodes -A --full --json") {
+		t.Fatalf("argv = %v, want -A", runner.calls)
+	}
+}
+
 func TestSeatsForRigBareArray(t *testing.T) {
 	runner := &scriptedRunner{fn: func([]string) ([]byte, error) {
 		return fixtureBytes(t, "ps-rig.json"), nil
