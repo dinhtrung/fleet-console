@@ -412,13 +412,32 @@ func run(args []string, stdout, stderr io.Writer) error {
 				specByKey[source.Key] = source
 			}
 			for _, project := range rows {
+				projectRead := read.Projects[project.Key]
+				// D4: reconcile the app's dispatch rows against the rig before
+				// planning. A reconciled item must not be dispatched again in the
+				// same tick.
+				suppress := map[int]bool{}
+				if apply && gateErr == nil {
+					reconciled, err := act.Reconcile(ctx, db, project, projectRead.Rows, projectRead.CRs, read.At)
+					if err != nil {
+						fmt.Fprintf(stderr, "reconcile: %s: %v\n", project.Key, err)
+					} else if len(reconciled.Changed) > 0 {
+						fmt.Fprintf(stderr, "reconcile: %s ended=%d\n", project.Key, len(reconciled.Changed))
+						for _, item := range reconciled.Changed {
+							suppress[item] = true
+						}
+					}
+				}
 				dispatches, err1 := db.DispatchesForProject(ctx, project.ID)
 				verdicts, err2 := db.VerdictsForProject(ctx, project.ID)
 				if err1 != nil || err2 != nil {
 					continue
 				}
-				projectRead := read.Projects[project.Key]
-				plan := decide.PlanTick(mirror.BuildSnapshot(project, projectRead, dispatches, verdicts), read.At)
+				snapshot := mirror.BuildSnapshot(project, projectRead, dispatches, verdicts)
+				for item := range suppress {
+					snapshot.Dispatched = append(snapshot.Dispatched, item)
+				}
+				plan := decide.PlanTick(snapshot, read.At)
 				fmt.Fprintf(stderr, "mirror: %s status=%s intents=%d\n", project.Key, plan.Status, len(plan.Intents))
 				if !apply || gateErr != nil {
 					continue

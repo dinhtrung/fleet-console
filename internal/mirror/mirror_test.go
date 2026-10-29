@@ -299,3 +299,19 @@ func TestMirrorPassesAcceptedVerdictSHAs(t *testing.T) {
 		t.Fatalf("accepted shas = %v, want the ACCEPT verdict head lowercased", fake.Accepted)
 	}
 }
+
+// TestBuildSnapshotIgnoresEndedDispatches: an ended attempt is not a live
+// duplicate; reconciliation ends it before planning so the item can be retried.
+func TestBuildSnapshotIgnoresEndedDispatches(t *testing.T) {
+	at := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
+	ended := at.Format(time.RFC3339Nano)
+	project := store.ProjectRow{ID: 1, Key: "app", ForgeKind: "github", Enabled: true}
+	dispatches := []store.DispatchRow{
+		{ItemNumber: 5, QItemID: "open", CreatedAt: at.Format(time.RFC3339Nano)},
+		{ItemNumber: 6, QItemID: "ended", CreatedAt: at.Format(time.RFC3339Nano), EndedAt: &ended, EndReason: "superseded"},
+	}
+	snapshot := BuildSnapshot(project, ProjectResult{}, dispatches, nil)
+	if len(snapshot.Dispatched) != 1 || snapshot.Dispatched[0] != 5 {
+		t.Fatalf("dispatched = %v, want only the open attempt #5", snapshot.Dispatched)
+	}
+}
