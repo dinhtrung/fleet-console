@@ -156,6 +156,17 @@ func (a *Actions) Dispatch(ctx context.Context, in DispatchInput) (*DispatchResu
 		return nil, fmt.Errorf("dispatch: write brief: %w", err)
 	}
 
+	// Two-phase dispatch: the app row exists before the rig row, so a crash
+	// between them leaves a pending dispatch that boot adoption resolves instead
+	// of a second queue row on the next tick.
+	dispatchID, err := a.Store.CreateDispatch(ctx, store.NewDispatch{
+		ProjectID: in.ProjectID, ItemNumber: in.Item.Number, Attempt: attempt, Seat: in.Seat,
+		Branch: branch, Worktree: worktree, BaseSHA: base, QItemID: "",
+		BriefPath: briefPath, State: "pending", CreatedAt: a.now(),
+	})
+	if err != nil {
+		return nil, err
+	}
 	row, err := a.Rig.QueueCreate(ctx, rig.CreateRequest{
 		Destination: in.Seat,
 		Summary:     fmt.Sprintf("#%d %s", in.Item.Number, in.Item.Title),
@@ -165,15 +176,10 @@ func (a *Actions) Dispatch(ctx context.Context, in DispatchInput) (*DispatchResu
 	if err != nil {
 		return nil, err
 	}
-	if err := a.Forge.SetMarker(ctx, in.Item.Number, true); err != nil {
+	if err := a.Store.StampDispatch(ctx, dispatchID, row.ID); err != nil {
 		return nil, err
 	}
-	dispatchID, err := a.Store.CreateDispatch(ctx, store.NewDispatch{
-		ProjectID: in.ProjectID, ItemNumber: in.Item.Number, Attempt: attempt, Seat: in.Seat,
-		Branch: branch, Worktree: worktree, BaseSHA: base, QItemID: row.ID,
-		BriefPath: briefPath, CreatedAt: a.now(),
-	})
-	if err != nil {
+	if err := a.Forge.SetMarker(ctx, in.Item.Number, true); err != nil {
 		return nil, err
 	}
 	eventID, err := a.event(ctx, "act", "dispatch.create", fmt.Sprintf("#%d", in.Item.Number),

@@ -76,7 +76,8 @@ func Reconcile(ctx context.Context, st *store.Store, project store.ProjectRow, r
 	}
 
 	for _, dispatch := range dispatches {
-		if dispatch.EndedAt != nil {
+		if dispatch.EndedAt != nil || dispatch.State == "pending" {
+			// Pending two-phase dispatches are the adoption pass's job.
 			continue
 		}
 		item := dispatch.ItemNumber
