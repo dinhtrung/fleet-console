@@ -240,9 +240,15 @@ type glMergeRequest struct {
 	WebURL      string `json:"web_url"`
 }
 
-// ChangeRequests reads open merge requests, their changed files and the head
-// pipeline's jobs.
+// ChangeRequests reads every merge request without candidate filtering.
 func (g *GitLab) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
+	return g.ChangeRequestsFor(ctx, nil)
+}
+
+// ChangeRequestsFor lists merge requests page by page and fetches changed files
+// and pipeline jobs only for candidates: open merge requests that close an item
+// or whose head sha carries an ACCEPT verdict. Everything else stays metadata.
+func (g *GitLab) ChangeRequestsFor(ctx context.Context, accepted map[string]struct{}) ([]ChangeRequest, error) {
 	var requests []ChangeRequest
 	for page := 1; ; page++ {
 		path := fmt.Sprintf("projects/%s/merge_requests?state=all&per_page=100&page=%d", g.enc, page)
@@ -255,21 +261,24 @@ func (g *GitLab) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 			return nil, fmt.Errorf("forge: decode GitLab merge requests: %w", err)
 		}
 		for _, mr := range batch {
-			paths, err := g.changedPaths(ctx, mr.IID)
-			if err != nil {
-				return nil, err
-			}
-			checks, err := g.jobs(ctx, mr)
-			if err != nil {
-				return nil, err
-			}
-			requests = append(requests, ChangeRequest{
-				Number: mr.IID, State: mr.State, Merged: strings.EqualFold(mr.State, "merged"),
+			request := ChangeRequest{
+				Number: mr.IID, State: normalizeMRState(mr.State), Merged: strings.EqualFold(mr.State, "merged"),
 				HeadSHA: mr.SHA, Draft: mr.Draft,
 				Mergeable: strings.EqualFold(mr.MergeStatus, "can_be_merged"),
-				Body:      mr.Description, ClosesItem: ParseCloses(mr.Description),
-				Checks: checks, DocsOnly: DocsOnly(paths), URL: mr.WebURL,
-			})
+				Body:      mr.Description, ClosesItem: ParseCloses(mr.Description), URL: mr.WebURL,
+			}
+			if mrNeedsDetails(mr, request.ClosesItem, accepted) {
+				paths, err := g.changedPaths(ctx, mr.IID)
+				if err != nil {
+					return nil, err
+				}
+				checks, err := g.jobs(ctx, mr)
+				if err != nil {
+					return nil, err
+				}
+				request.Checks, request.DocsOnly = checks, DocsOnly(paths)
+			}
+			requests = append(requests, request)
 		}
 		if len(batch) < 100 {
 			break
@@ -277,6 +286,33 @@ func (g *GitLab) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 	}
 	sort.Slice(requests, func(a, b int) bool { return requests[a].Number < requests[b].Number })
 	return requests, nil
+}
+
+// normalizeMRState gives the forge-neutral state the rest of the app matches on.
+func normalizeMRState(state string) string {
+	switch strings.ToLower(state) {
+	case "opened":
+		return "open"
+	case "merged":
+		return "merged"
+	case "closed", "locked":
+		return "closed"
+	default:
+		return strings.ToLower(state)
+	}
+}
+
+// mrNeedsDetails reports whether the merge watchdog could act on this merge
+// request this tick. Closed and merged requests never need another read.
+func mrNeedsDetails(mr glMergeRequest, closes int, accepted map[string]struct{}) bool {
+	if !strings.EqualFold(mr.State, "opened") {
+		return false
+	}
+	if closes > 0 {
+		return true
+	}
+	_, ok := accepted[strings.ToLower(mr.SHA)]
+	return ok
 }
 
 func (g *GitLab) changedPaths(ctx context.Context, number int) ([]string, error) {

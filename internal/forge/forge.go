@@ -163,6 +163,14 @@ type Comment struct {
 	CreatedAt string `json:"created_at"`
 }
 
+// CandidateReader is implemented by a forge that can skip per-change details for
+// changes that cannot matter this tick. accepted holds the head SHAs of ACCEPT
+// verdicts; a change is a candidate when it is open and either closes an item or
+// its head sha is in accepted.
+type CandidateReader interface {
+	ChangeRequestsFor(ctx context.Context, accepted map[string]struct{}) ([]ChangeRequest, error)
+}
+
 // Forge is the whole interface the app has to a forge. Exactly four writes: the marker
 // label, a comment, closing an item, and merging a change request at a sha.
 type Forge interface {

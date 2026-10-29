@@ -358,7 +358,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return specs, err
 	}
 	specByKey := map[string]mirror.Project{}
-	go (&mirror.Mirror{Store: db, Rig: rig.NewAdapter(rigRunner)}).Loop(
+	go (&mirror.Mirror{
+		Store: db, Rig: rig.NewAdapter(rigRunner),
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(stderr, "mirror: %s\n", fmt.Sprintf(format, args...))
+		},
+	}).Loop(
 		ctx,
 		sources,
 		eff.TickInterval, jitter,
