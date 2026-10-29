@@ -179,3 +179,85 @@ func hasSkip(report TickReport, needle string) bool {
 	}
 	return false
 }
+
+// TestRunTickRaisesOneStaleVerdictDecision: D2 — one reviewer row per (item, head),
+// never a loop, and no merge on the stale verdict.
+func TestRunTickRaisesOneStaleVerdictDecision(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	st := newStore(t)
+	pid := newProject(t, st)
+	dispatchID, err := st.CreateDispatch(ctx, store.NewDispatch{
+		ProjectID: pid, ItemNumber: 5, Attempt: 1, Seat: "seat@rig",
+		Branch: "feature/5-x", Worktree: "wt", BaseSHA: "base", CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if _, err := st.AddVerdict(ctx, store.NewVerdict{
+		DispatchID: dispatchID, SHA: "oldsha1", Decision: "accept", Source: "note 1", At: now,
+	}); err != nil {
+		t.Fatalf("verdict: %v", err)
+	}
+	queue := &queueStub{item: &rig.QueueItem{ID: "qitem-review-1", State: "pending"}}
+	fake := forge.NewFake(forge.KindGitHub)
+	fake.RequestsValue = []forge.ChangeRequest{{
+		Number: 9, HeadSHA: "newsha1", Mergeable: true, Body: "Closes #5", DocsOnly: true,
+	}}
+	// The plan is computed by the same decide pass the server runs: a stale
+	// verdict produces a decision.stale intent, which the tick must execute once.
+	plan := decide.PlanTick(decide.Snapshot{
+		Project:  decide.Project{Key: "app", Forge: decide.ForgeGitHub, Enabled: true},
+		Items:    []decide.Item{{Number: 5, Kind: decide.KindTask, State: decide.StateOpen, Title: "Five"}},
+		CRs:      []decide.CRState{{Number: 9, Item: 5, State: "open", HeadSHA: "newsha1"}},
+		Verdicts: []decide.VerdictState{{Item: 5, SHA: "oldsha1", Decision: "accept"}},
+		ForgeOK:  true,
+	}, now)
+	var raise *decide.Intent
+	for index := range plan.Intents {
+		if plan.Intents[index].Kind == decide.IntentRaiseDecision {
+			raise = &plan.Intents[index]
+		}
+	}
+	if raise == nil || raise.Event.Kind != "decision.stale" {
+		t.Fatalf("plan = %+v, want a decision.stale intent", plan)
+	}
+	project := store.ProjectRow{ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r", Rig: "rig", Enabled: true}
+	in := TickInput{
+		Store: st, Project: project, Forge: fake, Rig: queue, Git: &fakeGit{},
+		Gate: openGate(), Apply: true, Items: fake.ItemsValue, CRs: fake.RequestsValue,
+		Plan: plan, WorktreeRoot: t.TempDir(), Now: func() time.Time { return now },
+	}
+
+	first, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	if len(first.Decisions) != 1 || first.Decisions[0] != "qitem-review-1" {
+		t.Fatalf("first = %+v, want one reviewer row", first)
+	}
+	if hasWrite(fake.Writes, "merge", 9, "") {
+		t.Fatalf("merged on a stale verdict: %+v", fake.Writes)
+	}
+
+	second, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+	if len(second.Decisions) != 0 {
+		t.Fatalf("second = %+v, want no second row", second)
+	}
+	if queue.createCalls != 1 {
+		t.Fatalf("queue creates = %d, want one per (item, head)", queue.createCalls)
+	}
+	events, _ := st.EventsForItem(ctx, 5, 20)
+	stale := 0
+	for _, event := range events {
+		if event.Kind == "decision.stale" {
+			stale++
+		}
+	}
+	if stale != 1 {
+		t.Fatalf("decision.stale events = %d, want one", stale)
+	}
+}

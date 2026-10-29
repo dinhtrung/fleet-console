@@ -40,6 +40,7 @@ type TickReport struct {
 	Dispatches []DispatchResult
 	Verdicts   []CapturedVerdict
 	Merges     []*MergeResult
+	Decisions  []string
 	Skipped    []string
 }
 
@@ -93,6 +94,20 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			continue
 		}
 		report.Merges = append(report.Merges, merged)
+	}
+
+	for _, intent := range in.Plan.Intents {
+		if intent.Kind != decide.IntentRaiseDecision {
+			continue
+		}
+		result, err := actions.RaiseDecision(ctx, in.Project, intent.Item, intent.Text, intent.Event.Kind, in.WorktreeRoot)
+		if err != nil {
+			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d decision: %v", intent.Item, err))
+			continue
+		}
+		if !result.NoOp {
+			report.Decisions = append(report.Decisions, result.QItemID)
+		}
 	}
 
 	for _, intent := range in.Plan.Intents {

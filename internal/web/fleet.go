@@ -122,6 +122,31 @@ func parseInts(raw string) []int {
 	return out
 }
 
+// forgeHeads maps an item to its open change request's head sha from the forge
+// snapshot. It is how the board knows a verdict sha is stale.
+func (f *Fleet) forgeHeads(ctx context.Context, projectID int64) (map[int]string, error) {
+	raw, _, err := f.Store.GetSnapshot(ctx, projectID, "forge")
+	if err != nil || len(raw) == 0 {
+		return map[int]string{}, err
+	}
+	var snapshot struct {
+		CRs []struct {
+			ClosesItem int    `json:"closes_item"`
+			HeadSHA    string `json:"head_sha"`
+		} `json:"change_requests"`
+	}
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return map[int]string{}, nil
+	}
+	heads := make(map[int]string, len(snapshot.CRs))
+	for _, cr := range snapshot.CRs {
+		if cr.ClosesItem > 0 && cr.HeadSHA != "" {
+			heads[cr.ClosesItem] = cr.HeadSHA
+		}
+	}
+	return heads, nil
+}
+
 // Board assembles projects, counts and one reason per task from stored facts.
 func (f *Fleet) Board(c fiber.Ctx) error {
 	ctx := c.Context()
@@ -192,11 +217,15 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
-		verdictDecision := make(map[int]string, len(projectVerdicts))
+		verdictByItem := make(map[int]store.VerdictForItem, len(projectVerdicts))
 		for _, verdict := range projectVerdicts {
-			if _, exists := verdictDecision[verdict.Item]; !exists {
-				verdictDecision[verdict.Item] = verdict.Decision
+			if _, exists := verdictByItem[verdict.Item]; !exists {
+				verdictByItem[verdict.Item] = verdict
 			}
+		}
+		heads, err := f.forgeHeads(ctx, p.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
 		projectStatus := statuses[p.ID]
 		bp := boardProject{Key: p.Key, Name: p.Name, Paused: p.OnHold, Status: rig.StatusOK, Items: []boardItem{}}
@@ -237,14 +266,24 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 			if row.State == "queued" && d.ItemNumber != 0 {
 				row.Seat = d.Seat
 				switch {
+				case heads[d.ItemNumber] != "" || hasLabel(labels, "cr:open"):
+					// An open change request is the review phase even while the
+					// dispatch row is still open; a stale verdict is visible here.
+					verdict, ok := verdictByItem[d.ItemNumber]
+					head := heads[d.ItemNumber]
+					switch {
+					case !ok:
+						row.State, row.Reason = "parked", "parked: change request open, no verdict"
+					case head != "" && !strings.EqualFold(verdict.SHA, head):
+						// D2: the verdict names a sha that is no longer the head.
+						row.State = "parked"
+						row.Reason = fmt.Sprintf("verdict stale: %s %s is on %s, head is %s",
+							strings.ToUpper(verdict.Decision), verdict.SHA, verdict.SHA, head)
+					default:
+						row.State, row.Reason = "review", "verdict "+verdict.Decision+", waits for merge"
+					}
 				case d.EndedAt == nil:
 					row.State, row.Reason = "building", ""
-				case hasLabel(labels, "cr:open"):
-					if decision, ok := verdictDecision[d.ItemNumber]; ok {
-						row.State, row.Reason = "review", "verdict "+decision+", waits for merge"
-					} else {
-						row.State, row.Reason = "parked", "parked: change request open, no verdict"
-					}
 				case d.EndReason == "merged":
 					row.State, row.Reason = "review", "merged"
 				case d.EndReason != "":
@@ -297,13 +336,16 @@ type checkOut struct {
 }
 
 type itemDetail struct {
-	Project  boardProject       `json:"project"`
-	Item     boardItem          `json:"item"`
-	Dispatch *store.DispatchRow `json:"dispatch,omitempty"`
-	Brief    string             `json:"brief,omitempty"`
-	Change   *changeRequest     `json:"change_request,omitempty"`
-	Verdicts []store.VerdictRow `json:"verdicts"`
-	Events   []store.EventRow   `json:"events"`
+	Project      boardProject       `json:"project"`
+	Item         boardItem          `json:"item"`
+	Dispatch     *store.DispatchRow `json:"dispatch,omitempty"`
+	Brief        string             `json:"brief,omitempty"`
+	Change       *changeRequest     `json:"change_request,omitempty"`
+	Verdicts     []store.VerdictRow `json:"verdicts"`
+	VerdictStale bool               `json:"verdict_stale,omitempty"`
+	VerdictSHA   string             `json:"verdict_sha,omitempty"`
+	HeadSHA      string             `json:"head_sha,omitempty"`
+	Events       []store.EventRow   `json:"events"`
 }
 
 type changeRequest struct {
@@ -375,6 +417,17 @@ func (f *Fleet) Item(c fiber.Ctx) error {
 				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 			}
 			detail.Verdicts = verdicts
+			if len(verdicts) > 0 {
+				heads, err := f.forgeHeads(ctx, p.ID)
+				if err != nil {
+					return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+				}
+				if head := heads[number]; head != "" && !strings.EqualFold(verdicts[0].SHA, head) {
+					detail.VerdictStale = true
+					detail.VerdictSHA = verdicts[0].SHA
+					detail.HeadSHA = head
+				}
+			}
 		}
 		events, err := f.Store.EventsForItem(ctx, number, 20)
 		if err != nil {

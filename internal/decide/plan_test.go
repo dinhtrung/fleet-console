@@ -168,3 +168,32 @@ func TestPlanDispatchIntent(t *testing.T) {
 		t.Fatalf("events = %+v, want dispatch.create", plan.Events)
 	}
 }
+
+// TestIncidentStaleVerdict: D2 — a verdict on a sha that is no longer the head is
+// its own state and asks for a re-review, with both shas named.
+func TestIncidentStaleVerdict(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "newsha1"}}
+	s.Verdicts = []VerdictState{{Item: 5, SHA: "oldsha1", Decision: "accept"}}
+	plan := PlanTick(s, planNow)
+	intents := findIntents(plan, IntentRaiseDecision)
+	want := "test #5: verdict stale - ACCEPT oldsha1 is on oldsha1, head is newsha1; review newsha1"
+	if len(intents) != 1 || intents[0].Text != want {
+		t.Fatalf("intents = %+v, want %q", plan.Intents, want)
+	}
+	if intents[0].Event.Kind != "decision.stale" {
+		t.Fatalf("event kind = %q, want decision.stale", intents[0].Event.Kind)
+	}
+}
+
+// TestIncidentVerdictForHeadRaisesNothing: an accept that names the head is the
+// normal review state, not a decision.
+func TestIncidentVerdictForHeadRaisesNothing(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "head123"}}
+	s.Verdicts = []VerdictState{{Item: 5, SHA: "head123", Decision: "accept"}}
+	plan := PlanTick(s, planNow)
+	if len(findIntents(plan, IntentRaiseDecision)) != 0 {
+		t.Fatalf("intents = %+v, want none for an accepted head", plan.Intents)
+	}
+}
