@@ -61,6 +61,7 @@ type File struct {
 	GhBinary     string    `yaml:"gh_binary"`
 	GlabBinary   string    `yaml:"glab_binary"`
 	TickInterval Duration  `yaml:"tick_interval"`
+	Act          bool      `yaml:"act"`
 	Projects     []Project `yaml:"projects"`
 }
 
@@ -83,6 +84,7 @@ type Effective struct {
 	GhBinary     string
 	GlabBinary   string
 	TickInterval time.Duration
+	Act          bool
 	Projects     []Project
 	ConfigPath   string
 	Sources      map[string]string
@@ -206,6 +208,12 @@ func Load(opts Options) (*Effective, error) {
 		tick, tickSource = parsed, "flag"
 	}
 	eff.TickInterval, eff.Sources["tick_interval"] = tick, tickSource
+	eff.Act = file.Act
+	if file.Act {
+		eff.Sources["act"] = "file"
+	} else {
+		eff.Sources["act"] = "default"
+	}
 
 	if file.TokenFile != "" {
 		eff.TokenFile = resolve(dir, file.TokenFile, home)
@@ -351,6 +359,7 @@ func (e *Effective) Print() ([]byte, error) {
 		GhBinary   string            `yaml:"gh_binary"`
 		GlabBinary string            `yaml:"glab_binary"`
 		Tick       string            `yaml:"tick_interval"`
+		Act        bool              `yaml:"act"`
 		Projects   []Project         `yaml:"projects,omitempty"`
 		Sources    map[string]string `yaml:"sources"`
 		Warnings   []string          `yaml:"warnings,omitempty"`
@@ -358,7 +367,7 @@ func (e *Effective) Print() ([]byte, error) {
 	out := view{
 		Config: e.ConfigPath, Listen: e.Listen, Database: e.Database, TokenFile: e.TokenFile,
 		RigBinary: e.RigBinary, GhBinary: e.GhBinary, GlabBinary: e.GlabBinary,
-		Tick: e.TickInterval.String(), Projects: e.Projects, Sources: e.Sources, Warnings: e.Warnings,
+		Tick: e.TickInterval.String(), Act: e.Act, Projects: e.Projects, Sources: e.Sources, Warnings: e.Warnings,
 	}
 	if out.Config == "" {
 		out.Config = "(none)"

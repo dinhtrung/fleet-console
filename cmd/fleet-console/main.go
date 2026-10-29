@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -85,6 +86,20 @@ func projectSources(ctx context.Context, db *store.Store, runner forge.Runner) (
 	return specs, nil
 }
 
+// worktreeRoot is the configured worktree root for a project, else the repo's
+// parent (the same layout the old dispatcher used).
+func worktreeRoot(eff *config.Effective, project store.ProjectRow, source mirror.Project) string {
+	for _, configured := range eff.Projects {
+		if configured.Key == project.Key && configured.Paths.Worktrees != "" {
+			return configured.Paths.Worktrees
+		}
+	}
+	if source.RepoPath != "" {
+		return filepath.Dir(source.RepoPath)
+	}
+	return ""
+}
+
 func runTick(ctx context.Context, db *store.Store, out io.Writer, runner forge.Runner, rigRunner rig.ExecRunner) error {
 	projects, err := db.Projects(ctx)
 	if err != nil {
@@ -135,6 +150,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	compat := flags.Bool("compat", false, "probe the rig CLI, print the compat report and exit")
 	migrate := flags.Bool("migrate", false, "open the database, apply migrations and exit")
 	tick := flags.Bool("tick", false, "run one mirror + decide pass in dry-run and print the plan")
+	applyFlag := flags.Bool("apply", false, "apply the plan through the act loop in the server (writes worktrees, rows and merges)")
 	importState := flags.String("import-dispatch-state", "", "import the old dispatcher state JSON and exit")
 	projectKey := flags.String("project-key", "fleet-console", "project key for --import-dispatch-state")
 	flags.String("addr", "", "listen address (overrides the config)")
@@ -314,26 +330,45 @@ func run(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(stderr, "fleet-console: compat: rig %s at or above floor %s\n", report.Version, report.Floor)
 	}
 	// The act loop's first check. A failed probe is a hard refusal with one named
-	// reason; the mirror and the board keep serving. The loop itself lands in
-	// task 5.x and must call this same gate before it writes.
-	if err := act.NewGate(report).Check(); err != nil {
-		fmt.Fprintf(stderr, "fleet-console: %v\n", err)
+	// reason; the mirror and the board keep serving and no dispatch or merge runs.
+	gate := act.NewGate(report)
+	gateErr := gate.Check()
+	if gateErr != nil {
+		fmt.Fprintf(stderr, "fleet-console: %v\n", gateErr)
+	}
+	apply := *applyFlag || eff.Act
+	if apply && gateErr != nil {
+		if _, err := db.AppendEvent(ctx, store.Event{
+			Actor: "act", Kind: "tick.blocked", Subject: "startup", Detail: gateErr.Error(),
+		}); err != nil {
+			fmt.Fprintf(stderr, "fleet-console: record blocked act: %v\n", err)
+		}
 	}
 
-	// The mirror runs in the server: read-only, jittered, and dry-run only for
-	// decide until the act loop lands.
+	// The mirror runs in the server: read-only and jittered. With apply, the same
+	// tick hands the plan to the act loop after the mirror has read every project.
 	jitter := 5 * time.Second
 	if eff.TickInterval < jitter {
 		jitter = 0
 	}
+	var specs []mirror.Project
+	sources := func(ctx context.Context) ([]mirror.Project, error) {
+		var err error
+		specs, err = projectSources(ctx, db, forgeRunner)
+		return specs, err
+	}
+	specByKey := map[string]mirror.Project{}
 	go (&mirror.Mirror{Store: db, Rig: rig.NewAdapter(rigRunner)}).Loop(
 		ctx,
-		func(ctx context.Context) ([]mirror.Project, error) { return projectSources(ctx, db, forgeRunner) },
+		sources,
 		eff.TickInterval, jitter,
 		func(read mirror.TickResult) {
 			rows, err := db.Projects(ctx)
 			if err != nil {
 				return
+			}
+			for _, source := range specs {
+				specByKey[source.Key] = source
 			}
 			for _, project := range rows {
 				dispatches, err1 := db.DispatchesForProject(ctx, project.ID)
@@ -341,8 +376,29 @@ func run(args []string, stdout, stderr io.Writer) error {
 				if err1 != nil || err2 != nil {
 					continue
 				}
-				plan := decide.PlanTick(mirror.BuildSnapshot(project, read.Projects[project.Key], dispatches, verdicts), read.At)
+				projectRead := read.Projects[project.Key]
+				plan := decide.PlanTick(mirror.BuildSnapshot(project, projectRead, dispatches, verdicts), read.At)
 				fmt.Fprintf(stderr, "mirror: %s status=%s intents=%d\n", project.Key, plan.Status, len(plan.Intents))
+				if !apply || gateErr != nil {
+					continue
+				}
+				source, ok := specByKey[project.Key]
+				if !ok || source.Forge == nil {
+					continue
+				}
+				gitRunner := act.ExecGit{RepoPath: source.RepoPath, DefaultBranch: project.DefaultBranch}
+				report, err := act.RunTick(ctx, act.TickInput{
+					Store: db, Project: project, Forge: source.Forge,
+					Rig: rig.NewAdapter(rigRunner), Git: gitRunner, Gate: gate, Apply: true,
+					Items: projectRead.Items, CRs: projectRead.CRs, Rows: projectRead.Rows,
+					Plan: plan, WorktreeRoot: worktreeRoot(eff, project, source),
+				})
+				if err != nil {
+					fmt.Fprintf(stderr, "act: %s: %v\n", project.Key, err)
+					continue
+				}
+				fmt.Fprintf(stderr, "act: %s dispatches=%d verdicts=%d merges=%d skipped=%d\n",
+					project.Key, len(report.Dispatches), len(report.Verdicts), len(report.Merges), len(report.Skipped))
 			}
 		},
 	)

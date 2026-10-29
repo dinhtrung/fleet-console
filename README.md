@@ -85,6 +85,7 @@ name the file and line.
 | `gh_binary` | `gh` | `FLEET_CONSOLE_GH_BIN` | — | GitHub CLI for `forge: github` |
 | `glab_binary` | `glab` | `FLEET_CONSOLE_GLAB_BIN` | — | GitLab CLI for `forge: gitlab` |
 | `tick_interval` | `15s` | `FLEET_CONSOLE_TICK_INTERVAL` | `--tick-interval` | mirror pass interval |
+| `act` | `false` | — | `--apply` | apply the decide plan through the act loop: worktree, queue row, verdict, merge. Off means the board is read-only |
 | `projects` | `[]` | — | — | the registry (file only) |
 
 Token precedence is `FLEET_CONSOLE_TOKEN` > inline `token` > `token_file`;
@@ -113,6 +114,8 @@ rig_binary: rig
 gh_binary: gh
 glab_binary: glab
 tick_interval: 15s
+# false: the board only reads and plans. true (or --apply) executes the plan.
+act: false
 
 projects:
   - key: my-project

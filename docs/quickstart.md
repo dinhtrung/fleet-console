@@ -106,6 +106,7 @@ rig_binary: rig
 gh_binary: gh
 glab_binary: glab
 tick_interval: 15s
+act: false   # true (or --apply) executes the plan: worktree, row, verdict, merge
 
 projects:
   - key: my-project
