@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type fallbackFile struct {
@@ -17,6 +19,7 @@ type fallbackFile struct {
 }
 
 type fixtureRunner struct {
+	mu       sync.Mutex
 	root     string
 	exact    map[string]string
 	fallback []fallbackFile
@@ -26,7 +29,9 @@ type fixtureRunner struct {
 
 func (r *fixtureRunner) Run(_ context.Context, argv ...string) (string, string, error) {
 	key := strings.Join(argv, " ")
+	r.mu.Lock()
 	r.calls = append(r.calls, key)
+	r.mu.Unlock()
 	if message, ok := r.stderr[key]; ok {
 		return "", message, errors.New("exit status 1")
 	}
@@ -64,7 +69,7 @@ func githubFixtures() *fixtureRunner {
 func TestGitHubItems(t *testing.T) {
 	runner := githubFixtures()
 	adapter := NewGitHub("dinhtrung/fleet-console", runner, &Budget{Max: 100})
-	items, err := adapter.Items(context.Background())
+	items, err := adapter.Items(context.Background(), Timeout{})
 	if err != nil {
 		t.Fatalf("Items: %v", err)
 	}
@@ -149,7 +154,7 @@ func gitlabFixtures() *fixtureRunner {
 func TestGitLabItems(t *testing.T) {
 	runner := gitlabFixtures()
 	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", runner, &Budget{Max: 100})
-	items, err := adapter.Items(context.Background())
+	items, err := adapter.Items(context.Background(), Timeout{})
 	if err != nil {
 		t.Fatalf("Items: %v", err)
 	}
@@ -443,7 +448,7 @@ func TestBudget(t *testing.T) {
 		return "[]", "", nil
 	}}
 	adapter := NewGitHub("dinhtrung/fleet-console", runner, &Budget{Max: 2})
-	if _, err := adapter.Items(context.Background()); !errors.Is(err, ErrBudget) {
+	if _, err := adapter.Items(context.Background(), Timeout{}); !errors.Is(err, ErrBudget) {
 		t.Fatalf("Items error = %v, want ErrBudget after two calls", err)
 	}
 }
@@ -453,7 +458,7 @@ func TestFakeSatisfiesTheDecideSeam(t *testing.T) {
 	fake.ItemsValue = []Item{{Number: 1, Kind: KindTask, State: StateOpen, Title: "one"}}
 	fake.RequestsValue = []ChangeRequest{{Number: 2, HeadSHA: "abc", Checks: []Check{{Name: "go", Conclusion: "success"}}}}
 	ctx := context.Background()
-	items, err := fake.Items(ctx)
+	items, err := fake.Items(ctx, Timeout{})
 	if err != nil || len(items) != 1 || items[0].Number != 1 {
 		t.Fatalf("Items = %+v, %v", items, err)
 	}
@@ -479,7 +484,7 @@ func TestStaleOn401(t *testing.T) {
 		return "", "HTTP 401: Bad credentials", errors.New("exit status 1")
 	}}
 	adapter := NewGitHub("dinhtrung/fleet-console", runner, &Budget{Max: 100})
-	if _, err := adapter.Items(context.Background()); !errors.Is(err, ErrStale) {
+	if _, err := adapter.Items(context.Background(), Timeout{}); !errors.Is(err, ErrStale) {
 		t.Fatalf("Items error = %v, want ErrStale", err)
 	}
 }
@@ -492,7 +497,7 @@ func TestRetryOn5xx(t *testing.T) {
 		return "[]", "", nil
 	}}
 	adapter := NewGitHub("dinhtrung/fleet-console", runner, &Budget{Max: 100})
-	if _, err := adapter.Items(context.Background()); err != nil {
+	if _, err := adapter.Items(context.Background(), Timeout{}); err != nil {
 		t.Fatalf("Items: %v", err)
 	}
 	if len(runner.calls) != 2 {
@@ -505,7 +510,7 @@ func TestForbiddenNamesTheOperation(t *testing.T) {
 		return "", "gh: You must be an org admin or have the actions policies fine-grained permission. (HTTP 403)", errors.New("exit status 1")
 	}}
 	adapter := NewGitHub("dinhtrung/fleet-console", runner, &Budget{Max: 100})
-	_, err := adapter.Items(context.Background())
+	_, err := adapter.Items(context.Background(), Timeout{})
 	t.Logf("classified: %v (errors.Is ErrForbidden=%v, ErrStale=%v)", err, errors.Is(err, ErrForbidden), errors.Is(err, ErrStale))
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("error = %v, want ErrForbidden", err)
@@ -530,11 +535,81 @@ func TestRateLimitIsStaleNotForbidden(t *testing.T) {
 		return "", "gh: API rate limit exceeded for user ID 1. (HTTP 403)", errors.New("exit status 1")
 	}}
 	adapter := NewGitHub("dinhtrung/fleet-console", runner, &Budget{Max: 100})
-	_, err := adapter.Items(context.Background())
+	_, err := adapter.Items(context.Background(), Timeout{})
 	if !errors.Is(err, ErrStale) {
 		t.Fatalf("error = %v, want ErrStale", err)
 	}
 	if errors.Is(err, ErrForbidden) {
 		t.Fatalf("a rate limit read as forbidden: %v", err)
 	}
+}
+
+type slowRunner struct {
+	issues string
+	delay  time.Duration
+}
+
+func (r slowRunner) Run(ctx context.Context, argv ...string) (string, string, error) {
+	key := strings.Join(argv, " ")
+	if strings.Contains(key, "/dependencies/blocked_by") {
+		select {
+		case <-time.After(r.delay):
+			return "[]", "", nil
+		case <-ctx.Done():
+			return "", "", ctx.Err()
+		}
+	}
+	return r.issues, "", nil
+}
+
+func manyIssues(count int) string {
+	var b strings.Builder
+	b.WriteString("[")
+	for i := 1; i <= count; i++ {
+		if i > 1 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `{"number":%d,"state":"open","title":"T%d","body":"","labels":[],`+
+			`"sub_issues_summary":{"total":0},"html_url":"u"}`, i, i)
+	}
+	b.WriteString("]")
+	return b.String()
+}
+
+// TestParallelItemReadsFitDeadline: 40 items at 100ms per item call fit a 2s
+// deadline only because the per-item reads are parallel (8 workers).
+func TestParallelItemReadsFitDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	adapter := NewGitHub("o/r", slowRunner{issues: manyIssues(40), delay: 100 * time.Millisecond}, &Budget{Max: 100})
+	start := time.Now()
+	items, err := adapter.Items(ctx, Timeout{})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Items: %v after %s", err, elapsed)
+	}
+	if len(items) != 40 {
+		t.Fatalf("items = %d, want 40", len(items))
+	}
+	if elapsed >= 2*time.Second {
+		t.Fatalf("Items took %s; parallelism did not fit the deadline", elapsed)
+	}
+	t.Logf("40 items in %s (parallelism %d)", elapsed.Round(time.Millisecond), Parallelism)
+}
+
+// TestItemReadDeadlineReportsProgress: an expiring deadline says how many items
+// were read and which item it stopped at.
+func TestItemReadDeadlineReportsProgress(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	adapter := NewGitHub("o/r", slowRunner{issues: manyIssues(40), delay: 100 * time.Millisecond}, &Budget{Max: 100})
+	_, err := adapter.Items(ctx, Timeout{})
+	if err == nil {
+		t.Fatal("Items returned nil, want a deadline error")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "of 40 items") || !strings.Contains(message, "stopped at #") {
+		t.Fatalf("error = %q, want the count and the item", message)
+	}
+	t.Logf("deadline error: %v", err)
 }

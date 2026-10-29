@@ -128,6 +128,17 @@ func (s *Store) Items(ctx context.Context) ([]ItemRow, error) {
 	return out, rows.Err()
 }
 
+// ItemCount returns how many items are cached for a project. The mirror uses it
+// to scale the project deadline before the forge read (base + per-item).
+func (s *Store) ItemCount(ctx context.Context, projectID int64) (int, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM item WHERE project_id = ?`, projectID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("store: item count: %w", err)
+	}
+	return count, nil
+}
+
 // Item finds one item by project and number.
 func (s *Store) Item(ctx context.Context, projectID int64, number int) (*ItemRow, error) {
 	var item ItemRow

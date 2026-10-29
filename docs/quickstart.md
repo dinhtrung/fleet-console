@@ -106,6 +106,10 @@ rig_binary: rig
 gh_binary: gh
 glab_binary: glab
 tick_interval: 15s
+project_timeout:
+  base: 30s
+  per_item: 2s
+  ceiling: 2m
 act: false   # true (or --apply) executes the plan: worktree, row, verdict, merge
 
 projects:

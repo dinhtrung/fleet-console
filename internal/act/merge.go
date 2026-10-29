@@ -102,7 +102,7 @@ func (a *Actions) Finalize(ctx context.Context, dispatchID int64, item int, requ
 	if result == nil {
 		result = &MergeResult{Merged: true, ChangeRequest: request.Number, SHA: request.HeadSHA}
 	}
-	items, err := a.Forge.Items(ctx)
+	items, err := a.Forge.Items(ctx, forge.Timeout{})
 	if err != nil {
 		return result, err
 	}
