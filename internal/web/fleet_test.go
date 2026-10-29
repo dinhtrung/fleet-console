@@ -182,3 +182,68 @@ func TestDecisionsSkipsPendingBotRow(t *testing.T) {
 		t.Fatalf("decisions = %+v, want no pending bot row", got.Decisions)
 	}
 }
+
+// TestBoardMovesQueuedToBuildingAfterDispatch: the act loop writes a dispatch
+// row; the board reads that row as building without any external timer.
+func TestBoardMovesQueuedToBuildingAfterDispatch(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "fleet.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	projectID, err := st.CreateProject(ctx, store.ProjectInput{
+		Key: "app", Name: "app", ForgeKind: "github", ForgeProject: "dinhtrung/fleet-console",
+		Rig: "fleet-console", ConcurrencyCap: 2, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	at := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
+	if err := st.ReplaceItems(ctx, projectID, []store.ItemRecord{{
+		Number: 7, Kind: "task", State: "open", Title: "One", Labels: "", BlockedByJSON: "[]",
+		URL: "u", UpdatedAt: at,
+	}}); err != nil {
+		t.Fatalf("items: %v", err)
+	}
+	if _, err := st.CreateDispatch(ctx, store.NewDispatch{
+		ProjectID: projectID, ItemNumber: 7, Attempt: 1, Seat: "dev-build-2@fleet-console",
+		Branch: "feature/7-one", Worktree: "wt", BaseSHA: "base", CreatedAt: at,
+	}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	app, err := New(Config{
+		Token: "test-token", Store: st,
+		Compat: func(context.Context) rig.Report { return rig.Report{OK: true, Status: rig.StatusOK} },
+	})
+	if err != nil {
+		t.Fatalf("app: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/board", nil)
+	req.Header.Set(fiber.HeaderAuthorization, "Bearer test-token")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var board struct {
+		Projects []struct {
+			Items []struct {
+				Number int    `json:"number"`
+				State  string `json:"state"`
+				Seat   string `json:"seat"`
+			} `json:"items"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(body, &board); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	if len(board.Projects) != 1 || len(board.Projects[0].Items) != 1 {
+		t.Fatalf("board = %s, want one item", body)
+	}
+	item := board.Projects[0].Items[0]
+	if item.State != "building" || item.Seat != "dev-build-2@fleet-console" {
+		t.Fatalf("item = %+v, want building on the dispatch's seat", item)
+	}
+}

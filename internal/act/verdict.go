@@ -43,6 +43,16 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 			continue
 		}
 		decision := strings.ToLower(match[1])
+		// A tick re-reads the same notes; do not add the same verdict twice.
+		existing, err := a.Store.Verdicts(ctx, dispatchID)
+		if err != nil {
+			return nil, err
+		}
+		for _, verdict := range existing {
+			if verdict.SHA == sha && verdict.Decision == decision {
+				return nil, nil
+			}
+		}
 		verdictID, err := a.Store.AddVerdict(ctx, store.NewVerdict{
 			DispatchID: dispatchID, SHA: sha, Decision: decision,
 			Source: "note " + note.ID, At: a.now(),
