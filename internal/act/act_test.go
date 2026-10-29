@@ -350,12 +350,28 @@ type queueStub struct {
 	item        *rig.QueueItem
 	created     *rig.CreateRequest
 	createCalls int
+	rows        []rig.QueueRow
+	shows       map[string]*rig.QueueItem
+}
+
+func (q *queueStub) QueueList(context.Context) ([]rig.QueueRow, error) {
+	return q.rows, nil
+}
+
+func (q *queueStub) QueueShow(_ context.Context, id string) (*rig.QueueItem, error) {
+	if item, ok := q.shows[id]; ok {
+		return item, nil
+	}
+	return &rig.QueueItem{ID: id}, nil
 }
 
 func (q *queueStub) QueueCreate(_ context.Context, req rig.CreateRequest) (*rig.QueueItem, error) {
 	q.createCalls++
 	if q.created != nil {
 		*q.created = req
+	}
+	if q.item == nil {
+		return &rig.QueueItem{ID: "qitem-stub", State: "pending"}, nil
 	}
 	return q.item, nil
 }

@@ -390,6 +390,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 			fmt.Fprintf(stderr, "fleet-console: record blocked act: %v\n", err)
 		}
 	}
+	if apply && gateErr == nil {
+		// D6: boot reconciles a dispatch that was written before its queue row.
+		if err := adoptPendingDispatches(ctx, db, rig.NewAdapter(rigRunner), stderr); err != nil {
+			fmt.Fprintf(stderr, "fleet-console: adopt: %v\n", err)
+		}
+	}
 
 	// The mirror runs in the server: read-only and jittered. With apply, the same
 	// tick hands the plan to the act loop after the mirror has read every project.
@@ -415,6 +421,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		sources,
 		eff.TickInterval, jitter,
 		func(read mirror.TickResult) {
+			if apply && gateErr == nil {
+				if err := adoptPendingDispatches(ctx, db, rig.NewAdapter(rigRunner), stderr); err != nil {
+					fmt.Fprintf(stderr, "adopt: %v\n", err)
+				}
+			}
 			rows, err := db.Projects(ctx)
 			if err != nil {
 				return
@@ -598,4 +609,24 @@ func pruneProjects(ctx context.Context, db *store.Store, projects []config.Proje
 		pruned = append(pruned, row.Key)
 	}
 	return pruned, nil
+}
+
+// adoptPendingDispatches resolves two-phase dispatches for every project. It is
+// called at boot and on each act tick, under the one-writer lock.
+func adoptPendingDispatches(ctx context.Context, db *store.Store, adapter *rig.Adapter, out io.Writer) error {
+	projects, err := db.Projects(ctx)
+	if err != nil {
+		return err
+	}
+	for _, project := range projects {
+		result, err := act.AdoptPending(ctx, db, adapter, project, "")
+		if err != nil {
+			return fmt.Errorf("project %s: %w", project.Key, err)
+		}
+		if len(result.Adopted) > 0 || len(result.Abandoned) > 0 || len(result.Decisions) > 0 {
+			fmt.Fprintf(out, "adopt: %s adopted=%d abandoned=%d decisions=%d\n",
+				project.Key, len(result.Adopted), len(result.Abandoned), len(result.Decisions))
+		}
+	}
+	return nil
 }

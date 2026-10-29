@@ -18,6 +18,7 @@ type NewDispatch struct {
 	BaseSHA    string
 	QItemID    string
 	BriefPath  string
+	State      string
 	CreatedAt  time.Time
 }
 
@@ -27,12 +28,16 @@ func (s *Store) CreateDispatch(ctx context.Context, d NewDispatch) (int64, error
 	if created.IsZero() {
 		created = time.Now().UTC()
 	}
+	state := d.State
+	if state == "" {
+		state = "active"
+	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO dispatch (project_id, item_number, attempt, seat, branch, worktree, base_sha,
-		                      qitem_id, brief_path, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                      qitem_id, brief_path, state, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ProjectID, d.ItemNumber, d.Attempt, d.Seat, d.Branch, d.Worktree, d.BaseSHA,
-		d.QItemID, d.BriefPath, created.UTC().Format(time.RFC3339Nano))
+		d.QItemID, d.BriefPath, state, created.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return 0, fmt.Errorf("store: create dispatch: %w", err)
 	}
@@ -63,10 +68,10 @@ func (s *Store) Dispatch(ctx context.Context, id int64) (*DispatchRow, error) {
 	var ended sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, project_id, item_number, attempt, seat, branch, worktree, base_sha,
-		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, '')
+		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, ''), state
 		FROM dispatch WHERE id = ?`, id).
 		Scan(&d.ID, &d.ProjectID, &d.ItemNumber, &d.Attempt, &d.Seat, &d.Branch, &d.Worktree,
-			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason)
+			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason, &d.State)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -106,4 +111,62 @@ func (s *Store) AddVerdict(ctx context.Context, v NewVerdict) (int64, error) {
 		return 0, fmt.Errorf("store: add verdict: %w", err)
 	}
 	return id, nil
+}
+
+// PendingDispatches returns un-stamped two-phase dispatches for a project.
+func (s *Store) PendingDispatches(ctx context.Context, projectID int64) ([]DispatchRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, project_id, item_number, attempt, seat, branch, worktree, base_sha,
+		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, ''), state
+		FROM dispatch WHERE project_id = ? AND state = 'pending' AND COALESCE(qitem_id, '') = ''
+		ORDER BY id`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("store: pending dispatches: %w", err)
+	}
+	defer rows.Close()
+	var out []DispatchRow
+	for rows.Next() {
+		var d DispatchRow
+		var ended sql.NullString
+		if err := rows.Scan(&d.ID, &d.ProjectID, &d.ItemNumber, &d.Attempt, &d.Seat, &d.Branch, &d.Worktree,
+			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason, &d.State); err != nil {
+			return nil, fmt.Errorf("store: pending dispatches: %w", err)
+		}
+		if ended.Valid {
+			at := ended.String
+			d.EndedAt = &at
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// StampDispatch completes a two-phase dispatch with its queue row.
+func (s *Store) StampDispatch(ctx context.Context, id int64, qitemID string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE dispatch SET qitem_id = ?, state = 'active' WHERE id = ? AND state = 'pending'`, qitemID, id)
+	if err != nil {
+		return fmt.Errorf("store: stamp dispatch: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("store: dispatch %d is not pending", id)
+	}
+	return nil
+}
+
+// AbandonDispatch closes a pending dispatch that has no queue row.
+func (s *Store) AbandonDispatch(ctx context.Context, id int64, reason string) error {
+	if reason == "" {
+		reason = "abandoned"
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE dispatch SET state = 'abandoned', ended_at = ?, end_reason = ? WHERE id = ? AND state = 'pending' AND ended_at IS NULL`,
+		time.Now().UTC().Format(time.RFC3339Nano), reason, id)
+	if err != nil {
+		return fmt.Errorf("store: abandon dispatch: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("store: dispatch %d is not pending", id)
+	}
+	return nil
 }

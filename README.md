@@ -160,6 +160,16 @@ database. `--apply-config` is idempotent: the second run prints `unchanged`.
 A project removed from `projects:` is disabled (paused on the board) rather than
 forgotten; `--prune` deletes it only once it has no live dispatch.
 
+### Two-phase dispatch
+
+Dispatch writes the app's dispatch row first (`state = pending`), creates the rig
+queue row, then stamps `qitem_id` and marks it active. Boot and every acting tick
+resolve a pending row: one queue row matching the exact brief summary (or the
+branch in its body) is stamped; no match is marked `abandoned`; more than one is
+abandoned and raises one queue decision for a human. A crash between the queue
+row and the stamp therefore never creates a second row, and an abandoned attempt
+does not block the next dispatch.
+
 ### Where state lives
 
 Everything is in the SQLite file at `database`; the database never stores the

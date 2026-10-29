@@ -7,11 +7,11 @@ import (
 
 // schemaVersion is the number of migrations in migrations. A database at this
 // user_version is current.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // migrations are applied in order; migrations[i] moves user_version from i to
 // i+1. Never edit an applied migration; append a new one.
-var migrations = []string{schemaV1}
+var migrations = []string{schemaV1, schemaV2}
 
 // schemaV1 is design §6 verbatim. Do not add the queue_row, decision, lease or
 // task tables here: that state belongs to the rig.
@@ -62,6 +62,12 @@ CREATE TABLE snapshot (                    -- cache of rig reads, never a decisi
 CREATE TABLE mirror_meta (
   project_id INTEGER PRIMARY KEY, last_forge_at TEXT, last_rig_at TEXT, etag TEXT
 );
+`
+
+// schemaV2 gives a dispatch a state. Rows that predate the two-phase dispatch
+// are active: they were written together with their queue row.
+const schemaV2 = `
+ALTER TABLE dispatch ADD COLUMN state TEXT NOT NULL DEFAULT 'active';
 `
 
 func (s *Store) migrate(ctx context.Context) error {
