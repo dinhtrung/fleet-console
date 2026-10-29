@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dinhtrung/fleet-console/internal/forge"
+	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 )
 
@@ -313,5 +314,24 @@ func TestBuildSnapshotIgnoresEndedDispatches(t *testing.T) {
 	snapshot := BuildSnapshot(project, ProjectResult{}, dispatches, nil)
 	if len(snapshot.Dispatched) != 1 || snapshot.Dispatched[0] != 5 {
 		t.Fatalf("dispatched = %v, want only the open attempt #5", snapshot.Dispatched)
+	}
+}
+
+func TestSeatsFollowRigOrderAndMissingRigsWarn(t *testing.T) {
+	seats := []rig.Seat{
+		{Rig: "rig-b", Session: "build@rig-b"},
+		{Rig: "other", Session: "build@other"},
+		{Rig: "rig-a", Session: "build@rig-a"},
+	}
+	got := filterSeats(seats, []string{"rig-a", "rig-b"})
+	if len(got) != 2 || got[0].Rig != "rig-a" || got[1].Rig != "rig-b" {
+		t.Fatalf("filtered seats = %+v, want the configured order", got)
+	}
+	missing := missingRigs([]string{"rig-a", "ghost"}, seats)
+	if len(missing) != 1 || missing[0] != "ghost" {
+		t.Fatalf("missing = %v, want [ghost]", missing)
+	}
+	if len(missingRigs([]string{"rig-a", "rig-b"}, seats)) != 0 {
+		t.Fatal("known rigs reported missing")
 	}
 }

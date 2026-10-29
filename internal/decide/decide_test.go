@@ -268,3 +268,21 @@ func TestDisabledProjectPlanHasNoIntent(t *testing.T) {
 		t.Fatalf("plan = %+v, want nothing with no intents for a disabled project", plan)
 	}
 }
+
+func TestTwoRigsFillInListedOrderUnderOneCap(t *testing.T) {
+	snapshot := base(task(1), task(2))
+	snapshot.Builders = []string{"build-1@rig-a", "build-1@rig-b"}
+	snapshot.Project.ConcurrencyCap = 2
+	plan := PlanTick(snapshot, time.Now())
+	if len(plan.Intents) != 2 {
+		t.Fatalf("intents = %+v, want two", plan.Intents)
+	}
+	if plan.Intents[0].Seat != "build-1@rig-a" || plan.Intents[1].Seat != "build-1@rig-b" {
+		t.Fatalf("seats = %s, %s; want the listed rig order", plan.Intents[0].Seat, plan.Intents[1].Seat)
+	}
+	snapshot.Project.ConcurrencyCap = 1
+	plan = PlanTick(snapshot, time.Now())
+	if len(plan.Intents) != 1 {
+		t.Fatalf("intents with cap 1 = %+v, want one", plan.Intents)
+	}
+}

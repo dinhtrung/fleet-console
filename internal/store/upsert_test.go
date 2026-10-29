@@ -109,3 +109,26 @@ func TestUpsertUpdatesRepoAndKeepsRemovedProjects(t *testing.T) {
 		t.Fatalf("repo path = %q", path)
 	}
 }
+
+func TestProjectRigsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	st := upsertStore(t)
+	in := baseUpsert()
+	in.Project.Rig = ""
+	in.Project.Rigs = []string{"rig-a", "rig-b"}
+	if _, id, err := st.UpsertProject(ctx, in); err != nil || id == 0 {
+		t.Fatalf("create: %v", err)
+	}
+	projects, _ := st.Projects(ctx)
+	if len(projects) != 1 || len(projects[0].Rigs) != 2 || projects[0].Rigs[1] != "rig-b" || projects[0].Rig != "rig-a" {
+		t.Fatalf("project = %+v", projects)
+	}
+	in.Project.Rigs = []string{"rig-a"}
+	if result, _, err := st.UpsertProject(ctx, in); err != nil || result != UpsertUpdated {
+		t.Fatalf("update = %s %v", result, err)
+	}
+	projects, _ = st.Projects(ctx)
+	if len(projects[0].Rigs) != 1 || projects[0].Rigs[0] != "rig-a" {
+		t.Fatalf("rigs after update = %+v", projects[0].Rigs)
+	}
+}

@@ -83,7 +83,7 @@ func projectSources(ctx context.Context, db *store.Store, runner forge.Runner) (
 		default:
 			return nil, fmt.Errorf("tick: project %s has unknown forge %q", project.Key, project.ForgeKind)
 		}
-		spec := mirror.Project{ID: project.ID, Key: project.Key, Forge: source, Rig: project.Rig}
+		spec := mirror.Project{ID: project.ID, Key: project.Key, Forge: source, Rigs: project.Rigs}
 		if repoPath != "" {
 			spec.Git = git.ExecRunner{RepoPath: repoPath}
 		}
@@ -516,7 +516,7 @@ func applyProjects(ctx context.Context, db *store.Store, projects []config.Proje
 		result, _, err := db.UpsertProject(ctx, store.UpsertInput{
 			Project: store.ProjectInput{
 				Key: project.Key, Name: name, ForgeKind: project.Forge, ForgeProject: project.Repo,
-				DefaultBranch: project.DefaultBranch, Rig: project.Rig, RigTemplate: project.RigTemplate,
+				DefaultBranch: project.DefaultBranch, Rig: project.Rig, Rigs: project.Rigs, RigTemplate: project.RigTemplate,
 				ConcurrencyCap: project.ConcurrencyCap, Enabled: true, OnHold: onhold, GateCmd: project.GateCmd,
 			},
 			LabelsJSON: string(labels), RepoKey: "main",
