@@ -222,23 +222,39 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 		}
 	}
 
-	// Incident: a change request is open, no verdict exists and no row is live.
+	// Incident: a change request is open and no row is live. Three cases: no
+	// verdict at all, a verdict whose sha is no longer the head (D2), or an
+	// accept/reject for the head (nothing to raise).
 	seen := map[int]bool{}
 	for _, cr := range s.CRs {
 		item, ok := items[cr.Item]
 		if !ok || !item.open() || seen[item.Number] {
 			continue
 		}
-		if !cr.Merged && strings.EqualFold(cr.State, "open") && live[item.Number] == "" &&
-			!hasAcceptedVerdict(s.Verdicts, item.Number, cr.HeadSHA) {
-			seen[item.Number] = true
-			text := fmt.Sprintf("%s #%d: %s has an open change request with no verdict and no live row. Accept it, reject it, or reopen the seat?",
-				key, item.Number, item.Title)
-			add(Intent{
-				Kind: IntentRaiseDecision, Project: key, Item: item.Number, Text: text,
-				Event: Event{Actor: "decide", Kind: "decision.raise", Subject: fmt.Sprintf("#%d", item.Number), Detail: text},
-			})
+		if cr.Merged || !strings.EqualFold(cr.State, "open") || live[item.Number] != "" {
+			continue
 		}
+		verdict := newestVerdict(s.Verdicts, item.Number)
+		var text, kind string
+		switch {
+		case verdict == nil:
+			kind = "decision.raise"
+			text = fmt.Sprintf("%s #%d: %s has an open change request with no verdict and no live row. Accept it, reject it, or reopen the seat?",
+				key, item.Number, item.Title)
+		case cr.HeadSHA != "" && !strings.EqualFold(verdict.SHA, cr.HeadSHA):
+			// D2: a verdict on a moved head asks for a re-review of the new head.
+			kind = "decision.stale"
+			text = fmt.Sprintf("%s #%d: verdict stale - %s %s is on %s, head is %s; review %s",
+				key, item.Number, strings.ToUpper(verdict.Decision), verdict.SHA, verdict.SHA, cr.HeadSHA, cr.HeadSHA)
+		}
+		if text == "" {
+			continue
+		}
+		seen[item.Number] = true
+		add(Intent{
+			Kind: IntentRaiseDecision, Project: key, Item: item.Number, Text: text,
+			Event: Event{Actor: "decide", Kind: kind, Subject: fmt.Sprintf("#%d", item.Number), Detail: text},
+		})
 	}
 
 	// Incident: a merged change request whose item is still open.
@@ -296,16 +312,15 @@ func endedDispatchFor(dispatches []DispatchState, item int) bool {
 	return false
 }
 
-func hasAcceptedVerdict(verdicts []VerdictState, item int, sha string) bool {
-	for _, verdict := range verdicts {
-		if verdict.Item != item || !strings.EqualFold(verdict.Decision, "accept") {
-			continue
-		}
-		if sha == "" || verdict.SHA == sha {
-			return true
+// newestVerdict returns the newest verdict for an item. The snapshot carries them
+// newest first, so the first match is the newest.
+func newestVerdict(verdicts []VerdictState, item int) *VerdictState {
+	for index := range verdicts {
+		if verdicts[index].Item == item {
+			return &verdicts[index]
 		}
 	}
-	return false
+	return nil
 }
 
 func childrenOf(items []Item, parent int) []Item {

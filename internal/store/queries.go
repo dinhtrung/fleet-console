@@ -270,3 +270,19 @@ func (s *Store) SetProjectOnHold(ctx context.Context, projectID int64, onhold bo
 	}
 	return nil
 }
+
+// HasEvent reports whether an event of kind for subject already carries the text.
+// It is the once-per-key ledger for intents that must not repeat every tick.
+func (s *Store) HasEvent(ctx context.Context, kind, subject, contains string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM event WHERE kind = ? AND subject = ? AND instr(detail, ?) > 0 LIMIT 1`,
+		kind, subject, contains).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: event lookup: %w", err)
+	}
+	return true, nil
+}
