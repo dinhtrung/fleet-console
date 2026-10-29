@@ -10,7 +10,10 @@ type Fake struct {
 	RequestsValue []ChangeRequest
 	NotesValue    []Comment
 	ReadErr       error
+	ItemsErr      error
+	RequestsErr   error
 	WriteErr      error
+	Accepted      map[string]struct{}
 	Writes        []Write
 }
 
@@ -29,6 +32,9 @@ func (f *Fake) Kind() Kind { return f.KindValue }
 
 // Items returns the configured items or the configured read error.
 func (f *Fake) Items(context.Context) ([]Item, error) {
+	if f.ItemsErr != nil {
+		return nil, f.ItemsErr
+	}
 	if f.ReadErr != nil {
 		return nil, f.ReadErr
 	}
@@ -37,10 +43,20 @@ func (f *Fake) Items(context.Context) ([]Item, error) {
 
 // ChangeRequests returns the configured change requests or the configured read error.
 func (f *Fake) ChangeRequests(context.Context) ([]ChangeRequest, error) {
+	if f.RequestsErr != nil {
+		return nil, f.RequestsErr
+	}
 	if f.ReadErr != nil {
 		return nil, f.ReadErr
 	}
 	return append([]ChangeRequest(nil), f.RequestsValue...), nil
+}
+
+// ChangeRequestsFor records the accepted head SHAs and returns the configured
+// requests; the fake is already metadata-only.
+func (f *Fake) ChangeRequestsFor(ctx context.Context, accepted map[string]struct{}) ([]ChangeRequest, error) {
+	f.Accepted = accepted
+	return f.ChangeRequests(ctx)
 }
 
 // Notes returns the configured reviewer notes.

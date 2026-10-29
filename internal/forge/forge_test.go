@@ -2,7 +2,9 @@ package forge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,7 +174,7 @@ func TestGitLabItems(t *testing.T) {
 	}
 }
 
-func TestGitLabChangeRequests(t *testing.T) {
+func TestGitLabChangeRequestsSkipsDetailsForMerged(t *testing.T) {
 	runner := gitlabFixtures()
 	runner.fallback = append(runner.fallback,
 		fallbackFile{contains: "merge_requests?state=all", file: "gitlab/merge-requests.json"},
@@ -188,6 +190,9 @@ func TestGitLabChangeRequests(t *testing.T) {
 	if len(requests) != 5 {
 		t.Fatalf("requests = %d, want the 5 recorded merge requests", len(requests))
 	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("calls = %v, want only the merge-request list", runner.calls)
+	}
 	var merged *ChangeRequest
 	for index := range requests {
 		if requests[index].Number == 529 {
@@ -197,27 +202,130 @@ func TestGitLabChangeRequests(t *testing.T) {
 	if merged == nil {
 		t.Fatal("MR !529 missing")
 	}
-	if !merged.Mergeable {
-		t.Fatal("MR !529 mergeable = false, want can_be_merged")
+	if !merged.Mergeable || merged.State != "merged" {
+		t.Fatalf("MR !529 = %+v, want merged and mergeable", merged)
 	}
 	if merged.HeadSHA != "7170c3375aea1ee41f140ed3f3e4e8748679c2d6" {
 		t.Fatalf("head = %q", merged.HeadSHA)
 	}
-	if merged.DocsOnly {
-		t.Fatal("docs_only = true, want false (the recorded MR changes code)")
+	if merged.DocsOnly || merged.Checks != nil {
+		t.Fatalf("merged MR details = docs_only %v checks %+v, want none", merged.DocsOnly, merged.Checks)
 	}
-	var allowed *Check
-	for index := range merged.Checks {
-		if merged.Checks[index].Name == "golangci-lint" {
-			allowed = &merged.Checks[index]
+}
+
+func mrJSON(iids []int, candidate int) string {
+	type mr struct {
+		IID         int    `json:"iid"`
+		State       string `json:"state"`
+		SHA         string `json:"sha"`
+		Description string `json:"description"`
+	}
+	batch := make([]mr, 0, len(iids))
+	for _, iid := range iids {
+		sha := fmt.Sprintf("sha%03d", iid)
+		body := ""
+		if iid == candidate {
+			body = "Closes #7"
+		}
+		batch = append(batch, mr{IID: iid, State: "opened", SHA: sha, Description: body})
+	}
+	raw, err := json.Marshal(batch)
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+func TestGitLabChangeRequestsOnlyFetchCandidates(t *testing.T) {
+	page := func(iids []int) []int { return iids }
+	runner := &stubRunner{respond: func(_ int, argv []string) (string, string, error) {
+		key := strings.Join(argv, " ")
+		switch {
+		case strings.Contains(key, "merge_requests?state=all") && strings.HasSuffix(key, "page=1"):
+			return mrJSON(page(seq(1, 100)), 50), "", nil
+		case strings.Contains(key, "merge_requests?state=all") && strings.HasSuffix(key, "page=2"):
+			return mrJSON(page(seq(101, 200)), 50), "", nil
+		case strings.Contains(key, "merge_requests?state=all") && strings.HasSuffix(key, "page=3"):
+			return "[]", "", nil
+		case strings.Contains(key, "merge_requests/50/changes"):
+			return `{"changes":[{"new_path":"README.md"}]}`, "", nil
+		case strings.Contains(key, "merge_requests/50/pipelines"):
+			return `[{"id":9,"sha":"sha050"}]`, "", nil
+		case strings.Contains(key, "pipelines/9/jobs"):
+			return `[{"name":"test","status":"success"}]`, "", nil
+		case strings.Contains(key, "/changes") || strings.Contains(key, "/pipelines"):
+			t.Errorf("per-MR detail read for a non-candidate: %s", key)
+			return "{}", "", nil
+		}
+		return "[]", "", nil
+	}}
+	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", runner, &Budget{Max: 100})
+	requests, err := adapter.ChangeRequestsFor(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ChangeRequestsFor: %v", err)
+	}
+	if len(requests) != 200 {
+		t.Fatalf("requests = %d, want 200", len(requests))
+	}
+	t.Logf("glab calls for 200 merge requests with 1 candidate: %d", len(runner.calls))
+	if len(runner.calls) > 15 {
+		t.Fatalf("calls = %d, want <= 15: %v", len(runner.calls), runner.calls)
+	}
+	for _, request := range requests {
+		if request.Number == 50 {
+			if !request.DocsOnly || len(request.Checks) != 1 {
+				t.Fatalf("candidate = %+v, want details", request)
+			}
+			continue
+		}
+		if request.Checks != nil {
+			t.Fatalf("non-candidate %d has checks: %+v", request.Number, request.Checks)
 		}
 	}
-	if allowed == nil || !allowed.AllowFailure {
-		t.Fatalf("golangci-lint = %+v, want allow_failure", allowed)
+}
+
+func TestGitLabChangeRequestsAcceptedHeadIsACandidate(t *testing.T) {
+	runner := &stubRunner{respond: func(_ int, argv []string) (string, string, error) {
+		key := strings.Join(argv, " ")
+		switch {
+		case strings.Contains(key, "merge_requests?state=all"):
+			return `[
+				{"iid":1,"state":"opened","sha":"aaa","description":""},
+				{"iid":2,"state":"opened","sha":"bbb","description":""}
+			]`, "", nil
+		case strings.Contains(key, "merge_requests/2/changes"):
+			return `{"changes":[{"new_path":"main.go"}]}`, "", nil
+		case strings.Contains(key, "merge_requests/2/pipelines"):
+			return `[{"id":4,"sha":"bbb"}]`, "", nil
+		case strings.Contains(key, "pipelines/4/jobs"):
+			return `[{"name":"test","status":"success"}]`, "", nil
+		case strings.Contains(key, "merge_requests/1/"):
+			t.Errorf("MR 1 is not a candidate: %s", key)
+		}
+		return "[]", "", nil
+	}}
+	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", runner, &Budget{Max: 100})
+	requests, err := adapter.ChangeRequestsFor(context.Background(), map[string]struct{}{"bbb": {}})
+	if err != nil {
+		t.Fatalf("ChangeRequestsFor: %v", err)
 	}
-	if green, reason := merged.HeadGreen(); !green || reason != "all checks passed" {
-		t.Fatalf("HeadGreen = %v %q, want green", green, reason)
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(requests))
 	}
+	if requests[0].Checks != nil {
+		t.Fatalf("unaccepted MR 1 has checks: %+v", requests[0].Checks)
+	}
+	if requests[1].Checks == nil || requests[1].DocsOnly {
+		t.Fatalf("accepted MR 2 = %+v, want code checks", requests[1])
+	}
+}
+
+func seq(from, to int) []int {
+	out := make([]int, 0, to-from+1)
+	for i := from; i <= to; i++ {
+		out = append(out, i)
+	}
+	return out
 }
 
 type stubRunner struct {

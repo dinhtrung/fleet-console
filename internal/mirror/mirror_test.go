@@ -2,6 +2,8 @@ package mirror
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -169,5 +171,131 @@ func TestForgeForbiddenIsNamed(t *testing.T) {
 	}
 	if status.LastForgeAt == nil || !status.LastForgeAt.Equal(first) {
 		t.Fatalf("stamp = %v, want the previous success", status.LastForgeAt)
+	}
+}
+
+func TestMirrorKeepsItemsWhenChangeRequestsFail(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	id := project(t, st)
+	fake := forge.NewFake(forge.KindGitLab)
+	fake.ItemsValue = []forge.Item{{Number: 7, Kind: forge.KindTask, State: forge.StateOpen, Title: "One"}}
+	fake.RequestsValue = []forge.ChangeRequest{{Number: 70, State: "open", ClosesItem: 7}}
+
+	first := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
+	m := &Mirror{Store: st, Now: func() time.Time { return first }}
+	if _, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: fake}}); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	fake.ItemsValue = append(fake.ItemsValue, forge.Item{Number: 8, Kind: forge.KindTask, State: forge.StateOpen, Title: "Two"})
+	fake.RequestsErr = errors.New("forge: stale: HTTP 500")
+	m.Now = func() time.Time { return first.Add(time.Minute) }
+	if _, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: fake}}); err != nil {
+		t.Fatalf("cr-failed tick: %v", err)
+	}
+
+	items, err := st.Items(ctx)
+	if err != nil {
+		t.Fatalf("items: %v", err)
+	}
+	if len(items) != 2 || items[1].Number != 8 {
+		t.Fatalf("items = %+v, want both open items after a CR failure", items)
+	}
+	status, err := st.MirrorStatus(ctx, id)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !status.ForgeStale || !strings.Contains(status.ForgeError, "HTTP 500") {
+		t.Fatalf("status = %+v, want stale with the CR error", status)
+	}
+	if status.LastForgeAt == nil || !status.LastForgeAt.Equal(first) {
+		t.Fatalf("stamp = %v, want the previous complete read %v", status.LastForgeAt, first)
+	}
+}
+
+type hangingForge struct{ *forge.Fake }
+
+func (h hangingForge) Items(ctx context.Context) ([]forge.Item, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestMirrorBoundsOneProjectRead(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	id := project(t, st)
+	slow := hangingForge{Fake: forge.NewFake(forge.KindGitLab)}
+	m := &Mirror{Store: st, ProjectTimeout: 30 * time.Millisecond}
+	started := time.Now()
+	if _, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: slow}}); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("tick took %s, want the project deadline to bound it", elapsed)
+	}
+	status, err := st.MirrorStatus(ctx, id)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !status.ForgeStale || !strings.Contains(status.ForgeError, "deadline exceeded") {
+		t.Fatalf("status = %+v, want a deadline error", status)
+	}
+}
+
+func TestMirrorLogsEachStaleReasonOnce(t *testing.T) {
+	var lines []string
+	m := &Mirror{Logf: func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }}
+	seen := map[string]string{}
+	result := TickResult{
+		Projects: map[string]ProjectResult{"app": {ForgeError: "boom"}},
+		RigError: "rig down",
+	}
+	m.noteProjects(seen, result)
+	m.noteProjects(seen, result)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %v, want one per changed reason", lines)
+	}
+	result.Projects["app"] = ProjectResult{ForgeError: "boom 2"}
+	m.noteProjects(seen, result)
+	if len(lines) != 3 {
+		t.Fatalf("lines = %v, want the changed reason logged", lines)
+	}
+	result.Projects["app"] = ProjectResult{}
+	result.RigError = ""
+	m.noteProjects(seen, result)
+	if len(lines) != 3 {
+		t.Fatalf("lines = %v, recovery must not log", lines)
+	}
+	result.Projects["app"] = ProjectResult{ForgeError: "boom"}
+	m.noteProjects(seen, result)
+	if len(lines) != 4 {
+		t.Fatalf("lines = %v, want a recurrence logged after recovery", lines)
+	}
+}
+
+func TestMirrorPassesAcceptedVerdictSHAs(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	id := project(t, st)
+	dispatchID, err := st.CreateDispatch(ctx, store.NewDispatch{
+		ProjectID: id, ItemNumber: 7, Attempt: 1, Seat: "s", Branch: "b", Worktree: "w", BaseSHA: "base",
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if _, err := st.AddVerdict(ctx, store.NewVerdict{
+		DispatchID: dispatchID, SHA: "ABC123", Decision: "accept", Source: "review",
+	}); err != nil {
+		t.Fatalf("verdict: %v", err)
+	}
+	fake := forge.NewFake(forge.KindGitLab)
+	fake.ItemsValue = []forge.Item{{Number: 7, Kind: forge.KindTask, State: forge.StateOpen, Title: "One"}}
+	m := &Mirror{Store: st}
+	if _, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: fake}}); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if _, ok := fake.Accepted["abc123"]; !ok {
+		t.Fatalf("accepted shas = %v, want the ACCEPT verdict head lowercased", fake.Accepted)
 	}
 }
