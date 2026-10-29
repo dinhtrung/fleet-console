@@ -36,7 +36,7 @@ rtk_sha256_arm64 = cd627c4091ad90b5e5aca83ca5af66ee4b8aa8537a736533fa90544f461f1
 # App — the release artifact produced by `make release`, sha256 over the
 # tarball. `pending` means the release has not been cut yet; the installer then
 # requires an explicit --app-tarball whose hash it records.
-fleet_console = 0.1.0
-fleet_console_sha256 = f4b0541a5628fbade5f55ec540cf7a77fff35eb4893f6db74fb86164d922aa46
-fleet_console_binary_sha256 = 45443c6164181d6c2e473e5c38cf311a4b7dac0fa95aba739ff85301aa92ed0d
-fleet_console_url = https://github.com/dinhtrung/fleet-console/releases/download/v0.1.0/fleet-console-0.1.0-linux-amd64.tar.gz
+fleet_console = 0.1.1
+fleet_console_sha256 = 6d5e7a7fe434dd8ff333523f287c5a72f5f037d7705eb23f013b30e583c20a2d
+fleet_console_binary_sha256 = 18f187b9f200d56e363d8957fd7ad3f0590afae395074d6757b9628dd16cc3bd
+fleet_console_url = https://github.com/dinhtrung/fleet-console/releases/download/v0.1.1/fleet-console-0.1.1-linux-amd64.tar.gz
