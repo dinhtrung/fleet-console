@@ -20,6 +20,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/dinhtrung/fleet-console/internal/act"
+	"github.com/dinhtrung/fleet-console/internal/config"
 	"github.com/dinhtrung/fleet-console/internal/decide"
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/git"
@@ -54,7 +55,7 @@ func main() {
 
 // runTick reads the forge/rig/git, writes only the mirror caches, and prints the
 // decide plan. It performs no forge, rig or git writes.
-func projectSources(ctx context.Context, db *store.Store) ([]mirror.Project, error) {
+func projectSources(ctx context.Context, db *store.Store, runner forge.Runner) ([]mirror.Project, error) {
 	projects, err := db.Projects(ctx)
 	if err != nil {
 		return nil, err
@@ -69,9 +70,9 @@ func projectSources(ctx context.Context, db *store.Store) ([]mirror.Project, err
 		var source forge.Forge
 		switch forge.Kind(project.ForgeKind) {
 		case forge.KindGitHub:
-			source = forge.NewGitHub(project.ForgeProject, forge.CLIRunner{}, budget)
+			source = forge.NewGitHub(project.ForgeProject, runner, budget)
 		case forge.KindGitLab:
-			source = forge.NewGitLab(project.ForgeProject, forge.CLIRunner{}, budget)
+			source = forge.NewGitLab(project.ForgeProject, runner, budget)
 		default:
 			return nil, fmt.Errorf("tick: project %s has unknown forge %q", project.Key, project.ForgeKind)
 		}
@@ -84,14 +85,14 @@ func projectSources(ctx context.Context, db *store.Store) ([]mirror.Project, err
 	return specs, nil
 }
 
-func runTick(ctx context.Context, db *store.Store, out io.Writer) error {
+func runTick(ctx context.Context, db *store.Store, out io.Writer, runner forge.Runner, rigRunner rig.ExecRunner) error {
 	projects, err := db.Projects(ctx)
 	if err != nil {
 		return err
 	}
-	adapter := rig.NewAdapter(rig.ExecRunner{})
+	adapter := rig.NewAdapter(rigRunner)
 	mirrorer := &mirror.Mirror{Store: db, Rig: adapter}
-	specs, err := projectSources(ctx, db)
+	specs, err := projectSources(ctx, db, runner)
 	if err != nil {
 		return err
 	}
@@ -136,11 +137,27 @@ func run(args []string, stdout, stderr io.Writer) error {
 	tick := flags.Bool("tick", false, "run one mirror + decide pass in dry-run and print the plan")
 	importState := flags.String("import-dispatch-state", "", "import the old dispatcher state JSON and exit")
 	projectKey := flags.String("project-key", "fleet-console", "project key for --import-dispatch-state")
-	addr := flags.String("addr", "127.0.0.1:8787", "listen address")
-	dbPath := flags.String("db", "fleet-console.db", "SQLite database path")
+	flags.String("addr", "", "listen address (overrides the config)")
+	flags.String("db", "", "SQLite database path (overrides the config)")
+	configPath := flags.String("config", "", "config.yaml path (overrides FLEET_CONSOLE_CONFIG)")
+	printConfig := flags.Bool("print-config", false, "print the effective config with secrets redacted and exit")
+	applyConfig := flags.Bool("apply-config", false, "create or refresh the projects from the config and exit")
+	syncOnHold := flags.Bool("sync-onhold", false, "with --apply-config, copy each project's onhold from the config")
+	flags.String("tick-interval", "", "mirror interval (overrides the config)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	explicit := map[string]string{}
+	flags.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "addr":
+			explicit["listen"] = f.Value.String()
+		case "db":
+			explicit["database"] = f.Value.String()
+		case "tick-interval":
+			explicit["tick_interval"] = f.Value.String()
+		}
+	})
 
 	if *asJSON && !*showVersion {
 		return errors.New("--json requires --version")
@@ -157,7 +174,24 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
-	probe := rig.NewProbe(rig.ExecRunner{}, log.New(stderr, "", 0).Printf)
+	eff, err := config.Load(config.Options{FlagPath: *configPath, Flags: explicit, Env: os.Getenv})
+	if err != nil {
+		return err
+	}
+	for _, warning := range eff.Warnings {
+		fmt.Fprintf(stderr, "fleet-console: config: %s\n", warning)
+	}
+	if *printConfig {
+		printed, err := eff.Print()
+		if err != nil {
+			return err
+		}
+		_, err = stdout.Write(printed)
+		return err
+	}
+	rigRunner := rig.ExecRunner{Path: eff.RigBinary}
+	forgeRunner := forge.CLIRunner{Binaries: map[string]string{"gh": eff.GhBinary, "glab": eff.GlabBinary}}
+	probe := rig.NewProbe(rigRunner, log.New(stderr, "", 0).Printf)
 
 	if *compat {
 		report := probe.Run(context.Background())
@@ -172,11 +206,27 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
+	if *applyConfig {
+		db, err := store.Open(context.Background(), eff.Database)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		applied, err := applyProjects(context.Background(), db, eff.Projects, *syncOnHold)
+		if err != nil {
+			return err
+		}
+		for _, project := range applied {
+			fmt.Fprintf(stdout, "%s %s\n", project.Result, project.Key)
+		}
+		return nil
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	if *migrate {
-		db, err := store.Open(ctx, *dbPath)
+		db, err := store.Open(ctx, eff.Database)
 		if err != nil {
 			return err
 		}
@@ -186,16 +236,16 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	if *tick {
-		db, err := store.Open(ctx, *dbPath)
+		db, err := store.Open(ctx, eff.Database)
 		if err != nil {
 			return err
 		}
 		defer db.Close()
-		return runTick(ctx, db, stdout)
+		return runTick(ctx, db, stdout, forgeRunner, rigRunner)
 	}
 
 	if *importState != "" {
-		db, err := store.Open(ctx, *dbPath)
+		db, err := store.Open(ctx, eff.Database)
 		if err != nil {
 			return err
 		}
@@ -223,22 +273,37 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
-	token := os.Getenv("FLEET_CONSOLE_TOKEN")
+	token := eff.Token
 	if token == "" {
-		return errors.New("FLEET_CONSOLE_TOKEN is required")
+		return errors.New("token is required (FLEET_CONSOLE_TOKEN, token: or token_file:)")
 	}
 
 	// Host tools are declared, not bundled. A missing one stops startup and
-	// names itself; nothing can be dispatched without it.
-	if missing := hostcheck.Missing(os.Getenv("PATH")); len(missing) > 0 {
+	// names itself; nothing can be dispatched without it. Configured binary
+	// paths satisfy the check even when they are not named on PATH.
+	missing := hostcheck.MissingFor(os.Getenv("PATH"), hostcheck.Requirements{
+		Rig:   []string{eff.RigBinary},
+		Forge: []string{eff.GhBinary, eff.GlabBinary},
+	})
+	if len(missing) > 0 {
 		return fmt.Errorf("missing host tools on PATH: %s; the act loop stays off", strings.Join(missing, ", "))
 	}
 
-	db, err := store.Open(ctx, *dbPath)
+	db, err := store.Open(ctx, eff.Database)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
+
+	if len(eff.Projects) > 0 {
+		applied, err := applyProjects(ctx, db, eff.Projects, false)
+		if err != nil {
+			return err
+		}
+		for _, project := range applied {
+			fmt.Fprintf(stderr, "fleet-console: config: %s %s\n", project.Result, project.Key)
+		}
+	}
 
 	// The compat check runs at boot, as runtime-compat requires. A failure is
 	// visible at /api/compat and in the log; the API still serves.
@@ -257,10 +322,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	// The mirror runs in the server: read-only, jittered, and dry-run only for
 	// decide until the act loop lands.
-	go (&mirror.Mirror{Store: db, Rig: rig.NewAdapter(rig.ExecRunner{})}).Loop(
+	jitter := 5 * time.Second
+	if eff.TickInterval < jitter {
+		jitter = 0
+	}
+	go (&mirror.Mirror{Store: db, Rig: rig.NewAdapter(rigRunner)}).Loop(
 		ctx,
-		func(ctx context.Context) ([]mirror.Project, error) { return projectSources(ctx, db) },
-		15*time.Second, 5*time.Second,
+		func(ctx context.Context) ([]mirror.Project, error) { return projectSources(ctx, db, forgeRunner) },
+		eff.TickInterval, jitter,
 		func(read mirror.TickResult) {
 			rows, err := db.Projects(ctx)
 			if err != nil {
@@ -282,7 +351,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		Token:  token,
 		Compat: func(context.Context) rig.Report { return report },
 		Store:  db,
-		Rig:    rig.NewAdapter(rig.ExecRunner{}),
+		Rig:    rig.NewAdapter(rigRunner),
 	})
 	if err != nil {
 		return err
@@ -290,9 +359,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	listenErr := make(chan error, 1)
 	go func() {
-		listenErr <- app.Listen(*addr, fiber.ListenConfig{DisableStartupMessage: true})
+		listenErr <- app.Listen(eff.Listen, fiber.ListenConfig{DisableStartupMessage: true})
 	}()
-	fmt.Fprintf(stderr, "fleet-console: listening on %s\n", *addr)
+	fmt.Fprintf(stderr, "fleet-console: listening on %s\n", eff.Listen)
 
 	select {
 	case <-ctx.Done():
@@ -302,4 +371,45 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case err := <-listenErr:
 		return err
 	}
+}
+
+type appliedProject struct {
+	Key    string
+	Result store.UpsertResult
+}
+
+// applyProjects refreshes the project registry from config.yaml. It never
+// deletes a project and never resumes an onhold project without syncOnHold.
+func applyProjects(ctx context.Context, db *store.Store, projects []config.Project, syncOnHold bool) ([]appliedProject, error) {
+	applied := make([]appliedProject, 0, len(projects))
+	for _, project := range projects {
+		name := project.Name
+		if name == "" {
+			name = project.Key
+		}
+		labels := []byte("{}")
+		if project.Labels != nil {
+			encoded, err := json.Marshal(project.Labels)
+			if err != nil {
+				return applied, fmt.Errorf("config: project %s labels: %w", project.Key, err)
+			}
+			labels = encoded
+		}
+		onhold := project.OnHold != nil && *project.OnHold
+		result, _, err := db.UpsertProject(ctx, store.UpsertInput{
+			Project: store.ProjectInput{
+				Key: project.Key, Name: name, ForgeKind: project.Forge, ForgeProject: project.Repo,
+				DefaultBranch: project.DefaultBranch, Rig: project.Rig, RigTemplate: project.RigTemplate,
+				ConcurrencyCap: project.ConcurrencyCap, Enabled: true, OnHold: onhold, GateCmd: project.GateCmd,
+			},
+			LabelsJSON: string(labels), RepoKey: "main",
+			RepoPath: project.Paths.Main, WorktreeRoot: project.Paths.Worktrees,
+			SyncOnHold: syncOnHold,
+		})
+		if err != nil {
+			return applied, err
+		}
+		applied = append(applied, appliedProject{Key: project.Key, Result: result})
+	}
+	return applied, nil
 }
