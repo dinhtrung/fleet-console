@@ -341,7 +341,11 @@ func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []
 		snapshot.Builders = append(snapshot.Builders, seat.Session)
 	}
 	for _, dispatch := range dispatches {
-		snapshot.Dispatched = append(snapshot.Dispatched, dispatch.ItemNumber)
+		// An ended attempt is not a live duplicate: the item may be dispatched
+		// again on a later tick (D4 reconciliation ends it first).
+		if dispatch.EndedAt == nil {
+			snapshot.Dispatched = append(snapshot.Dispatched, dispatch.ItemNumber)
+		}
 		converted := dispatchFields{
 			Item: dispatch.ItemNumber, Seat: dispatch.Seat, Branch: dispatch.Branch,
 			QItemID: dispatch.QItemID, Attempt: dispatch.Attempt,

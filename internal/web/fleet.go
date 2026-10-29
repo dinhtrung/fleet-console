@@ -205,6 +205,12 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 		dispatches := make(map[int]store.DispatchRow, len(allDispatches))
 		live := 0
 		for _, dispatch := range allDispatches {
+			// A reconciled attempt is over; the item reads as queued until a
+			// later tick dispatches a new one.
+			if dispatch.EndedAt != nil &&
+				(dispatch.EndReason == "superseded" || dispatch.EndReason == "abandoned") {
+				continue
+			}
 			if _, exists := dispatches[dispatch.ItemNumber]; exists {
 				continue
 			}
