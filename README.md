@@ -112,7 +112,8 @@ A project entry takes `key`, `name`, `forge` (`github`/`gitlab`), `repo`
 (default `default`), `concurrency_cap`, `gate_cmd`, `labels`, `onhold`, and
 `paths.main` / `paths.worktrees`. `rigs` is the ordered list of rigs for this
 project; `rig: name` is the one-element form, and using both in one file is an
-error. At least one rig is required. Each rig serves only this project: the
+error. At least one rig is required, and a rig used by one project may not be
+listed by another. Each rig serves only this project: the
 dispatcher fills free builders across the list in order under
 `concurrency_cap`, and a review goes to `dev-review@<rig>` for the rig that
 built the item (the brief names it). A configured rig with no running seats is

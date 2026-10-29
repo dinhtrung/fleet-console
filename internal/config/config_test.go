@@ -253,6 +253,7 @@ func TestRigsListAndSingleRigForms(t *testing.T) {
 		"empty":     "projects:\n  - {key: a, forge: github, repo: o/a, rigs: []}\n",
 		"none":      "projects:\n  - {key: a, forge: github, repo: o/a}\n",
 		"duplicate": "projects:\n  - {key: a, forge: github, repo: o/a, rigs: [rig-a, rig-a]}\n",
+		"shared":    "projects:\n  - {key: a, forge: github, repo: o/a, rigs: [rig-a]}\n  - {key: b, forge: github, repo: o/b, rigs: [rig-a]}\n",
 	}
 	for name, body := range bad {
 		path := writeConfig(t, dir, body)

@@ -238,6 +238,7 @@ func Load(opts Options) (*Effective, error) {
 		eff.Sources["token"] = "none"
 	}
 
+	rigOwners := make(map[string]string)
 	for index, project := range file.Projects {
 		project.Key = strings.TrimSpace(project.Key)
 		project.Forge = strings.ToLower(strings.TrimSpace(project.Forge))
@@ -278,6 +279,12 @@ func Load(opts Options) (*Effective, error) {
 			}
 			seen[name] = true
 			project.Rigs[index] = name
+		}
+		for _, name := range project.Rigs {
+			if owner, ok := rigOwners[name]; ok {
+				return nil, fmt.Errorf("config: rig %q is assigned to both %q and %q", name, owner, project.Key)
+			}
+			rigOwners[name] = project.Key
 		}
 		project.Rig = "" // the resolved list is the source
 		project.Paths.Main = resolve(dir, project.Paths.Main, home)
