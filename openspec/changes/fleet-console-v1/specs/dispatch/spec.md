@@ -27,8 +27,9 @@ the link is symmetric. The app SHALL NOT apply both rules to one project.
 
 ### Requirement: Order by number, cap by free builders
 
-Candidates SHALL be taken in ascending item number, up to the free builders of the project's rig and the project's
-`concurrency_cap`. Both limits SHALL be applied; the smaller one wins.
+Candidates SHALL be taken in ascending item number, up to the free builders summed across the project's rigs and the
+project's `concurrency_cap`. Both limits SHALL be applied; the smaller one wins, and the rigs are filled in the order
+the project lists them.
 
 #### Scenario: Three builders, two free
 
@@ -63,9 +64,19 @@ another branch SHALL be skipped only when it also holds uncommitted changes, and
 ### Requirement: A dispatch names the seat and the row it created
 
 Every dispatch SHALL record the seat address, branch, worktree, base sha and the rig queue row id it created, so a
-later tick can correlate the row without scanning bodies.
+later tick can correlate the row without scanning bodies. The brief SHALL name the rig that owns that seat.
 
 #### Scenario: The row is closed by a seat
 
 - **WHEN** a builder closes its row
 - **THEN** the dispatch record shows that row id and the next tick reads its closure rather than guessing
+
+### Requirement: A review goes to the reviewer of the rig that built the item
+
+A review SHALL be requested from the reviewer of the rig whose seat built the item, and the review brief SHALL name
+that rig, so a shared reviewer is never assumed. An item with no dispatch SHALL use the project's first listed rig.
+
+#### Scenario: The second rig's builder needs a re-review
+
+- **WHEN** an item was built on `dev-build-1@rig-b` and a moved head needs a re-review
+- **THEN** the queue row goes to `dev-review@rig-b` and the brief carries `Rig: rig-b`

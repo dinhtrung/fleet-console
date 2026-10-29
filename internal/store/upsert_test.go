@@ -109,3 +109,66 @@ func TestUpsertUpdatesRepoAndKeepsRemovedProjects(t *testing.T) {
 		t.Fatalf("repo path = %q", path)
 	}
 }
+
+func TestProjectRigsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	st := upsertStore(t)
+	in := baseUpsert()
+	in.Project.Rig = ""
+	in.Project.Rigs = []string{"rig-a", "rig-b"}
+	if _, id, err := st.UpsertProject(ctx, in); err != nil || id == 0 {
+		t.Fatalf("create: %v", err)
+	}
+	projects, _ := st.Projects(ctx)
+	if len(projects) != 1 || len(projects[0].Rigs) != 2 || projects[0].Rigs[0] != "rig-a" ||
+		projects[0].Rigs[1] != "rig-b" || projects[0].Rig != "rig-a" {
+		t.Fatalf("project = %+v", projects)
+	}
+	in.Project.Rigs = []string{"rig-a"}
+	if result, _, err := st.UpsertProject(ctx, in); err != nil || result != UpsertUpdated {
+		t.Fatalf("update = %s %v", result, err)
+	}
+	projects, _ = st.Projects(ctx)
+	if len(projects[0].Rigs) != 1 || projects[0].Rigs[0] != "rig-a" {
+		t.Fatalf("rigs after update = %+v", projects[0].Rigs)
+	}
+}
+
+// TestSchemaV3BackfillsRigsFromTheLegacyColumn: a database written before the
+// list column keeps its rig, as the one-element list.
+func TestSchemaV3BackfillsRigsFromTheLegacyColumn(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	st, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := st.CreateProject(ctx, ProjectInput{
+		Key: "old", Name: "old", ForgeKind: "github", ForgeProject: "o/old",
+		Rig: "old-rig", Enabled: true,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Rewind to schemaV2 and drop the column, as a pre-D5 database looked.
+	if _, err := st.db.ExecContext(ctx, `ALTER TABLE project DROP COLUMN rigs_json`); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx, `PRAGMA user_version = 2`); err != nil {
+		t.Fatalf("rewind: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	reopened, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	projects, err := reopened.Projects(ctx)
+	if err != nil {
+		t.Fatalf("projects: %v", err)
+	}
+	if len(projects) != 1 || len(projects[0].Rigs) != 1 || projects[0].Rigs[0] != "old-rig" {
+		t.Fatalf("rigs = %+v, want the legacy rig backfilled", projects)
+	}
+}

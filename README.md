@@ -22,7 +22,7 @@ the real answer is *a review verdict is parked, waiting for a human*. Both failu
 
 ## What v1 specifies
 
-- **A registry**: project → 1..n repos, one rig, config without secrets, a per-project concurrency cap.
+- **A registry**: project → 1..n repos, one or more rigs, config without secrets, a per-project concurrency cap.
 - **Durable state**: tasks, dispatches, leases, decisions and events in SQLite — not a JSON file.
 - **Three loops, one writer**: mirror (read), decide (pure, replayable), act (audited, serialized).
 - **Decisions as records**: every obligation waiting on a human, with an owner, an SLA and one-click actions.
@@ -109,15 +109,21 @@ the file resolve against the file's directory and `~` expands, so the file can
 live in `~/.config/fleet-console/` and point at `~/src/...`.
 
 A project entry takes `key`, `name`, `forge` (`github`/`gitlab`), `repo`
-(`owner/name`), `default_branch` (default `main`), `rig`, `rig_template`
+(`owner/name`), `default_branch` (default `main`), `rigs`, `rig_template`
 (default `default`), `concurrency_cap`, `gate_cmd`, `labels`, `onhold`, and
-`paths.main` / `paths.worktrees`. `paths.main` is the working checkout the
-mirror reads; a missing path is a warning, not an error.
+`paths.main` / `paths.worktrees`. `rigs` is the ordered list of rigs serving the
+project; `rig: name` is the one-element form, and naming both in one entry is an
+error. At least one rig is required, and a rig used by one project may not be
+listed by another. Free builders are summed across the list and filled in the
+listed order, under one `concurrency_cap`; a review goes to the reviewer of the
+rig that built the item, and the brief names that rig. A configured rig with no
+running seats is logged once and is not dispatched to. `paths.main` is the
+working checkout the mirror reads; a missing path is a warning, not an error.
 
 ### config.yaml
 
-A complete, runnable example (only `key`, `forge`, `repo` are strictly
-required; adjust the paths and the repository):
+A complete, runnable example (only `key`, `forge`, `repo` and a rig are
+strictly required; adjust the paths and the repository):
 
 ```yaml
 # ~/.config/fleet-console/config.yaml
@@ -142,7 +148,7 @@ projects:
     forge: github
     repo: my-org/my-project
     default_branch: main
-    rig: my-project
+    rigs: [my-project]
     rig_template: default
     concurrency_cap: 1
     gate_cmd: scripts/gate.sh

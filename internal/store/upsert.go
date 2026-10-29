@@ -45,6 +45,7 @@ func (s *Store) UpsertProject(ctx context.Context, in UpsertInput) (UpsertResult
 		return "", 0, err
 	}
 	changed := false
+	rigs := normalizeRigs(in.Project.Rig, in.Project.Rigs)
 	if existing == nil {
 		id, err := s.createProjectWithLabels(ctx, in.Project, in.LabelsJSON)
 		if err != nil {
@@ -64,7 +65,7 @@ func (s *Store) UpsertProject(ctx context.Context, in UpsertInput) (UpsertResult
 		existing.ForgeKind != in.Project.ForgeKind ||
 		existing.ForgeProject != in.Project.ForgeProject ||
 		existing.DefaultBranch != in.Project.DefaultBranch ||
-		existing.Rig != in.Project.Rig ||
+		!sameRigs(existing.Rigs, rigs) ||
 		existing.RigTemplate != in.Project.RigTemplate ||
 		existing.ConcurrencyCap != in.Project.ConcurrencyCap ||
 		existing.GateCmd != in.Project.GateCmd ||
@@ -80,12 +81,17 @@ func (s *Store) UpsertProject(ctx context.Context, in UpsertInput) (UpsertResult
 	if !changed {
 		return UpsertUnchanged, existing.ID, nil
 	}
+	firstRig := ""
+	if len(rigs) > 0 {
+		firstRig = rigs[0]
+	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE project SET name = ?, forge_kind = ?, forge_project = ?, default_branch = ?,
-		       rig = ?, rig_template = ?, concurrency_cap = ?, enabled = 1, onhold = ?, gate_cmd = ?, labels_json = ?
+		       rig = ?, rigs_json = ?, rig_template = ?, concurrency_cap = ?, enabled = 1, onhold = ?,
+		       gate_cmd = ?, labels_json = ?
 		WHERE id = ?`,
 		in.Project.Name, in.Project.ForgeKind, in.Project.ForgeProject, in.Project.DefaultBranch,
-		in.Project.Rig, in.Project.RigTemplate, in.Project.ConcurrencyCap, boolInt(onhold),
+		firstRig, encodeRigs(rigs), in.Project.RigTemplate, in.Project.ConcurrencyCap, boolInt(onhold),
 		nullString(in.Project.GateCmd), in.LabelsJSON, existing.ID)
 	if err != nil {
 		return "", 0, fmt.Errorf("store: upsert project: %w", err)
@@ -96,18 +102,20 @@ func (s *Store) UpsertProject(ctx context.Context, in UpsertInput) (UpsertResult
 func (s *Store) projectByKey(ctx context.Context, key string) (*ProjectRow, error) {
 	var row ProjectRow
 	var enabled, onhold int
+	var rigsJSON string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, key, name, forge_kind, forge_project, default_branch, rig, rig_template,
+		SELECT id, key, name, forge_kind, forge_project, default_branch, rig, rigs_json, rig_template,
 		       concurrency_cap, enabled, onhold, COALESCE(gate_cmd, ''), labels_json
 		FROM project WHERE key = ?`, key).
 		Scan(&row.ID, &row.Key, &row.Name, &row.ForgeKind, &row.ForgeProject, &row.DefaultBranch,
-			&row.Rig, &row.RigTemplate, &row.ConcurrencyCap, &enabled, &onhold, &row.GateCmd, &row.LabelsJSON)
+			&row.Rig, &rigsJSON, &row.RigTemplate, &row.ConcurrencyCap, &enabled, &onhold, &row.GateCmd, &row.LabelsJSON)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("store: project %s: %w", key, err)
 	}
+	row.Rigs = decodeRigs(rigsJSON, row.Rig)
 	row.Enabled, row.OnHold = enabled != 0, onhold != 0
 	return &row, nil
 }
@@ -119,11 +127,16 @@ func (s *Store) createProjectWithLabels(ctx context.Context, in ProjectInput, la
 	if in.RigTemplate == "" {
 		in.RigTemplate = "default"
 	}
+	rigs := normalizeRigs(in.Rig, in.Rigs)
+	firstRig := ""
+	if len(rigs) > 0 {
+		firstRig = rigs[0]
+	}
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO project (key, name, forge_kind, forge_project, default_branch, rig, rig_template,
+		INSERT INTO project (key, name, forge_kind, forge_project, default_branch, rig, rigs_json, rig_template,
 		                     concurrency_cap, enabled, onhold, gate_cmd, labels_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		in.Key, in.Name, in.ForgeKind, in.ForgeProject, in.DefaultBranch, in.Rig, in.RigTemplate,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		in.Key, in.Name, in.ForgeKind, in.ForgeProject, in.DefaultBranch, firstRig, encodeRigs(rigs), in.RigTemplate,
 		in.ConcurrencyCap, boolInt(true), boolInt(in.OnHold), nullString(in.GateCmd), labelsJSON)
 	if err != nil {
 		return 0, fmt.Errorf("store: create project: %w", err)

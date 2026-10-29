@@ -39,8 +39,8 @@ type Project struct {
 	Forge          string            `yaml:"forge"`
 	Repo           string            `yaml:"repo"`
 	DefaultBranch  string            `yaml:"default_branch"`
-    Rig            string            `yaml:"rig"`
-    Rigs           []string          `yaml:"rigs"`
+	Rig            string            `yaml:"rig,omitempty"`
+	Rigs           []string          `yaml:"rigs,omitempty"`
 	RigTemplate    string            `yaml:"rig_template"`
 	ConcurrencyCap int               `yaml:"concurrency_cap"`
 	GateCmd        string            `yaml:"gate_cmd"`
@@ -271,6 +271,7 @@ func Load(opts Options) (*Effective, error) {
 		eff.Sources["token"] = "none"
 	}
 
+	rigOwners := make(map[string]string)
 	for index, project := range file.Projects {
 		project.Key = strings.TrimSpace(project.Key)
 		project.Forge = strings.ToLower(strings.TrimSpace(project.Forge))
@@ -302,15 +303,37 @@ func Load(opts Options) (*Effective, error) {
 		if project.DefaultBranch == "" {
 			project.DefaultBranch = "main"
 		}
-    if project.Rig != "" && len(project.Rigs) > 0 {
-        return nil, fmt.Errorf("config: project %q: both rig and rigs set; use one form", project.Key)
-    }
-    if project.Rig == "" && len(project.Rigs) == 0 {
-        return nil, fmt.Errorf("config: project %q: rig or rigs is required", project.Key)
-    }
-    if len(project.Rigs) == 0 && project.Rig != "" {
-        project.Rigs = []string{project.Rig}
-    }
+		if project.Rig != "" && project.Rigs != nil {
+			return nil, fmt.Errorf("config: project %q: rig and rigs are mutually exclusive", project.Key)
+		}
+		if project.Rig != "" {
+			project.Rigs = []string{strings.TrimSpace(project.Rig)}
+		}
+		if project.Rigs != nil && len(project.Rigs) == 0 {
+			return nil, fmt.Errorf("config: project %q: rigs must not be empty", project.Key)
+		}
+		if len(project.Rigs) == 0 {
+			return nil, fmt.Errorf("config: project %q: rig or rigs is required", project.Key)
+		}
+		seen := make(map[string]bool, len(project.Rigs))
+		for rigIndex, name := range project.Rigs {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				return nil, fmt.Errorf("config: project %q: rigs must be non-empty names", project.Key)
+			}
+			if seen[name] {
+				return nil, fmt.Errorf("config: project %q: duplicate rig %q", project.Key, name)
+			}
+			seen[name] = true
+			project.Rigs[rigIndex] = name
+		}
+		for _, name := range project.Rigs {
+			if owner, ok := rigOwners[name]; ok {
+				return nil, fmt.Errorf("config: rig %q is assigned to both %q and %q", name, owner, project.Key)
+			}
+			rigOwners[name] = project.Key
+		}
+		project.Rig = "" // the resolved list is the single source
 		file.Projects[index] = project
 	}
 	eff.Projects = file.Projects

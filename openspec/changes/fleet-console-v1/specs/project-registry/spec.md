@@ -3,8 +3,13 @@
 ### Requirement: A project is a row, not a script
 
 A project SHALL be one row naming its forge kind and project id, its default branch, one or more repos with a local
-path and worktree root, its rig name and the rig template that generates it. Onboarding SHALL be that row, with no
-new timer, log or state file.
+path and worktree root, its ordered rig list and the rig template that generates its rigs. Onboarding SHALL be that
+row, with no new timer, log or state file. A rig SHALL serve exactly one project.
+
+#### Scenario: A project with two rigs
+
+- **WHEN** a project lists `rigs: [claude-rig, omp-rig]`
+- **THEN** both rigs serve that project's checkout and neither may be listed by another project
 
 #### Scenario: Two projects on one box
 
@@ -16,10 +21,26 @@ new timer, log or state file.
 - **WHEN** a project owns `app` and `docs` and a task lands in `docs`
 - **THEN** its worktree is cut from the `docs` repo and the app checkout is untouched
 
-### Requirement: Capacity comes from the rig
+### Requirement: Capacity comes from the rigs
 
-Free builders SHALL be computed from the rig's own state — its seats minus rows that are working, claimed or in
-progress — capped by the project's `concurrency_cap`. Capacity SHALL NOT be a configured number.
+Free builders SHALL be computed from the rigs' own state — their seats minus rows that are working, claimed or in
+progress — summed across the project's configured rigs and capped by the project's `concurrency_cap`. Seats SHALL be
+filled in the order the rig list names the rigs. Capacity SHALL NOT be a configured number.
+
+#### Scenario: Two rigs, one free builder each
+
+- **WHEN** two rigs each have one free builder and two tasks are ready
+- **THEN** both tasks are dispatched in one tick, the first to the first listed rig
+
+#### Scenario: One cap across two rigs
+
+- **WHEN** the same two rigs serve a project with `concurrency_cap: 1`
+- **THEN** one task is dispatched and the other carries `no free builder`
+
+#### Scenario: A configured rig has no seats
+
+- **WHEN** a listed rig has no running seats
+- **THEN** one warning names it, nothing is dispatched to it, and other projects are unaffected
 
 #### Scenario: A seat parked on a prompt is not free
 

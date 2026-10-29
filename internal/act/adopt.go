@@ -43,6 +43,9 @@ func AdoptPending(ctx context.Context, st *store.Store, rg AdoptionRig, project 
 		return result, err
 	}
 	allowed := make(map[string]bool)
+	for _, rigName := range project.Rigs {
+		allowed[rigName] = true
+	}
 	if project.Rig != "" {
 		allowed[project.Rig] = true
 	}
