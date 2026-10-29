@@ -83,7 +83,7 @@ func projectSources(ctx context.Context, db *store.Store, runner forge.Runner) (
 		default:
 			return nil, fmt.Errorf("tick: project %s has unknown forge %q", project.Key, project.ForgeKind)
 		}
-		spec := mirror.Project{ID: project.ID, Key: project.Key, Forge: source, Rig: project.Rig}
+		spec := mirror.Project{ID: project.ID, Key: project.Key, Forge: source, Rigs: project.Rigs}
 		if repoPath != "" {
 			spec.Git = git.ExecRunner{RepoPath: repoPath}
 		}
@@ -116,7 +116,7 @@ func worktreeRoot(eff *config.Effective, project store.ProjectRow, source mirror
 	return ""
 }
 
-func runTick(ctx context.Context, db *store.Store, out io.Writer, runner forge.Runner, rigRunner rig.ExecRunner, timeouts mirror.TimeoutSettings) error {
+func runTick(ctx context.Context, db *store.Store, out, errOut io.Writer, runner forge.Runner, rigRunner rig.ExecRunner, timeouts mirror.TimeoutSettings) error {
 	projects, err := db.Projects(ctx)
 	if err != nil {
 		return err
@@ -132,14 +132,16 @@ func runTick(ctx context.Context, db *store.Store, out io.Writer, runner forge.R
 		return err
 	}
 	type tickOutput struct {
-		At       string                 `json:"at"`
-		RigStale bool                   `json:"rig_stale"`
-		RigError string                 `json:"rig_error,omitempty"`
-		Projects map[string]decide.Plan `json:"projects"`
+		At          string                 `json:"at"`
+		RigStale    bool                   `json:"rig_stale"`
+		RigError    string                 `json:"rig_error,omitempty"`
+		RigWarnings map[string][]string    `json:"rig_warnings,omitempty"`
+		Projects    map[string]decide.Plan `json:"projects"`
 	}
 	output := tickOutput{
 		At: read.At.UTC().Format(time.RFC3339), RigStale: read.RigStale, RigError: read.RigError,
-		Projects: make(map[string]decide.Plan, len(projects)),
+		RigWarnings: make(map[string][]string, len(projects)),
+		Projects:    make(map[string]decide.Plan, len(projects)),
 	}
 	for _, project := range projects {
 		dispatches, err := db.DispatchesForProject(ctx, project.ID)
@@ -150,8 +152,17 @@ func runTick(ctx context.Context, db *store.Store, out io.Writer, runner forge.R
 		if err != nil {
 			return err
 		}
-		snapshot := mirror.BuildSnapshot(project, read.Projects[project.Key], dispatches, verdicts)
+		result := read.Projects[project.Key]
+		snapshot := mirror.BuildSnapshot(project, result, dispatches, verdicts)
 		output.Projects[project.Key] = decide.PlanTick(snapshot, read.At)
+		// A ghost rig is a config error the operator must see from the same dry
+		// run that plans the work: stderr for a human, the JSON field for a script.
+		for _, rigName := range result.RigWarnings {
+			fmt.Fprintf(errOut, "rig: %s: rig %s has no running seats\n", project.Key, rigName)
+		}
+		if len(result.RigWarnings) > 0 {
+			output.RigWarnings[project.Key] = result.RigWarnings
+		}
 	}
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
@@ -293,7 +304,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		defer db.Close()
-		return runTick(ctx, db, stdout, forgeRunner, rigRunner, mirrorTimeouts(eff))
+		return runTick(ctx, db, stdout, stderr, forgeRunner, rigRunner, mirrorTimeouts(eff))
 	}
 
 	if *importState != "" {
@@ -538,7 +549,7 @@ func applyProjects(ctx context.Context, db *store.Store, projects []config.Proje
 		result, _, err := db.UpsertProject(ctx, store.UpsertInput{
 			Project: store.ProjectInput{
 				Key: project.Key, Name: name, ForgeKind: project.Forge, ForgeProject: project.Repo,
-				DefaultBranch: project.DefaultBranch, Rig: project.Rig, RigTemplate: project.RigTemplate,
+				DefaultBranch: project.DefaultBranch, Rig: project.Rig, Rigs: project.Rigs, RigTemplate: project.RigTemplate,
 				ConcurrencyCap: project.ConcurrencyCap, Enabled: true, OnHold: onhold, GateCmd: project.GateCmd,
 			},
 			LabelsJSON: string(labels), RepoKey: "main",

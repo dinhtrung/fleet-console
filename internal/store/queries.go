@@ -15,6 +15,7 @@ type ProjectRow struct {
 	ForgeProject   string
 	DefaultBranch  string
 	Rig            string
+	Rigs           []string
 	RigTemplate    string
 	ConcurrencyCap int
 	Enabled        bool
@@ -81,7 +82,7 @@ type EventRow struct {
 // Projects returns the project registry ordered by key.
 func (s *Store) Projects(ctx context.Context) ([]ProjectRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, key, name, forge_kind, forge_project, default_branch, rig, rig_template,
+		SELECT id, key, name, forge_kind, forge_project, default_branch, rig, rigs_json, rig_template,
 		       concurrency_cap, enabled, onhold, COALESCE(gate_cmd, ''), labels_json
 		FROM project ORDER BY key`)
 	if err != nil {
@@ -92,10 +93,12 @@ func (s *Store) Projects(ctx context.Context) ([]ProjectRow, error) {
 	for rows.Next() {
 		var p ProjectRow
 		var enabled, onhold int
+		var rigsJSON string
 		if err := rows.Scan(&p.ID, &p.Key, &p.Name, &p.ForgeKind, &p.ForgeProject, &p.DefaultBranch, &p.Rig,
-			&p.RigTemplate, &p.ConcurrencyCap, &enabled, &onhold, &p.GateCmd, &p.LabelsJSON); err != nil {
+			&rigsJSON, &p.RigTemplate, &p.ConcurrencyCap, &enabled, &onhold, &p.GateCmd, &p.LabelsJSON); err != nil {
 			return nil, fmt.Errorf("store: projects: %w", err)
 		}
+		p.Rigs = decodeRigs(rigsJSON, p.Rig)
 		p.Enabled, p.OnHold = enabled != 0, onhold != 0
 		out = append(out, p)
 	}

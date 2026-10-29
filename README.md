@@ -109,14 +109,24 @@ the file resolve against the file's directory and `~` expands, so the file can
 live in `~/.config/fleet-console/` and point at `~/src/...`.
 
 A project entry takes `key`, `name`, `forge` (`github`/`gitlab`), `repo`
-(`owner/name`), `default_branch` (default `main`), `rig`, `rig_template`
+(`owner/name`), `default_branch` (default `main`), `rigs`, `rig_template`
 (default `default`), `concurrency_cap`, `gate_cmd`, `labels`, `onhold`, and
-`paths.main` / `paths.worktrees`. `paths.main` is the working checkout the
+`paths.main` / `paths.worktrees`. `rigs` is the ordered list of rigs for this
+project; `rig: name` is the one-element form, and using both in one file is an
+error. At least one rig is required, and a rig used by one project may not be
+listed by another. Each rig serves only this project: the
+dispatcher fills free builders across the list in order under
+`concurrency_cap`, and a review goes to `dev-review@<rig>` for the rig that
+built the item (the brief names it). A configured rig with no running seats is
+named by `--tick` (a `rig: …` line on stderr and `rig_warnings` in its JSON) and
+logged once by the server, and is not dispatched to; a failed rig read is
+reported as `rig_stale` and names no rig, because a read that did not answer
+cannot say a rig is empty. `paths.main` is the working checkout the
 mirror reads; a missing path is a warning, not an error.
 
 ### config.yaml
 
-A complete, runnable example (only `key`, `forge`, `repo` are strictly
+A complete, runnable example (only `key`, `forge`, `repo` and a rig are strictly
 required; adjust the paths and the repository):
 
 ```yaml
@@ -142,7 +152,7 @@ projects:
     forge: github
     repo: my-org/my-project
     default_branch: main
-    rig: my-project
+    rigs: [my-project]
     rig_template: default
     concurrency_cap: 1
     gate_cmd: scripts/gate.sh

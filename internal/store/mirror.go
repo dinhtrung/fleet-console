@@ -229,6 +229,7 @@ type ProjectInput struct {
 	ForgeProject   string
 	DefaultBranch  string
 	Rig            string
+	Rigs           []string
 	RigTemplate    string
 	ConcurrencyCap int
 	Enabled        bool
@@ -244,11 +245,16 @@ func (s *Store) CreateProject(ctx context.Context, in ProjectInput) (int64, erro
 	if in.RigTemplate == "" {
 		in.RigTemplate = "rig.yaml.tmpl"
 	}
+	rigs := normalizeRigs(in.Rig, in.Rigs)
+	firstRig := ""
+	if len(rigs) > 0 {
+		firstRig = rigs[0]
+	}
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO project (key, name, forge_kind, forge_project, default_branch, rig, rig_template,
+		INSERT INTO project (key, name, forge_kind, forge_project, default_branch, rig, rigs_json, rig_template,
 		                     concurrency_cap, enabled, onhold, gate_cmd)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		in.Key, in.Name, in.ForgeKind, in.ForgeProject, in.DefaultBranch, in.Rig, in.RigTemplate,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		in.Key, in.Name, in.ForgeKind, in.ForgeProject, in.DefaultBranch, firstRig, encodeRigs(rigs), in.RigTemplate,
 		in.ConcurrencyCap, boolInt(in.Enabled), boolInt(in.OnHold), nullString(in.GateCmd))
 	if err != nil {
 		return 0, fmt.Errorf("store: create project: %w", err)

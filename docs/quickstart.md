@@ -118,7 +118,7 @@ projects:
     forge: github
     repo: my-org/my-project
     default_branch: main
-    rig: my-project
+    rigs: [my-project]
     concurrency_cap: 1
     paths:
       main: ~/src/my-project

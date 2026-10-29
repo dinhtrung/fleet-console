@@ -7,11 +7,11 @@ import (
 
 // schemaVersion is the number of migrations in migrations. A database at this
 // user_version is current.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // migrations are applied in order; migrations[i] moves user_version from i to
 // i+1. Never edit an applied migration; append a new one.
-var migrations = []string{schemaV1, schemaV2}
+var migrations = []string{schemaV1, schemaV2, schemaV3}
 
 // schemaV1 is design §6 verbatim. Do not add the queue_row, decision, lease or
 // task tables here: that state belongs to the rig.
@@ -68,6 +68,15 @@ CREATE TABLE mirror_meta (
 // are active: they were written together with their queue row.
 const schemaV2 = `
 ALTER TABLE dispatch ADD COLUMN state TEXT NOT NULL DEFAULT 'active';
+`
+
+// schemaV3 adds the ordered rig list. The legacy rig column keeps the first
+// name, and existing rows are backfilled from it. json_array escapes the name as
+// JSON; string concatenation would only double quotes, which is SQL-literal
+// escaping and leaves rigs_json invalid for a name containing a quote.
+const schemaV3 = `
+ALTER TABLE project ADD COLUMN rigs_json TEXT NOT NULL DEFAULT '[]';
+UPDATE project SET rigs_json = json_array(rig) WHERE rig <> '';
 `
 
 func (s *Store) migrate(ctx context.Context) error {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/rand"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,7 +24,7 @@ type Project struct {
 	ID       int64
 	Key      string
 	Forge    forge.Forge
-	Rig      string
+	Rigs     []string
 	RepoPath string
 	Git      git.Runner
 }
@@ -39,6 +40,7 @@ type ProjectResult struct {
 	ForgeForbidden bool
 	ForgeError     string
 	BranchError    string
+	RigWarnings    []string
 }
 
 // TickResult is everything one tick read.
@@ -89,12 +91,13 @@ type forgeSnapshot struct {
 }
 
 type statusBlock struct {
-	ForgeStale     bool   `json:"forge_stale"`
-	ForgeForbidden bool   `json:"forge_forbidden"`
-	RigStale       bool   `json:"rig_stale"`
-	ForgeError     string `json:"forge_error,omitempty"`
-	RigError       string `json:"rig_error,omitempty"`
-	BranchError    string `json:"branch_error,omitempty"`
+	ForgeStale     bool     `json:"forge_stale"`
+	ForgeForbidden bool     `json:"forge_forbidden"`
+	RigStale       bool     `json:"rig_stale"`
+	ForgeError     string   `json:"forge_error,omitempty"`
+	RigError       string   `json:"rig_error,omitempty"`
+	BranchError    string   `json:"branch_error,omitempty"`
+	RigWarnings    []string `json:"rig_warnings,omitempty"`
 }
 
 // Tick reads every project once. Forge failures keep the previous item rows and
@@ -105,6 +108,7 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 
 	var rows []rig.QueueRow
 	var seats []rig.Seat
+	seatsRead := false
 	if m.Rig != nil {
 		var err error
 		rows, err = m.Rig.QueueList(ctx)
@@ -119,13 +123,21 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 			if result.RigError == "" {
 				result.RigError = err.Error()
 			}
+		} else {
+			seatsRead = true
 		}
 	}
 
 	for _, project := range projects {
 		pr := ProjectResult{
-			Rows:  filterRows(rows, project.Rig),
-			Seats: filterSeats(seats, project.Rig),
+			Rows:  filterRows(rows, project.Rigs),
+			Seats: filterSeats(seats, project.Rigs),
+		}
+		// Only a read that answered can say a rig has no seats. After a failed
+		// read every configured rig would look absent, so the stale flag and
+		// RigError carry the truth and no rig is named as a ghost.
+		if seatsRead {
+			pr.RigWarnings = missingRigs(project.Rigs, seats)
 		}
 
 		timeout := m.projectTimeoutFor(ctx, project.ID)
@@ -200,7 +212,7 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 		status := statusBlock{
 			ForgeStale: pr.ForgeStale, ForgeForbidden: pr.ForgeForbidden, ForgeError: pr.ForgeError,
 			RigStale: result.RigStale, RigError: result.RigError,
-			BranchError: pr.BranchError,
+			BranchError: pr.BranchError, RigWarnings: pr.RigWarnings,
 		}
 		if err := m.Store.PutSnapshot(ctx, project.ID, "status", status, at); err != nil {
 			return result, err
@@ -255,30 +267,60 @@ func (m *Mirror) fillBodies(ctx context.Context, rows []rig.QueueRow) []rig.Queu
 	return rows
 }
 
-func filterRows(rows []rig.QueueRow, rigName string) []rig.QueueRow {
-	if rigName == "" {
+// missingRigs names configured rigs with no live seats. A project with one of
+// these has no builders for that rig and must not dispatch to it.
+func missingRigs(rigs []string, seats []rig.Seat) []string {
+	if len(rigs) == 0 {
+		return nil
+	}
+	present := make(map[string]bool, len(seats))
+	for _, seat := range seats {
+		present[seat.Rig] = true
+	}
+	var missing []string
+	for _, rigName := range rigs {
+		if !present[rigName] {
+			missing = append(missing, rigName)
+		}
+	}
+	return missing
+}
+
+func filterRows(rows []rig.QueueRow, rigs []string) []rig.QueueRow {
+	if len(rigs) == 0 {
 		return rows
 	}
-	suffix := "@" + rigName
+	wanted := make(map[string]bool, len(rigs))
+	for _, rigName := range rigs {
+		wanted[rigName] = true
+	}
 	out := make([]rig.QueueRow, 0, len(rows))
 	for _, row := range rows {
-		if strings.HasSuffix(row.Destination, suffix) {
+		at := strings.LastIndex(row.Destination, "@")
+		if at >= 0 && wanted[row.Destination[at+1:]] {
 			out = append(out, row)
 		}
 	}
 	return out
 }
 
-func filterSeats(seats []rig.Seat, rigName string) []rig.Seat {
-	if rigName == "" {
+// filterSeats keeps the project's seats and orders them by the configured rig
+// list, so the plan fills rigs in the order the file lists them.
+func filterSeats(seats []rig.Seat, rigs []string) []rig.Seat {
+	if len(rigs) == 0 {
 		return seats
+	}
+	order := make(map[string]int, len(rigs))
+	for index, rigName := range rigs {
+		order[rigName] = index
 	}
 	out := make([]rig.Seat, 0, len(seats))
 	for _, seat := range seats {
-		if seat.Rig == rigName {
+		if _, ok := order[seat.Rig]; ok {
 			out = append(out, seat)
 		}
 	}
+	sort.SliceStable(out, func(a, b int) bool { return order[out[a].Rig] < order[out[b].Rig] })
 	return out
 }
 
@@ -470,6 +512,9 @@ func (m *Mirror) noteProjects(seen map[string]string, result TickResult) {
 		}
 		m.note(seen, key+" forge", forgeErr)
 		m.note(seen, key+" branch", branchErr)
+		for _, rigName := range project.RigWarnings {
+			m.note(seen, key+" rig "+rigName, errors.New("rig "+rigName+" has no running seats"))
+		}
 	}
 	var rigErr error
 	if result.RigError != "" {

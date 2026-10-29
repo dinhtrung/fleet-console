@@ -145,3 +145,48 @@ func TestAdoptedDispatchIsNotDispatchedAgain(t *testing.T) {
 		t.Fatalf("rows=%d createCalls=%d, want no second row", len(rows), queue.createCalls)
 	}
 }
+
+// A pending dispatch is adopted when its row sits on any of the project's rigs,
+// not only the first. The row here is on the second rig listed.
+func TestAdoptPendingAdoptsASeatOnTheSecondRig(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	pid, err := st.CreateProject(ctx, store.ProjectInput{
+		Key: "app", Name: "app", ForgeKind: "github", ForgeProject: "o/r",
+		Rigs: []string{"rig-a", "rig-b"}, ConcurrencyCap: 2, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	project, err := st.ProjectByKey(ctx, "app")
+	if err != nil {
+		t.Fatalf("project by key: %v", err)
+	}
+	brief := pendingBrief(t, t.TempDir(), "Pool store")
+	dispatchID, err := st.CreateDispatch(ctx, store.NewDispatch{
+		ProjectID: pid, ItemNumber: 5, Attempt: 1, Seat: "dev-build-1@rig-b",
+		Branch: "feature/5-pool", Worktree: "/tmp/wt", BaseSHA: "abc",
+		BriefPath: brief, State: "pending",
+	})
+	if err != nil {
+		t.Fatalf("pending dispatch: %v", err)
+	}
+	queue := &queueStub{rows: []rig.QueueRow{{
+		ID: "qitem-2", Destination: "dev-build-1@rig-b", State: "pending", Summary: "#5 Pool store",
+	}}}
+
+	result, err := AdoptPending(ctx, st, queue, *project, "")
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if len(result.Adopted) != 1 || result.Adopted[0] != dispatchID || len(result.Abandoned) != 0 {
+		t.Fatalf("result = %+v, want the rig-b dispatch adopted", result)
+	}
+	rows, _ := st.Dispatches(ctx, pid, 5)
+	if rows[0].State != "active" || rows[0].QItemID != "qitem-2" {
+		t.Fatalf("dispatch = %+v, want active with qitem-2 stamped", rows[0])
+	}
+	if queue.createCalls != 0 {
+		t.Fatalf("createCalls = %d, adoption must not create a row", queue.createCalls)
+	}
+}

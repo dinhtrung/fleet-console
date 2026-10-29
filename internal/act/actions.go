@@ -85,6 +85,7 @@ func slug(value string) string {
 
 const briefTemplate = `# %s #%d: %s
 
+Rig: %s
 Worktree: %s
 Branch: %s
 Base sha: %s
@@ -149,8 +150,12 @@ func (a *Actions) Dispatch(ctx context.Context, in DispatchInput) (*DispatchResu
 		return nil, fmt.Errorf("dispatch: brief dir: %w", err)
 	}
 	briefPath := filepath.Join(briefDir, fmt.Sprintf("%s-%d-attempt%d.md", in.ProjectKey, in.Item.Number, attempt))
+	rigName := rigFromSeat(in.Seat)
+	if rigName == "" {
+		rigName = "(unknown)"
+	}
 	brief := fmt.Sprintf(briefTemplate,
-		in.ProjectKey, in.Item.Number, in.Item.Title, worktree, branch, base,
+		in.ProjectKey, in.Item.Number, in.Item.Title, rigName, worktree, branch, base,
 		in.Item.Body, in.Item.Number, in.Item.Body)
 	if err := os.WriteFile(briefPath, []byte(brief), 0o644); err != nil {
 		return nil, fmt.Errorf("dispatch: write brief: %w", err)
@@ -238,4 +243,13 @@ func (a *Actions) Renudge(ctx context.Context, id, seat, text string) error {
 	}
 	_, err := a.event(ctx, "act", "row.renudge", id, "nudged "+seat)
 	return err
+}
+
+// rigFromSeat reads the rig from a canonical seat name (pod-member@rig).
+func rigFromSeat(seat string) string {
+	at := strings.LastIndex(seat, "@")
+	if at < 0 || at == len(seat)-1 {
+		return ""
+	}
+	return seat[at+1:]
 }

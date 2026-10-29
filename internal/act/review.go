@@ -35,9 +35,16 @@ func (a *Actions) RaiseDecision(ctx context.Context, project store.ProjectRow, i
 		return &RaiseResult{NoOp: true}, nil
 	}
 
+	rigName := ""
+	if dispatches, err := a.Store.Dispatches(ctx, project.ID, item); err == nil && len(dispatches) > 0 {
+		rigName = rigFromSeat(dispatches[0].Seat)
+	}
+	if rigName == "" && len(project.Rigs) > 0 {
+		rigName = project.Rigs[0]
+	}
 	reviewer := "dev-review"
-	if project.Rig != "" {
-		reviewer = "dev-review@" + project.Rig
+	if rigName != "" {
+		reviewer = "dev-review@" + rigName
 	}
 	dir := worktreeRoot
 	if dir == "" {
@@ -50,7 +57,7 @@ func (a *Actions) RaiseDecision(ctx context.Context, project store.ProjectRow, i
 	}
 	sum := sha256.Sum256([]byte(text))
 	path := filepath.Join(dir, fmt.Sprintf("review-%s-%d-%s.md", slug(project.Key), item, hex.EncodeToString(sum[:4])))
-	body := fmt.Sprintf("# %s #%d - re-review\n\n%s\n", project.Key, item, text)
+	body := fmt.Sprintf("# %s #%d - re-review\n\nRig: %s\n\n%s\n", project.Key, item, rigName, text)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return nil, fmt.Errorf("raise decision: write brief: %w", err)
 	}
