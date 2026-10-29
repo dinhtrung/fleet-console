@@ -63,6 +63,13 @@ for one run. `--json` is only valid with `--version`.
 `--apply-config` never deletes a project that left the file, and it never resumes
 a project that was paused in the database unless `--sync-onhold` is passed.
 
+A server started with `--apply` (or `act: true` in the config) takes an
+exclusive flock on `<database>.lock` for its lifetime. A second acting instance
+exits with status **3** and `another instance owns <database>` before it opens
+the database or starts the act loop. A killed holder leaves the lock file but
+not the lock: flock dies with the process, so startup never waits on a stale
+file.
+
 ## Configuration
 
 Settings come from a strict `config.yaml`, flags and environment in that order:
