@@ -22,7 +22,8 @@ const MarkerLabel = "status::ongoing"
 // own credential store. The app never reads a token. A zero Timeout means
 // DefaultTimeout; a shorter parent deadline wins.
 type CLIRunner struct {
-	Timeout time.Duration
+	Binaries map[string]string
+	Timeout  time.Duration
 }
 
 func (r CLIRunner) limit() time.Duration {
@@ -36,6 +37,9 @@ func (r CLIRunner) limit() time.Duration {
 func (r CLIRunner) Run(ctx context.Context, argv ...string) (string, string, error) {
 	if len(argv) == 0 {
 		return "", "", errors.New("forge: empty command")
+	}
+	if binary := r.Binaries[argv[0]]; binary != "" {
+		argv = append([]string{binary}, argv[1:]...)
 	}
 	limit := r.limit()
 	if deadline, ok := ctx.Deadline(); ok {

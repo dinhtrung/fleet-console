@@ -1,0 +1,21 @@
+# Acceptance config for issue #34. The token comes from FLEET_CONSOLE_TOKEN.
+listen: 127.0.0.1:8787
+database: /tmp/fc34/config.db
+rig_binary: rig
+gh_binary: gh
+glab_binary: glab
+tick_interval: 10m
+projects:
+  - key: fleet-console
+    name: Fleet Console
+    forge: github
+    repo: dinhtrung/fleet-console
+    default_branch: main
+    rig: fleet-console
+    concurrency_cap: 2
+    gate_cmd: scripts/gate.sh
+    labels:
+      area: backend
+    paths:
+      main: ..
+      worktrees: ..

@@ -39,6 +39,38 @@ The manual workflow it productises: [`docs/my-stack.md`](docs/my-stack.md) §3.
 | `docs/my-stack.md` | the stack and the workflow this app automates (project details removed) |
 | `src/`, `DESIGN.md`, `PRODUCT.md` | the web scaffold inherited from admin-panel; the board will replace its screens |
 
+## Configuration
+
+Settings come from a strict `config.yaml`, flags and environment in that order:
+**flag > env > file > default**. The file is found at `--config`, then
+`FLEET_CONSOLE_CONFIG`, `$XDG_CONFIG_HOME/fleet-console/config.yaml`,
+`~/.config/fleet-console/config.yaml`, `./fleet-console.yaml`; with no file the
+built-in defaults preserve the previous flags-only behaviour.
+
+| Key | Env | Default |
+|---|---|---|
+| `listen` | `FLEET_CONSOLE_ADDR` | `127.0.0.1:8787` |
+| `database` | `FLEET_CONSOLE_DB` | `fleet-console.db` |
+| `token` / `token_file` | `FLEET_CONSOLE_TOKEN` | none (required to serve) |
+| `rig_binary` | `FLEET_CONSOLE_RIG_BIN` | `rig` |
+| `gh_binary` / `glab_binary` | `FLEET_CONSOLE_GH_BIN` / `FLEET_CONSOLE_GLAB_BIN` | `gh` / `glab` |
+| `tick_interval` | `FLEET_CONSOLE_TICK_INTERVAL` | `15s` |
+
+Relative paths in the file resolve against the file's directory; `~` expands.
+`token_file` must be mode `0600`. An inline `token` warns: prefer the file.
+
+`projects:` is the registry: `key`, `name`, `forge` (`github`/`gitlab`),
+`repo` (`owner/name`), `default_branch`, `rig`, `rig_template`,
+`concurrency_cap`, `gate_cmd`, `labels`, `onhold`, and `paths.main` /
+`paths.worktrees`. `--apply-config` creates or refreshes every entry and prints
+`created|updated|unchanged <key>`; the same apply runs at boot. It never deletes
+a project, and `onhold` stays DB-owned unless `--sync-onhold` asks to copy it.
+
+```bash
+fleet-console --config testdata/config.yaml --apply-config
+fleet-console --config testdata/config.yaml --print-config   # token redacted, values' sources
+```
+
 ## Gates
 
 ```bash
