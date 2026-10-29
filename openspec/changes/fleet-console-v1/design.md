@@ -252,7 +252,8 @@ A project row renders a spec from `templates/rig.yaml.tmpl`:
 - removal: `rig down <rig> --delete` and archive the spec directory (never `rig archive`, which keeps the name).
 - credentials: per-seat agent dirs are seeded before launch (`state/omp/<seat>/agent/config.yml` with the provider
   key, `mcp.json` with the project's serena/codegraph entries); the app never prints them.
-- one rig per project is the default. Sharing one rig across projects is rejected in §15.
+- one or more rigs per project. The default is one; a project that needs more builder slots lists them in order
+  (§17 D5) and each rig stays bound to that project's checkout. Sharing one rig across projects is rejected in §15.
 
 ## 13. UI — shadcn/ui on sage
 
@@ -314,3 +315,20 @@ it wrote. The board gets a session cookie, never a forge token.
 | P2 | rig lifecycle + act loop (dispatch, rows, merge watchdog) | a real issue dispatched, reviewed and merged by the watchdog on four facts |
 | P3 | web foundation (shadcn + sage) + board, decisions, drawer | screenshot of two projects, one paused, one parked, on the sage tokens |
 | P4 | alerts, quota, second project, cutover | one Telegram escalation; two projects dispatching with isolated rigs |
+
+## 17. Operating decisions (2026-10-29)
+
+Six decisions taken after the first real install (three projects, two rigs, one live dispatch loop). Each one is a gap
+the install exposed; the requirement that carries it is named beside it.
+
+| # | Decision | Rejected because | Carried by |
+|---|---|---|---|
+| D1 | Exactly one instance may tick a database. The process takes a `flock` on `<db>.lock`; a second instance exits with `another instance owns <db>` instead of ticking. | Without a lease, a manual `--apply` beside the running service dispatches the same item twice — the same race the old dispatchers had. | single-writer |
+| D2 | A verdict whose sha is no longer the head is a first-class state (`verdict stale`), and the act loop raises a decision to the reviewer asking for a re-review of the current head. | A `parked` row tells nobody; the ACCEPT silently rots every time a builder merges `main` into its branch. Observed twice on 2026-10-29. | merge-watchdog |
+| D3 | A project missing from `config.yaml` gets `enabled = 0` on apply. `--prune` is the only thing that deletes rows. | The act loop iterates the DB, so a project removed from the file kept receiving dispatches forever. | project-registry |
+| D4 | The rig wins every conflict with the app's `dispatch`/`verdict` tables. Each tick reconciles: terminal row with an open dispatch → `superseded`; merged CR with an open dispatch → `merged`; open dispatch with no row for one tick → `abandoned`. | Two records of "who is working on what" with no arbitration leaves items `building` forever after a hand-closed row. | dispatch |
+| D5 | A project has **one or more** rigs, each launched for that project's checkout (`rig up` from the project folder, seats' cwd inside it). The registry lists them as `rigs: [a, b]`; free builders are summed across them in listed order, and every rig keeps its own reviewer. Sharing a rig across projects stays rejected (§15.5). | One shared rig puts two repos' work behind a single reviewer and mixes MCP/codegraph indexes; a single-rig-per-project cap cannot scale a busy project without a second rig. | project-registry, rig-lifecycle |
+| D6 | Dispatch is two-phase: write the dispatch row `pending`, create the queue row, then stamp `qitem_id`. On boot, a `pending` dispatch with no queue row is adopted by branch/summary, or marked `abandoned`. | The current order (worktree → row → record) leaves a live row with no record after a crash, and the next tick creates a second row for the same item. | dispatch |
+
+D5 reverses the earlier "one rig per project" framing in §12: the rule is one *project* per rig, not one rig per project.
+The deployment that prompted it — `mnpserver2` pointed at the `tsim-fleet-claude` rig — was the violation.
