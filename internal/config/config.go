@@ -39,7 +39,8 @@ type Project struct {
 	Forge          string            `yaml:"forge"`
 	Repo           string            `yaml:"repo"`
 	DefaultBranch  string            `yaml:"default_branch"`
-	Rig            string            `yaml:"rig"`
+    Rig            string            `yaml:"rig"`
+    Rigs           []string          `yaml:"rigs"`
 	RigTemplate    string            `yaml:"rig_template"`
 	ConcurrencyCap int               `yaml:"concurrency_cap"`
 	GateCmd        string            `yaml:"gate_cmd"`
@@ -301,9 +302,15 @@ func Load(opts Options) (*Effective, error) {
 		if project.DefaultBranch == "" {
 			project.DefaultBranch = "main"
 		}
-		if project.RigTemplate == "" {
-			project.RigTemplate = "default"
-		}
+    if project.Rig != "" && len(project.Rigs) > 0 {
+        return nil, fmt.Errorf("config: project %q: both rig and rigs set; use one form", project.Key)
+    }
+    if project.Rig == "" && len(project.Rigs) == 0 {
+        return nil, fmt.Errorf("config: project %q: rig or rigs is required", project.Key)
+    }
+    if len(project.Rigs) == 0 && project.Rig != "" {
+        project.Rigs = []string{project.Rig}
+    }
 		file.Projects[index] = project
 	}
 	eff.Projects = file.Projects
