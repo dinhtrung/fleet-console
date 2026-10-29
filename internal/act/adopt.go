@@ -42,7 +42,15 @@ func AdoptPending(ctx context.Context, st *store.Store, rg AdoptionRig, project 
 	if err != nil {
 		return result, err
 	}
+	// A dispatch may be seated on any of the project's rigs, so the allow-set is
+	// the whole list, not just the first. The single field stays a fallback for a
+	// row written before the list existed.
 	allowed := make(map[string]bool)
+	for _, rigName := range project.Rigs {
+		if rigName != "" {
+			allowed[rigName] = true
+		}
+	}
 	if project.Rig != "" {
 		allowed[project.Rig] = true
 	}

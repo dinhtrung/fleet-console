@@ -71,10 +71,12 @@ ALTER TABLE dispatch ADD COLUMN state TEXT NOT NULL DEFAULT 'active';
 `
 
 // schemaV3 adds the ordered rig list. The legacy rig column keeps the first
-// name, and existing rows are backfilled from it.
+// name, and existing rows are backfilled from it. json_array escapes the name as
+// JSON; string concatenation would only double quotes, which is SQL-literal
+// escaping and leaves rigs_json invalid for a name containing a quote.
 const schemaV3 = `
 ALTER TABLE project ADD COLUMN rigs_json TEXT NOT NULL DEFAULT '[]';
-UPDATE project SET rigs_json = '["' || replace(rig, '"', '""') || '"]' WHERE rig <> '';
+UPDATE project SET rigs_json = json_array(rig) WHERE rig <> '';
 `
 
 func (s *Store) migrate(ctx context.Context) error {
