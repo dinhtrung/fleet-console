@@ -163,7 +163,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	flags.String("db", "", "SQLite database path (overrides the config)")
 	configPath := flags.String("config", "", "config.yaml path (overrides FLEET_CONSOLE_CONFIG)")
 	printConfig := flags.Bool("print-config", false, "print the effective config with secrets redacted and exit")
-	applyConfig := flags.Bool("apply-config", false, "create or refresh the projects from the config and exit")
+	applyConfig := flags.Bool("apply-config", false, "create or refresh the projects from the config; projects absent from the file are disabled")
+	prune := flags.Bool("prune", false, "delete projects absent from the config and exit; refused while a live dispatch exists")
 	syncOnHold := flags.Bool("sync-onhold", false, "with --apply-config, copy each project's onhold from the config")
 	flags.String("tick-interval", "", "mirror interval (overrides the config)")
 	if err := flags.Parse(args); err != nil {
@@ -228,13 +229,32 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	}
 
+	if *prune {
+		if eff.ConfigPath == "" {
+			return errors.New("--prune requires a config file")
+		}
+		db, err := store.Open(context.Background(), eff.Database)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		pruned, err := pruneProjects(context.Background(), db, eff.Projects)
+		if err != nil {
+			return err
+		}
+		for _, key := range pruned {
+			fmt.Fprintf(stdout, "pruned %s\n", key)
+		}
+		return nil
+	}
+
 	if *applyConfig {
 		db, err := store.Open(context.Background(), eff.Database)
 		if err != nil {
 			return err
 		}
 		defer db.Close()
-		applied, err := applyProjects(context.Background(), db, eff.Projects, *syncOnHold)
+		applied, err := applyProjects(context.Background(), db, eff.Projects, *syncOnHold, true)
 		if err != nil {
 			return err
 		}
@@ -328,8 +348,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	defer db.Close()
 
-	if len(eff.Projects) > 0 {
-		applied, err := applyProjects(ctx, db, eff.Projects, false)
+	if eff.ConfigPath != "" {
+		applied, err := applyProjects(ctx, db, eff.Projects, false, true)
 		if err != nil {
 			return err
 		}
@@ -455,9 +475,10 @@ type appliedProject struct {
 	Result store.UpsertResult
 }
 
-// applyProjects refreshes the project registry from config.yaml. It never
-// deletes a project and never resumes an onhold project without syncOnHold.
-func applyProjects(ctx context.Context, db *store.Store, projects []config.Project, syncOnHold bool) ([]appliedProject, error) {
+// applyProjects refreshes the project registry from config.yaml. Projects absent
+// from the file are disabled, never deleted, and an onhold project is not
+// resumed without syncOnHold.
+func applyProjects(ctx context.Context, db *store.Store, projects []config.Project, syncOnHold, disableAbsent bool) ([]appliedProject, error) {
 	applied := make([]appliedProject, 0, len(projects))
 	for _, project := range projects {
 		name := project.Name
@@ -488,5 +509,63 @@ func applyProjects(ctx context.Context, db *store.Store, projects []config.Proje
 		}
 		applied = append(applied, appliedProject{Key: project.Key, Result: result})
 	}
+	if disableAbsent {
+		keep := make(map[string]bool, len(projects))
+		for _, project := range projects {
+			keep[project.Key] = true
+		}
+		rows, err := db.Projects(ctx)
+		if err != nil {
+			return applied, err
+		}
+		for _, row := range rows {
+			if keep[row.Key] || !row.Enabled {
+				continue
+			}
+			changed, err := db.SetProjectEnabled(ctx, row.ID, false)
+			if err != nil {
+				return applied, err
+			}
+			if changed {
+				applied = append(applied, appliedProject{Key: row.Key, Result: store.UpsertResult("disabled")})
+			}
+		}
+	}
 	return applied, nil
+}
+
+// pruneProjects deletes every project absent from the config. It refuses
+// before deleting anything when one of them has a live dispatch.
+func pruneProjects(ctx context.Context, db *store.Store, projects []config.Project) ([]string, error) {
+	keep := make(map[string]bool, len(projects))
+	for _, project := range projects {
+		keep[project.Key] = true
+	}
+	rows, err := db.Projects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var absent []store.ProjectRow
+	for _, row := range rows {
+		if !keep[row.Key] {
+			absent = append(absent, row)
+		}
+	}
+	for _, row := range absent {
+		id, live, err := db.LiveDispatch(ctx, row.ID)
+		if err != nil {
+			return nil, err
+		}
+		if live {
+			return nil, fmt.Errorf("prune: project %s has a live dispatch %d", row.Key, id)
+		}
+	}
+	pruned := make([]string, 0, len(absent))
+	for _, row := range absent {
+		if err := db.DeleteProject(ctx, row.ID); err != nil {
+			return pruned, err
+		}
+		pruned = append(pruned, row.Key)
+	}
+	return pruned, nil
 }

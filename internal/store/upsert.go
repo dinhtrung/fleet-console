@@ -68,7 +68,8 @@ func (s *Store) UpsertProject(ctx context.Context, in UpsertInput) (UpsertResult
 		existing.RigTemplate != in.Project.RigTemplate ||
 		existing.ConcurrencyCap != in.Project.ConcurrencyCap ||
 		existing.GateCmd != in.Project.GateCmd ||
-		existing.LabelsJSON != in.LabelsJSON {
+		existing.LabelsJSON != in.LabelsJSON ||
+		!existing.Enabled {
 		changed = true
 	}
 	repoChanged, err := s.upsertRepo(ctx, existing.ID, in)
@@ -81,7 +82,7 @@ func (s *Store) UpsertProject(ctx context.Context, in UpsertInput) (UpsertResult
 	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE project SET name = ?, forge_kind = ?, forge_project = ?, default_branch = ?,
-		       rig = ?, rig_template = ?, concurrency_cap = ?, onhold = ?, gate_cmd = ?, labels_json = ?
+		       rig = ?, rig_template = ?, concurrency_cap = ?, enabled = 1, onhold = ?, gate_cmd = ?, labels_json = ?
 		WHERE id = ?`,
 		in.Project.Name, in.Project.ForgeKind, in.Project.ForgeProject, in.Project.DefaultBranch,
 		in.Project.Rig, in.Project.RigTemplate, in.Project.ConcurrencyCap, boolInt(onhold),
