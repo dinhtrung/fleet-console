@@ -2,6 +2,7 @@ package rig
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,9 +49,9 @@ func fixture(t *testing.T, name string) []byte {
 func recordedProbes(t *testing.T) fakeRunner {
 	t.Helper()
 	return fakeRunner{
-		"--version":                []byte("0.7.0 (c99450f3)\n"),
-		"queue list -A -a --json":  fixture(t, "queue-list.json"),
-		"ps --nodes --full --json": fixture(t, "ps-nodes.json"),
+		"--version":                   []byte("0.7.0 (c99450f3)\n"),
+		"queue list -A -a --json":     fixture(t, "queue-list.json"),
+		"ps --nodes -A --full --json": fixture(t, "ps-nodes.json"),
 	}
 }
 
@@ -149,5 +150,36 @@ func TestParseVersion(t *testing.T) {
 	}
 	if !(Version{0, 7, 0}).Less(Version{0, 7, 4}) {
 		t.Fatal("0.7.0 must be less than 0.7.4")
+	}
+}
+
+// rejectingRunner models the rig CLI outside a managed session: an untargeted
+// ps read refuses, a fleet-wide or rig-targeted one answers.
+type rejectingRunner struct{ inner fakeRunner }
+
+func (r rejectingRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
+	if len(args) > 0 && args[0] == "ps" {
+		targeted := false
+		for _, arg := range args[1:] {
+			if arg == "-A" || arg == "--rig" {
+				targeted = true
+				break
+			}
+		}
+		if !targeted {
+			return nil, errors.New("rig ps --nodes: no target — outside a managed session there is no current rig to default to")
+		}
+	}
+	return r.inner.Run(ctx, args...)
+}
+
+func TestProbeTargetsSeatsWithoutAmbientSession(t *testing.T) {
+	t.Setenv("OPENRIG_SESSION_NAME", "")
+	report := NewProbe(rejectingRunner{inner: recordedProbes(t)}, func(string, ...any) {}).Run(context.Background())
+	if !report.OK {
+		t.Fatalf("probe failed outside a managed session: %s", report.Error)
+	}
+	if report.Seats == nil || report.Seats.Seats != 3 {
+		t.Fatalf("seats = %+v, want the three recorded seats", report.Seats)
 	}
 }

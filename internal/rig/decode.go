@@ -19,7 +19,7 @@ type QueueRow struct {
 	Body        string `json:"body,omitempty"`
 }
 
-// Seat is one node from `rig ps --nodes --full --json`.
+// Seat is one node from `rig ps --nodes -A --full --json` (or a targeted `--rig`).
 type Seat struct {
 	NodeID       string `json:"node_id"`
 	RigID        string `json:"rig_id"`
