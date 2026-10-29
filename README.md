@@ -118,7 +118,10 @@ listed by another. Each rig serves only this project: the
 dispatcher fills free builders across the list in order under
 `concurrency_cap`, and a review goes to `dev-review@<rig>` for the rig that
 built the item (the brief names it). A configured rig with no running seats is
-logged once and is not dispatched to. `paths.main` is the working checkout the
+named by `--tick` (a `rig: …` line on stderr and `rig_warnings` in its JSON) and
+logged once by the server, and is not dispatched to; a failed rig read is
+reported as `rig_stale` and names no rig, because a read that did not answer
+cannot say a rig is empty. `paths.main` is the working checkout the
 mirror reads; a missing path is a warning, not an error.
 
 ### config.yaml

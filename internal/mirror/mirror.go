@@ -108,6 +108,7 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 
 	var rows []rig.QueueRow
 	var seats []rig.Seat
+	seatsRead := false
 	if m.Rig != nil {
 		var err error
 		rows, err = m.Rig.QueueList(ctx)
@@ -122,14 +123,21 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 			if result.RigError == "" {
 				result.RigError = err.Error()
 			}
+		} else {
+			seatsRead = true
 		}
 	}
 
 	for _, project := range projects {
 		pr := ProjectResult{
-			Rows:        filterRows(rows, project.Rigs),
-			Seats:       filterSeats(seats, project.Rigs),
-			RigWarnings: missingRigs(project.Rigs, seats),
+			Rows:  filterRows(rows, project.Rigs),
+			Seats: filterSeats(seats, project.Rigs),
+		}
+		// Only a read that answered can say a rig has no seats. After a failed
+		// read every configured rig would look absent, so the stale flag and
+		// RigError carry the truth and no rig is named as a ghost.
+		if seatsRead {
+			pr.RigWarnings = missingRigs(project.Rigs, seats)
 		}
 
 		timeout := m.projectTimeoutFor(ctx, project.ID)

@@ -367,3 +367,50 @@ func TestSeatsFollowRigOrderAndMissingRigsWarn(t *testing.T) {
 		t.Fatal("known rigs reported missing")
 	}
 }
+
+func TestFailedSeatReadNamesNoGhostRig(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	id, err := st.CreateProject(ctx, store.ProjectInput{
+		Key: "app", Name: "app", ForgeKind: "github", ForgeProject: "o/app",
+		Rigs: []string{"rig-a", "rig-b"}, ConcurrencyCap: 2, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	runner := runnerFunc(func(_ context.Context, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "ps" {
+			return nil, errors.New("rig daemon unreachable")
+		}
+		return []byte("[]"), nil
+	})
+	m := &Mirror{Store: st, Rig: rig.NewAdapter(runner)}
+	read, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: forge.NewFake(forge.KindGitHub), Rigs: []string{"rig-a", "rig-b"}}})
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	pr := read.Projects["app"]
+	if !read.RigStale || read.RigError == "" {
+		t.Fatalf("stale=%v error=%q, want the failed read recorded", read.RigStale, read.RigError)
+	}
+	if len(pr.RigWarnings) != 0 {
+		t.Fatalf("warnings = %v, want none: a failed read cannot call rig-a and rig-b ghosts", pr.RigWarnings)
+	}
+
+	// The same mirror with an answering read still names the ghost.
+	healthy := runnerFunc(func(_ context.Context, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "ps" {
+			return []byte(`[{"nodeId":"n1","rigName":"rig-a","canonicalSessionName":"dev@rig-a","logicalId":"dev","lifecycleState":"running","sessionStatus":"running"}]`), nil
+		}
+		return []byte("[]"), nil
+	})
+	m.Rig = rig.NewAdapter(healthy)
+	read, err = m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: forge.NewFake(forge.KindGitHub), Rigs: []string{"rig-a", "rig-b"}}})
+	if err != nil {
+		t.Fatalf("healthy tick: %v", err)
+	}
+	warnings := read.Projects["app"].RigWarnings
+	if len(warnings) != 1 || warnings[0] != "rig-b" {
+		t.Fatalf("warnings = %v, want [rig-b]", warnings)
+	}
+}
