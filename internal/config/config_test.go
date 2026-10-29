@@ -156,7 +156,7 @@ func TestProjectValidation(t *testing.T) {
 
 func TestMissingMainPathWarns(t *testing.T) {
 	dir := t.TempDir()
-	path := writeConfig(t, dir, "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    paths:\n      main: ./does-not-exist\n")
+	path := writeConfig(t, dir, "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rig: test-rig\n    paths:\n      main: ./does-not-exist\n")
 	eff, err := Load(Options{FlagPath: path, Home: dir, Cwd: dir})
 	if err != nil {
 		t.Fatalf("load: %v", err)
@@ -165,7 +165,6 @@ func TestMissingMainPathWarns(t *testing.T) {
 		t.Fatalf("warnings = %v", eff.Warnings)
 	}
 }
-
 func TestLookupOrder(t *testing.T) {
 	home := t.TempDir()
 	xdg := filepath.Join(home, "xdg")
