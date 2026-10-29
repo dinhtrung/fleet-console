@@ -98,6 +98,7 @@ name the file and line.
 | `gh_binary` | `gh` | `FLEET_CONSOLE_GH_BIN` | — | GitHub CLI for `forge: github` |
 | `glab_binary` | `glab` | `FLEET_CONSOLE_GLAB_BIN` | — | GitLab CLI for `forge: gitlab` |
 | `tick_interval` | `15s` | `FLEET_CONSOLE_TICK_INTERVAL` | `--tick-interval` | mirror pass interval |
+| `project_timeout` | `base: 30s`, `per_item: 2s`, `ceiling: 2m` | — | — | one project's read deadline: `base + per_item*items`, capped at `ceiling`; per-item forge reads run 8-wide |
 | `act` | `false` | — | `--apply` | apply the decide plan through the act loop: worktree, queue row, verdict, merge. Off means the board is read-only |
 | `projects` | `[]` | — | — | the registry (file only) |
 
@@ -127,6 +128,11 @@ rig_binary: rig
 gh_binary: gh
 glab_binary: glab
 tick_interval: 15s
+# one project's forge/git read deadline; scaled by the cached item count.
+project_timeout:
+  base: 30s
+  per_item: 2s
+  ceiling: 2m
 # false: the board only reads and plans. true (or --apply) executes the plan.
 act: false
 

@@ -217,3 +217,41 @@ func TestRelativeConfigPathBecomesAbsolute(t *testing.T) {
 		t.Fatalf("database = %q", eff.Database)
 	}
 }
+
+func TestProjectTimeoutDefaultsFileAndPrint(t *testing.T) {
+	dir := t.TempDir()
+	eff, err := Load(Options{Env: envMap(nil), Home: dir, Cwd: dir})
+	if err != nil {
+		t.Fatalf("load defaults: %v", err)
+	}
+	want := Timeouts{Base: 30 * time.Second, PerItem: 2 * time.Second, Ceiling: 2 * time.Minute}
+	if eff.ProjectTimeout != want || eff.Sources["project_timeout"] != "default" {
+		t.Fatalf("project_timeout = %+v (%s), want %+v (default)",
+			eff.ProjectTimeout, eff.Sources["project_timeout"], want)
+	}
+
+	path := writeConfig(t, dir, "project_timeout:\n  base: 45s\n  per_item: 3s\n  ceiling: 5m\n")
+	eff, err = Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+	if err != nil {
+		t.Fatalf("load file: %v", err)
+	}
+	want = Timeouts{Base: 45 * time.Second, PerItem: 3 * time.Second, Ceiling: 5 * time.Minute}
+	if eff.ProjectTimeout != want || eff.Sources["project_timeout"] != "file" {
+		t.Fatalf("project_timeout = %+v (%s), want %+v (file)",
+			eff.ProjectTimeout, eff.Sources["project_timeout"], want)
+	}
+	printed, err := eff.Print()
+	if err != nil {
+		t.Fatalf("print: %v", err)
+	}
+	for _, line := range []string{"project_timeout:", "base: 45s", "per_item: 3s", "ceiling: 5m0s"} {
+		if !strings.Contains(string(printed), line) {
+			t.Fatalf("print-config missing %q:\n%s", line, printed)
+		}
+	}
+
+	bad := writeConfig(t, t.TempDir(), "project_timeout:\n  base: 2m\n  ceiling: 30s\n")
+	if _, err := Load(Options{FlagPath: bad, Env: envMap(nil), Home: dir, Cwd: dir}); err == nil {
+		t.Fatal("load accepted ceiling below base")
+	}
+}

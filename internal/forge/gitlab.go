@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 // GitLab reads and writes one project through `glab api` and the glab CLI.
@@ -45,8 +46,10 @@ type glIssue struct {
 // related links. Hierarchy is the one GraphQL read: the REST issue payload has no
 // parent/children fields, so parity with GitHub's sub-issues is not expressible in
 // REST.
-func (g *GitLab) Items(ctx context.Context) ([]Item, error) {
-	issues, err := g.openIssues(ctx)
+func (g *GitLab) Items(ctx context.Context, timeout Timeout) ([]Item, error) {
+	listCtx, cancelList := context.WithTimeout(ctx, timeout.List())
+	issues, err := g.openIssues(listCtx)
+	cancelList()
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +68,9 @@ func (g *GitLab) Items(ctx context.Context) ([]Item, error) {
 		numbers = append(numbers, issue.IID)
 	}
 
-	hierarchy, err := g.workItems(ctx, numbers)
+	itemsCtx, cancelItems := context.WithTimeout(ctx, timeout.For(len(numbers)))
+	defer cancelItems()
+	hierarchy, err := g.workItems(itemsCtx, numbers)
 	if err != nil {
 		return nil, err
 	}
@@ -98,16 +103,33 @@ func (g *GitLab) Items(ctx context.Context) ([]Item, error) {
 		}
 	}
 
-	for _, number := range numbers {
-		item := byNumber[number]
-		if item.Kind == KindEpic {
+	// Per-item related links run through the same small worker pool as the
+	// GitHub dependencies: one CLI process per item, so the wall time is O(items/8).
+	total := len(numbers)
+	var completed atomic.Int64
+	var tasks []int
+	for index, number := range numbers {
+		if byNumber[number].Kind == KindEpic {
 			continue
 		}
-		links, err := g.related(ctx, number)
+		tasks = append(tasks, index)
+	}
+	links := make([][]Link, len(numbers))
+	if failed, err := parallelEach(itemsCtx, len(tasks), Parallelism, func(ctx context.Context, slot int) error {
+		index := tasks[slot]
+		result, err := g.related(ctx, numbers[index])
 		if err != nil {
-			return nil, err
+			return err
 		}
-		item.Related = links
+		links[index] = result
+		completed.Add(1)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("read %d of %d items, stopped at #%d: %w",
+			completed.Load(), total, numbers[tasks[failed]], err)
+	}
+	for _, index := range tasks {
+		byNumber[numbers[index]].Related = links[index]
 	}
 
 	sort.Ints(numbers)

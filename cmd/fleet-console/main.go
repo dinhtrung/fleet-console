@@ -92,6 +92,16 @@ func projectSources(ctx context.Context, db *store.Store, runner forge.Runner) (
 	return specs, nil
 }
 
+// mirrorTimeouts passes the resolved project_timeout (base + per_item*items,
+// capped at ceiling) to both mirror constructions.
+func mirrorTimeouts(eff *config.Effective) mirror.TimeoutSettings {
+	return mirror.TimeoutSettings{
+		Base:    eff.ProjectTimeout.Base,
+		PerItem: eff.ProjectTimeout.PerItem,
+		Ceiling: eff.ProjectTimeout.Ceiling,
+	}
+}
+
 // worktreeRoot is the configured worktree root for a project, else the repo's
 // parent (the same layout the old dispatcher used).
 func worktreeRoot(eff *config.Effective, project store.ProjectRow, source mirror.Project) string {
@@ -106,13 +116,13 @@ func worktreeRoot(eff *config.Effective, project store.ProjectRow, source mirror
 	return ""
 }
 
-func runTick(ctx context.Context, db *store.Store, out io.Writer, runner forge.Runner, rigRunner rig.ExecRunner) error {
+func runTick(ctx context.Context, db *store.Store, out io.Writer, runner forge.Runner, rigRunner rig.ExecRunner, timeouts mirror.TimeoutSettings) error {
 	projects, err := db.Projects(ctx)
 	if err != nil {
 		return err
 	}
 	adapter := rig.NewAdapter(rigRunner)
-	mirrorer := &mirror.Mirror{Store: db, Rig: adapter}
+	mirrorer := &mirror.Mirror{Store: db, Rig: adapter, ProjectTimeout: timeouts}
 	specs, err := projectSources(ctx, db, runner)
 	if err != nil {
 		return err
@@ -283,7 +293,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		defer db.Close()
-		return runTick(ctx, db, stdout, forgeRunner, rigRunner)
+		return runTick(ctx, db, stdout, forgeRunner, rigRunner, mirrorTimeouts(eff))
 	}
 
 	if *importState != "" {
@@ -396,6 +406,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	specByKey := map[string]mirror.Project{}
 	go (&mirror.Mirror{
 		Store: db, Rig: rig.NewAdapter(rigRunner),
+		ProjectTimeout: mirrorTimeouts(eff),
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(stderr, "mirror: %s\n", fmt.Sprintf(format, args...))
 		},
