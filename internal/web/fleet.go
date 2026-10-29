@@ -44,6 +44,10 @@ type boardCounts struct {
 	Blocked  int `json:"blocked"`
 }
 
+// projectPaused treats a disabled project as paused: removing its config block
+// disables it, which must read as paused on the board, not active.
+func projectPaused(p store.ProjectRow) bool { return p.OnHold || !p.Enabled }
+
 type boardProject struct {
 	Key    string      `json:"key"`
 	Name   string      `json:"name"`
@@ -228,7 +232,7 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
 		projectStatus := statuses[p.ID]
-		bp := boardProject{Key: p.Key, Name: p.Name, Paused: p.OnHold, Status: rig.StatusOK, Items: []boardItem{}}
+		bp := boardProject{Key: p.Key, Name: p.Name, Paused: projectPaused(p), Status: rig.StatusOK, Items: []boardItem{}}
 		switch {
 		case compatBlocked:
 			bp.Status = "compat-blocked"
@@ -250,8 +254,11 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 			}
 			d := dispatches[item.Number]
 			switch {
-			case p.OnHold:
+			case projectPaused(p):
 				row.State, row.Reason = "paused", "project paused"
+				if !p.Enabled {
+					row.Reason = "project removed from config"
+				}
 			case item.ParentNumber != nil && openNumbers[p.ID][*item.ParentNumber] != "open":
 				row.State, row.Reason = "blocked", fmt.Sprintf("parent #%d is not open", *item.ParentNumber)
 			}
@@ -379,7 +386,7 @@ func (f *Fleet) Item(c fiber.Ctx) error {
 		}
 		labels := splitLabels(item.Labels)
 		detail := itemDetail{
-			Project: boardProject{Key: p.Key, Name: p.Name, Paused: p.OnHold, Status: rig.StatusOK},
+			Project: boardProject{Key: p.Key, Name: p.Name, Paused: projectPaused(p), Status: rig.StatusOK},
 			Item: boardItem{
 				Number: item.Number, Title: item.Title, State: item.State,
 				Age: age(item.UpdatedAt), URL: item.URL, Labels: labels,

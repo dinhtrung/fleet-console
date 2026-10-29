@@ -54,14 +54,20 @@ for one run. `--json` is only valid with `--version`.
 | `fleet-console --version --json` | the same as JSON | `"version": "0.1.0",` |
 | `fleet-console --config FILE --compat` | probe `rig`, print the report, exit non-zero below the floor | `"ok": true,` |
 | `fleet-console --config FILE --print-config` | print the effective settings, token redacted, with each value's source | `token: <redacted>` |
-| `fleet-console --config FILE --apply-config` | create or refresh the registry and exit; `--sync-onhold` copies `onhold` too | `created my-project` (then `unchanged my-project`) |
+| `fleet-console --config FILE --apply-config` | create or refresh the registry and exit; projects absent from the file are disabled; `--sync-onhold` copies `onhold` too | `created my-project` (then `unchanged my-project`; a removed project prints `disabled my-project`) |
+| `fleet-console --config FILE --prune` | delete projects absent from the file and exit; refused while one has a live dispatch | `pruned my-project` |
 | `fleet-console --config FILE --migrate` | open the database, apply migrations and exit | `database migrated` |
 | `fleet-console --config FILE --tick` | one mirror + decide pass, printing the dry-run plan | `"status": "nothing",` (or `"intents"` with a dispatch) |
 | `fleet-console --config FILE` | serve the API and the board | `fleet-console: listening on 127.0.0.1:8787` |
 | `fleet-console --config FILE --import-dispatch-state FILE --project-key KEY` | import the old dispatcher's state and exit | `imported 1 dispatch row(s) into my-project` |
 
-`--apply-config` never deletes a project that left the file, and it never resumes
+`--apply-config` never deletes a project that left the file: it sets
+`enabled = 0` (`disabled <key>`) and keeps every row, so its history stays
+readable and re-adding the block re-enables the same project id. It never resumes
 a project that was paused in the database unless `--sync-onhold` is passed.
+`--prune` is the only path that deletes a project; it refuses with the dispatch id
+while a live dispatch exists. A server started with a config applies the same
+registry at boot: present projects are enabled, absent ones disabled.
 
 A server started with `--apply` (or `act: true` in the config) takes an
 exclusive flock on `<database>.lock` for its lifetime. A second acting instance
@@ -145,6 +151,8 @@ projects:
 `onhold` is the project pause: the config never resets it on a normal apply,
 and `--apply-config --sync-onhold` is the one path that copies it into the
 database. `--apply-config` is idempotent: the second run prints `unchanged`.
+A project removed from `projects:` is disabled (paused on the board) rather than
+forgotten; `--prune` deletes it only once it has no live dispatch.
 
 ### Where state lives
 

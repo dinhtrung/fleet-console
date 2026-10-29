@@ -1,6 +1,9 @@
 package decide
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func base(items ...Item) Snapshot {
 	return Snapshot{
@@ -255,4 +258,13 @@ func dispatchNumbers(result Result) []int {
 		out[index] = dispatch.Number
 	}
 	return out
+}
+
+func TestDisabledProjectPlanHasNoIntent(t *testing.T) {
+	snapshot := base(task(1))
+	snapshot.Project.Enabled = false
+	plan := PlanTick(snapshot, time.Now())
+	if plan.Status != StatusNothing || len(plan.Intents) != 0 {
+		t.Fatalf("plan = %+v, want nothing with no intents for a disabled project", plan)
+	}
 }
