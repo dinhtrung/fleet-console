@@ -202,20 +202,29 @@ func validationFailure(c fiber.Ctx, err error) error {
 	})
 }
 
-// writeFailure maps a refused write onto the two statuses design §5 names: a
-// definition the file cannot hold is 422, a duplicate key or a stale read is 409.
+// writeFailure maps a refused write onto the statuses design §5 names.
+//
+// Only two refusals belong to the client: a definition the file cannot hold
+// (422, one message per field) and a key the file already holds or a file that
+// moved under the writer (409). Everything else — a read-only directory, a full
+// disk, a vanished path — is a server-side failure the client cannot fix by
+// changing its request, so it answers 500 with the error, never a 409 that
+// sends the operator looking at their own body.
 func writeFailure(c fiber.Ctx, configPath string, err error) error {
 	var invalid *config.ValidationError
 	if errors.As(err, &invalid) {
 		return validationFailure(c, err)
 	}
-	message := err.Error()
-	if strings.Contains(message, "changed on disk") {
+	switch {
+	case errors.Is(err, configfile.ErrStaleRead):
 		return c.Status(fiber.StatusConflict).JSON(ErrorResponse{
 			Error: fmt.Sprintf("%s changed on disk; reload and retry", filepath.Base(configPath)),
 		})
+	case errors.Is(err, configfile.ErrDuplicateKey):
+		return c.Status(fiber.StatusConflict).JSON(ErrorResponse{Error: err.Error()})
+	default:
+		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
 	}
-	return c.Status(fiber.StatusConflict).JSON(ErrorResponse{Error: message})
 }
 
 // warningsFor is what the dialog shows after a 201: the loader's warnings about

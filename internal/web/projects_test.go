@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -324,4 +326,91 @@ func loaderMessage(message string) string {
 		return message[index+3:]
 	}
 	return message
+}
+
+// TestCreateProjectIOFailureIs500: a write the server cannot perform — here a
+// read-only config directory — is not the client's fault, so it answers 500.
+// design §5 gives 409 exactly two meanings (duplicate key, file changed on
+// disk); anything else is the server's.
+func TestCreateProjectIOFailureIs500(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the directory mode, so the write would succeed")
+	}
+	h := newProjectsHarness(t, nil)
+	dir := filepath.Dir(h.path)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	resp, body := h.post(t, validProject)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 for an I/O refusal (%s)", resp.StatusCode, body)
+	}
+	var answer ErrorResponse
+	if err := json.Unmarshal(body, &answer); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(answer.Error, "permission denied") {
+		t.Fatalf("error = %q, want the underlying I/O reason", answer.Error)
+	}
+	if row, _ := h.st.ProjectByKey(context.Background(), "new-proj"); row != nil {
+		t.Fatalf("store row = %+v, want none after a failed write", row)
+	}
+}
+
+// TestCreateProjectTypedRefusals: the two refusals that stay 409 are classified
+// by identity, not by matching the error text — a duplicate key with different
+// content included, which the OutcomeUnchanged branch never sees.
+func TestCreateProjectTypedRefusals(t *testing.T) {
+	cases := []struct {
+		name  string
+		write func(string, configfile.Project, *[32]byte) (configfile.Outcome, error)
+		want  int
+		body  string
+	}{
+		{
+			name: "duplicate key with different content",
+			write: func(path string, in configfile.Project, expected *[32]byte) (configfile.Outcome, error) {
+				return "", fmt.Errorf("%w %q", configfile.ErrDuplicateKey, in.Key)
+			},
+			want: http.StatusConflict,
+			body: `duplicate project key "new-proj"`,
+		},
+		{
+			name: "file changed on disk",
+			write: func(string, configfile.Project, *[32]byte) (configfile.Outcome, error) {
+				return "", configfile.ErrStaleRead
+			},
+			want: http.StatusConflict,
+			body: "config.yaml changed on disk; reload and retry",
+		},
+		{
+			name: "a store that cannot be written",
+			write: func(string, configfile.Project, *[32]byte) (configfile.Outcome, error) {
+				return "", errors.New("configfile: rename: input/output error")
+			},
+			want: http.StatusInternalServerError,
+			body: "input/output error",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newProjectsHarness(t, tc.write)
+			resp, body := h.post(t, validProject)
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %d, want %d (%s)", resp.StatusCode, tc.want, body)
+			}
+			var answer ErrorResponse
+			if err := json.Unmarshal(body, &answer); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if !strings.Contains(answer.Error, tc.body) {
+				t.Fatalf("error = %q, want it to contain %q", answer.Error, tc.body)
+			}
+			if !bytes.Equal(h.bytes(t), h.orig) {
+				t.Fatal("a refused write changed the file")
+			}
+		})
+	}
 }

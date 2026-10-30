@@ -3,6 +3,7 @@ package configfile
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,18 @@ type Outcome string
 const (
 	OutcomeCreated   Outcome = "Created"
 	OutcomeUnchanged Outcome = "Unchanged"
+)
+
+// The two refusals that belong to the caller, typed so a caller classifies an
+// error by identity instead of by matching its text. Everything else this
+// package returns is a server-side failure: the write could not be performed,
+// not that the request was wrong.
+var (
+	// ErrDuplicateKey means the file already names the project's key with
+	// different content.
+	ErrDuplicateKey = errors.New("duplicate project key")
+	// ErrStaleRead means the file moved after the caller read it.
+	ErrStaleRead = errors.New("config.yaml changed on disk; reload and retry")
 )
 
 // UpsertProject writes a project to the config file at path.
@@ -44,7 +57,7 @@ func UpsertProject(path string, in Project, expectedHash *[32]byte) (Outcome, er
 	}
 	if expectedHash != nil {
 		if now := sha256.Sum256(data); now != *expectedHash {
-			return "", fmt.Errorf("config.yaml changed on disk; reload and retry")
+			return "", ErrStaleRead
 		}
 	}
 
@@ -110,7 +123,7 @@ func splice(data []byte, in Project) ([]byte, Outcome, error) {
 		if reflect.DeepEqual(existing, in) {
 			return data, OutcomeUnchanged, nil
 		}
-		return nil, "", fmt.Errorf("duplicate project key %q", in.Key)
+		return nil, "", fmt.Errorf("%w %q", ErrDuplicateKey, in.Key)
 	}
 
 	indent := itemIndent(data, sequence)
