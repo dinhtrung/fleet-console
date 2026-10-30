@@ -1,6 +1,5 @@
 /** Typed reads for the product screens. The board authenticates with the session cookie served at
  *  `/`, so every call is same-origin and carries no token. */
-
 export interface BoardItem {
   number: number;
   title: string;
@@ -120,30 +119,111 @@ export interface ItemDetail {
   events: EventRow[] | null;
 }
 
+/** Project registry. The shapes are the config file's tags (`design.md` §5), so the dialog and the
+ *  writer cannot drift: a field named here is a field `POST /api/projects` reads. */
+export interface Project {
+  key: string;
+  name: string;
+  forge: "github" | "gitlab";
+  repo: string;
+  default_branch: string;
+  rigs: string[];
+  concurrency_cap: number;
+  paths: {
+    main: string;
+    worktrees: string;
+  };
+  rig_template?: string;
+  labels?: Record<string, string>;
+  onhold?: boolean | null;
+  gate_cmd?: string;
+}
+
+export interface ProjectsResponse {
+  projects: Project[];
+}
+
+export interface CreateProjectInput {
+  key: string;
+  name: string;
+  forge: "github" | "gitlab";
+  repo: string;
+  default_branch: string;
+  rigs: string[];
+  concurrency_cap: number;
+  paths: {
+    main: string;
+    worktrees: string;
+  };
+}
+
+export interface CreateProjectResponse {
+  project: Project;
+  warnings: string[] | null;
+}
+
+/** A refusal from the service. `fieldErrors` is the `422` body's `errors` map, kept as a map so the
+ *  dialog can put each message on the input it belongs to instead of in one flat sentence. */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly fieldErrors: Record<string, string>;
+
+  constructor(status: number, message: string, fieldErrors: Record<string, string> = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.fieldErrors = fieldErrors;
+  }
+}
+
+export function isApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  // Every mutating route sits behind the service's idempotency middleware, which answers `400`
+  // without this header. One key per call: a retry is a new request unless the caller reuses it.
+  const idempotencyKey =
+    method === "GET" || method === "HEAD" || method === "OPTIONS" ? null : crypto.randomUUID();
   const response = await fetch(path, {
     credentials: "same-origin",
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
+      ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+      ...init?.headers,
     },
   });
   if (!response.ok) {
-    const text = await response.text();
-    let message = text;
+    // Both project routes answer a refusal as `{error: "<sentence>", errors?: {<field>: "<message>"}}`.
+    // The map is the only shape trusted to be one; anything else falls back to the status text.
+    let message = response.statusText;
+    let fieldErrors: Record<string, string> = {};
     try {
-      const parsed = JSON.parse(text) as { error?: string };
-      message = parsed.error ?? text;
+      const body: unknown = await response.json();
+      if (body && typeof body === "object") {
+        const { error, errors } = body as { error?: unknown; errors?: unknown };
+        if (typeof error === "string" && error) message = error;
+        if (errors && typeof errors === "object") fieldErrors = errors as Record<string, string>;
+      }
     } catch {
-      // keep the raw body
+      // A body that is not JSON leaves the status text as the message.
     }
-    throw new Error(message || `HTTP ${response.status}`);
+    throw new ApiError(response.status, message, fieldErrors);
   }
-  return (await response.json()) as T;
+  return response.json();
 }
 
 export const getBoard = () => request<BoardResponse>("/api/board");
+
+export const getProjects = () => request<ProjectsResponse>("/api/projects");
+
+export const createProject = (input: CreateProjectInput) =>
+  request<CreateProjectResponse>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 
 export const getItem = (number: number) => request<ItemDetail>(`/api/items/${number}`);
 
