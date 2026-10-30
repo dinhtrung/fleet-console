@@ -3,6 +3,7 @@ package act
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -150,5 +151,41 @@ func TestTickNamesAuditGaps(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("skipped = %+v, want an audit-gap line", report.Skipped)
+	}
+}
+
+// TestMergeReportsGapsWhenAPostMergeForgeWriteFails closes the boundary the
+// ledger tests left open: Finalize runs after Forge.Merge, so a CloseItem or
+// SetMarker failure there must be a gap too. Measured before the change: err
+// true, merged true, no gaps — a landed merge reported as waiting.
+func TestMergeReportsGapsWhenAPostMergeForgeWriteFails(t *testing.T) {
+	db := newStore(t)
+	_, dispatchID, request := mergeFixture(t, db)
+	fake := &forge.Fake{
+		RequestsValue: []forge.ChangeRequest{request},
+		// Item 5 is open, so Finalize attempts CloseItem.
+		ItemsValue: []forge.Item{{Number: 5, Kind: forge.KindTask, State: forge.StateOpen, Title: "Five"}},
+		CloseErr:   errors.New("forge: close refused"),
+	}
+	a := &Actions{Store: db, Forge: fake}
+
+	got, err := a.Merge(context.Background(), dispatchID, 5)
+	if err != nil {
+		t.Fatalf("error = %v, want nil: the merge landed and a post-merge forge write failed", err)
+	}
+	if got == nil || !got.Merged {
+		t.Fatalf("result = %+v, want Merged", got)
+	}
+	if !hasWrite(fake.Writes, "merge", request.Number, request.HeadSHA) {
+		t.Fatalf("writes = %+v, want the merge at the verdict sha", fake.Writes)
+	}
+	var named bool
+	for _, g := range got.AuditGaps {
+		if strings.Contains(g, "post-merge finalize") {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("AuditGaps = %v, want the finalize failure named", got.AuditGaps)
 	}
 }

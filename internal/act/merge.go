@@ -140,7 +140,13 @@ func (a *Actions) Merge(ctx context.Context, dispatchID int64, item int) (*Merge
 	}
 	finalized, err := a.Finalize(ctx, dispatchID, item, *request, result)
 	if err != nil {
-		return finalized, err
+		// The merge has landed, so this is a gap, not a failure: returning the
+		// error would tell the caller a merge did not happen. `finalized` carries
+		// the partial result, and the failure is named beside it.
+		if finalized == nil {
+			finalized = result
+		}
+		gap(finalized, "post-merge finalize", err)
 	}
 	return finalized, nil
 }
