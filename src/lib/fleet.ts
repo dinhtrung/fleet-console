@@ -167,12 +167,16 @@ export interface CreateProjectResponse {
 export class ApiError extends Error {
   readonly status: number;
   readonly fieldErrors: Record<string, string>;
+  /** The decoded refusal body, when it was JSON. Routes whose `409` carries fields (the culture
+   *  write's `sha` and `mtime`) read them from here rather than re-requesting. */
+  readonly body: unknown;
 
-  constructor(status: number, message: string, fieldErrors: Record<string, string> = {}) {
+  constructor(status: number, message: string, fieldErrors: Record<string, string> = {}, body?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.fieldErrors = fieldErrors;
+    this.body = body;
   }
 }
 
@@ -200,8 +204,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // The map is the only shape trusted to be one; anything else falls back to the status text.
     let message = response.statusText;
     let fieldErrors: Record<string, string> = {};
+    let decoded: unknown;
     try {
       const body: unknown = await response.json();
+      decoded = body;
       if (body && typeof body === "object") {
         const { error, errors } = body as { error?: unknown; errors?: unknown };
         if (typeof error === "string" && error) message = error;
@@ -210,7 +216,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // A body that is not JSON leaves the status text as the message.
     }
-    throw new ApiError(response.status, message, fieldErrors);
+    throw new ApiError(response.status, message, fieldErrors, decoded);
   }
   return response.json();
 }
@@ -257,4 +263,74 @@ export function shortTime(value?: string): string {
   if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
   return `${Math.round(seconds / 86400)}d ago`;
+}
+
+/** The culture file as the board reads it. `exists: false` is a normal answer — the screen needs
+ *  `path` in order to explain where the file would live. */
+export interface CultureSnapshot {
+  path: string;
+  source: "config" | "derived" | "not_configured";
+  rig: string | null;
+  exists: boolean;
+  writable: boolean;
+  bytes: number;
+  sha256: string;
+  mtime?: string;
+  content?: string;
+}
+
+export interface CultureWriteResult {
+  sha256: string;
+  bytes: number;
+  mtime: string;
+  backup?: string;
+}
+
+/** A `409` from the culture write: the file moved since the editor read it. It carries the sha and
+ *  mtime that are on disk now, which is what the banner needs to offer "Load latest" and
+ *  "Overwrite" without a second round trip. Kept as its own type rather than a flag on `ApiError`
+ *  so the screen cannot mistake a `409` for any other refusal. */
+export class CultureConflict extends Error {
+  readonly sha: string;
+  readonly mtime?: string;
+
+  constructor(message: string, sha: string, mtime?: string) {
+    super(message);
+    this.name = "CultureConflict";
+    this.sha = sha;
+    this.mtime = mtime;
+  }
+}
+
+export function isCultureConflict(error: unknown): error is CultureConflict {
+  return error instanceof CultureConflict;
+}
+
+export const getCulture = (key: string) =>
+  request<CultureSnapshot>(`/api/projects/${encodeURIComponent(key)}/culture`);
+
+/** Saves the file. `baseSHA` is the sha the editor loaded; `null` means "I expect no file". A stale
+ *  base rejects with `CultureConflict` carrying the sha on disk. */
+export async function putCulture(
+  key: string,
+  content: string,
+  baseSHA: string | null,
+): Promise<CultureWriteResult> {
+  try {
+    return await request<CultureWriteResult>(
+      `/api/projects/${encodeURIComponent(key)}/culture`,
+      { method: "PUT", body: JSON.stringify({ content, base_sha: baseSHA }) },
+    );
+  } catch (error) {
+    if (isApiError(error) && error.status === 409) {
+      // `{error, sha, mtime}` for a stale write, `{error, sha: null}` when the file is absent and a
+      // base was sent. The sha is the whole point of the type: without it the banner could not
+      // offer "Overwrite" without another round trip.
+      const body = (error.body ?? {}) as { sha?: unknown; mtime?: unknown };
+      const sha = typeof body.sha === "string" ? body.sha : "";
+      const mtime = typeof body.mtime === "string" ? body.mtime : undefined;
+      throw new CultureConflict(error.message, sha, mtime);
+    }
+    throw error;
+  }
 }

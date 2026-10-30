@@ -31,6 +31,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
       { to: "/decisions", label: "Decisions", permission: "dashboard.read" },
       { to: "/seats", label: "Seats", permission: "dashboard.read" },
       { to: "/projects", label: "Projects", permission: "dashboard.read" },
+      { to: "/culture", label: "Culture", permission: "dashboard.read" },
     ],
   },
 ];
