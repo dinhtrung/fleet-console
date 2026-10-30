@@ -38,15 +38,25 @@ type telegramResponse struct {
 	} `json:"result"`
 }
 
+// ClientTimeout bounds one Bot API call. Design §5: the transport is bounded, so
+// a hung Telegram cannot hold a tick open.
+const ClientTimeout = 15 * time.Second
+
+// client is the HTTP client a call uses: the one the caller supplied, or the
+// bounded default.
+func (t Telegram) client() *http.Client {
+	if t.HTTP != nil {
+		return t.HTTP
+	}
+	return &http.Client{Timeout: ClientTimeout}
+}
+
 func (t Telegram) call(ctx context.Context, method string, body map[string]any) (string, error) {
 	base := t.BaseURL
 	if base == "" {
 		base = "https://api.telegram.org"
 	}
-	client := t.HTTP
-	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
-	}
+	client := t.client()
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return "", err
