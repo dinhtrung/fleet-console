@@ -173,9 +173,13 @@ func TestPreflightBaseDirFailCarriesTheDiagnosis(t *testing.T) {
 	}
 }
 
-// TestRuntimesReturnsNoCredential is the leak assertion the task names: nothing
-// in the body may be longer than the longest login hint, because a token would
-// be.
+// TestRuntimesReturnsNoCredential is the leak assertion the task names, in the form that
+// actually holds: the shape is closed, the hint is one of four known commands, and no
+// whitespace-free run of 20+ characters appears outside a fixed vocabulary.
+//
+// The naive form — "nothing longer than the longest login hint" — is wrong twice over: the
+// hint itself is a legal field, so a threshold taken from it rises with an injected token;
+// and LoginDoc is prose that is legitimately longer than any hint.
 func TestRuntimesReturnsNoCredential(t *testing.T) {
 	h := newPreflightHarness(t, preflightConfig)
 	resp := h.get(t, "/api/runtimes")
@@ -193,13 +197,29 @@ func TestRuntimesReturnsNoCredential(t *testing.T) {
 	if len(body.Runtimes) != 4 {
 		t.Fatalf("runtimes = %d, want 4", len(body.Runtimes))
 	}
-	longest := 0
+	// opaqueRun is a CONSTANT, not a measurement of the response. A threshold derived from
+	// the payload cannot see a payload shorter than its own longest legitimate string: an
+	// injected token raises the bar it has to clear, and the check passes. Measured — with
+	// the threshold taken from `login_hint`, injecting a 39-char bot token into that same
+	// field made the limit 50 and the token vanished.
+	//
+	// 20 is chosen against the longest legitimate whitespace-free run the API can carry:
+	// `~/.pi/agent/auth.json` is 21 characters, so it is listed in the vocabulary below and
+	// anything else this long is a suspect. A real bot token and a real API key are both
+	// well past it.
+	const opaqueRun = 20
+
+	// The hints are a closed set defined in internal/preflight, so assert them exactly: a
+	// command is the only thing this field may hold.
+	knownHints := map[string]bool{
+		"pi auth": true, "omp login": true, "codex login": true, "claude auth": true,
+	}
 	for _, runtime := range body.Runtimes {
 		if runtime.ID == "" || runtime.LoginHint == "" || runtime.LoginDoc == "" {
 			t.Fatalf("%+v: id, login_hint and login_doc are required", runtime)
 		}
-		if len(runtime.LoginHint) > longest {
-			longest = len(runtime.LoginHint)
+		if !knownHints[runtime.LoginHint] {
+			t.Fatalf("login_hint = %q is not one of the four known commands: a value here is a leak", runtime.LoginHint)
 		}
 	}
 	// The assertion the task names — "no value longer than a login hint" — read
@@ -253,6 +273,9 @@ func TestRuntimesReturnsNoCredential(t *testing.T) {
 			"same store writes removes it under per-profile when is used") {
 		fixed[strings.Trim(word, "`.,;:()")] = true
 	}
+	// Everything present in a CLEAN response must be vocabulary or short. Proving the
+	// vocabulary is complete this way means a field added later cannot smuggle a long run
+	// past the check by being absent from the list.
 	var opaque []string
 	var walk func(any)
 	walk = func(value any) {
@@ -260,7 +283,7 @@ func TestRuntimesReturnsNoCredential(t *testing.T) {
 		case string:
 			for _, word := range strings.Fields(typed) {
 				clean := strings.Trim(word, "`.,;:()")
-				if len(clean) > longest && !fixed[clean] {
+				if len(clean) >= opaqueRun && !fixed[clean] {
 					opaque = append(opaque, clean)
 				}
 			}
@@ -276,8 +299,8 @@ func TestRuntimesReturnsNoCredential(t *testing.T) {
 	}
 	walk(generic)
 	if len(opaque) > 0 {
-		t.Fatalf("response carries %d opaque string(s) longer than the longest hint (%d chars): %v",
-			len(opaque), longest, opaque)
+		t.Fatalf("response carries %d opaque string(s) of %d+ chars that are not known vocabulary: %v",
+			len(opaque), opaqueRun, opaque)
 	}
 }
 
