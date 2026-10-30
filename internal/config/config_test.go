@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dinhtrung/fleet-console/internal/rig"
 )
 
 func envMap(values map[string]string) func(string) string {
@@ -410,5 +412,57 @@ func TestCultureFile(t *testing.T) {
 	}
 	if eff.Projects[0].CultureFile != "" {
 		t.Fatalf("culture_file = %q, want empty", eff.Projects[0].CultureFile)
+	}
+}
+
+// TestRuntimeEnum: the project row's runtime is a closed set. Absent means omp
+// so existing configs keep working; any case is stored lowercase; anything else
+// is a load error naming the field and the four values.
+func TestRuntimeEnum(t *testing.T) {
+	dir := t.TempDir()
+
+	accepted := map[string]string{
+		"pi": rig.RuntimePi, "omp": rig.RuntimeOMP, "codex": rig.RuntimeCodex, "claude": rig.RuntimeClaude,
+		"CLAUDE": rig.RuntimeClaude, "Codex": rig.RuntimeCodex,
+	}
+	for value, want := range accepted {
+		t.Run("accepts/"+value, func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    runtime: "+value+"\n")
+			eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if got := eff.Projects[0].Runtime; got != want {
+				t.Fatalf("runtime = %q, want %q", got, want)
+			}
+		})
+	}
+
+	path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n")
+	eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if eff.Projects[0].Runtime != rig.DefaultRuntime {
+		t.Fatalf("runtime = %q, want the %q default", eff.Projects[0].Runtime, rig.DefaultRuntime)
+	}
+
+	for _, bad := range []string{"gpt", "claud", "claude-2", "openai"} {
+		t.Run("refuses/"+bad, func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    runtime: "+bad+"\n")
+			_, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+			if err == nil {
+				t.Fatalf("load accepted runtime %q", bad)
+			}
+			message := err.Error()
+			if !strings.Contains(message, "runtime") {
+				t.Fatalf("error = %v, want it to name the field", err)
+			}
+			for _, value := range []string{"pi", "omp", "codex", "claude"} {
+				if !strings.Contains(message, value) {
+					t.Fatalf("error = %v, want it to name %q", err, value)
+				}
+			}
+		})
 	}
 }
