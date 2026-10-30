@@ -129,8 +129,12 @@ func RenderRig(p Project) (*RigSpec, []byte, error) {
 		return nil, nil, fmt.Errorf("render: culture file is required")
 	}
 	runtime := p.Runtime
-	if runtime == "" {
-		runtime = "omp"
+	if strings.TrimSpace(runtime) == "" {
+		runtime = DefaultRuntime
+	} else if canonical, ok := KnownRuntime(runtime); ok {
+		runtime = canonical
+	} else {
+		return nil, nil, fmt.Errorf("render: runtime %q is not one of %s", runtime, RuntimesText)
 	}
 	builderModel := p.BuilderModel
 	if builderModel == "" {

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dinhtrung/fleet-console/internal/rig"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,19 +36,22 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 
 // Project is one project registry entry from the file.
 type Project struct {
-	Key            string            `yaml:"key"`
-	Name           string            `yaml:"name"`
-	Forge          string            `yaml:"forge"`
-	Repo           string            `yaml:"repo"`
-	DefaultBranch  string            `yaml:"default_branch"`
-	Rig            string            `yaml:"rig,omitempty"`
-	Rigs           []string          `yaml:"rigs"`
-	RigTemplate    string            `yaml:"rig_template"`
-	ConcurrencyCap int               `yaml:"concurrency_cap"`
-	GateCmd        string            `yaml:"gate_cmd"`
-	Labels         map[string]string `yaml:"labels"`
-	OnHold         *bool             `yaml:"onhold"`
-	Paths          struct {
+	Key            string   `yaml:"key"`
+	Name           string   `yaml:"name"`
+	Forge          string   `yaml:"forge"`
+	Repo           string   `yaml:"repo"`
+	DefaultBranch  string   `yaml:"default_branch"`
+	Rig            string   `yaml:"rig,omitempty"`
+	Rigs           []string `yaml:"rigs"`
+	RigTemplate    string   `yaml:"rig_template"`
+	ConcurrencyCap int      `yaml:"concurrency_cap"`
+	// Runtime is which agent runs this project's seats. One of pi, omp, codex
+	// or claude; stored lowercase; omp when absent.
+	Runtime string            `yaml:"runtime"`
+	GateCmd string            `yaml:"gate_cmd"`
+	Labels  map[string]string `yaml:"labels"`
+	OnHold  *bool             `yaml:"onhold"`
+	Paths   struct {
 		Main      string `yaml:"main"`
 		Worktrees string `yaml:"worktrees"`
 	} `yaml:"paths"`
@@ -484,6 +488,14 @@ func ValidateProject(p *Project, dir, home string) error {
 	p.Rig = ""
 	if p.ConcurrencyCap < 0 {
 		add("concurrency_cap", "concurrency_cap must not be negative")
+	}
+	switch canonical, ok := rig.KnownRuntime(p.Runtime); {
+	case strings.TrimSpace(p.Runtime) == "":
+		p.Runtime = rig.DefaultRuntime
+	case ok:
+		p.Runtime = canonical
+	default:
+		add("runtime", "runtime %q is not one of %s", strings.TrimSpace(p.Runtime), rig.RuntimesText)
 	}
 	if p.RigTemplate == "" {
 		p.RigTemplate = "default"

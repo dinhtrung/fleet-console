@@ -12,10 +12,10 @@ A box is ticked only with the command that proved it, quoted in the pull request
 
 ## 2. Setup steps and the enum (issue: setup)
 
-- [ ] 2.1 `internal/setup`: the four allowlisted steps in fixed order, each idempotent, each returning `{step, state, command, output}`; a `failed` step stops the chain. Verify: `go test ./internal/setup` — run the chain twice in a temp dir and assert the second run is all `skipped`.
-- [ ] 2.2 `clone` refuses a non-empty directory, `mkdir_base` is a no-op when the directory exists, `apply_rig` compares rendered bytes before writing, `up_rig` treats an already-up rig as `skipped`. Verify: one test per step, asserting `git clone` never appears twice in the audit trail.
-- [ ] 2.3 Audit: every step appends a row with its command and the last output line. Verify: the audit trail of a full run has four rows and none contains `login`, `auth`, or a token variable name.
-- [ ] 2.4 `runtime` in the project row: `internal/config` accepts `pi|omp|codex|claude` (case-insensitive, stored lowercase, `omp` as the default when absent) and refuses anything else naming the four. `RenderRig` refuses the same. Verify: config load test and a render test with `claud`, `gpt` and an empty value.
+- [x] 2.1 `internal/setup`: the four allowlisted steps in fixed order, each idempotent, each returning `{step, state, command, output}`; a `failed` step stops the chain. Verify: `go test ./internal/setup` — run the chain twice in a temp dir and assert the second run is all `skipped`.
+- [x] 2.2 `clone` refuses a non-empty directory, `mkdir_base` is a no-op when the directory exists, `apply_rig` compares rendered bytes before writing, `up_rig` treats an already-up rig as `skipped`. Verify: one test per step, asserting `git clone` never appears twice in the audit trail.
+- [x] 2.3 Audit: every step appends a row with its command and the last output line. Verify: the audit trail of a full run has four rows and none contains `login`, `auth`, or a token variable name.
+- [x] 2.4 `runtime` in the project row: `internal/config` accepts `pi|omp|codex|claude` (case-insensitive, stored lowercase, `omp` as the default when absent) and refuses anything else naming the four. `RenderRig` refuses the same. Verify: config load test and a render test with `claud`, `gpt` and an empty value.
 
 ## 3. API and the surfaces (issue: web)
 
