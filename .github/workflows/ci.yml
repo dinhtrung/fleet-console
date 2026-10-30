@@ -17,6 +17,11 @@ jobs:
   go:
     name: go
     runs-on: ubuntu-latest
+    # Bounded, because GitHub's default is 360 minutes: one wedged job holds the
+    # queue and every merge in the fleet waits behind it (#93). 30m is ~5x the
+    # slowest *successful* run measured today (319s) and still caps a stall at a
+    # half hour instead of six.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -36,6 +41,11 @@ jobs:
   web:
     name: web
     runs-on: ubuntu-latest
+    # The slowest successful run measured today was 539s (9m), not the ~40s a
+    # warm cache gives: npm ci on a cold cache dominates and varies. 30m is ~3.3x
+    # that tail, which bounds a wedged job without cutting off a slow-but-honest
+    # one.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,6 +60,9 @@ jobs:
   openspec:
     name: openspec
     runs-on: ubuntu-latest
+    # ~12s typical, 197s at the slowest measured success (the global npm install
+    # is the variable part). 15m is ~4.5x that tail.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
