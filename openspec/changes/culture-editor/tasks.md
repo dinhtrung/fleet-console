@@ -2,7 +2,8 @@
 
 - [x] 1.1 `Resolve(project, specsDir)` → `Target{Path, Source, Rig}`: `culture_file` if set (with `~` expanded), else
       `rigs[0]` → `$OPENRIG_SPECS_DIR/rigs/<rig>/CULTURE.md`; `OPENRIG_SPECS_DIR` defaults to `~/.openrig/specs`.
-      Unit-tested for: config wins over derived, derived from the first rig, no rigs and no key → `not_configured`.
+      Unit-tested for: config wins over derived, derived from the first rig, no rigs and no key → `not_configured`,
+      and a derived path whose rig directory has no `rig.yaml` → `not_configured` with the expected path.
 - [x] 1.2 `Read(target)` → `Snapshot{Exists, Writable, Bytes, SHA256, MTime, Content}`; `exists: false` is not an
       error; content over 256 KiB is `ErrTooLarge`.
 - [x] 1.3 `internal/culture/culture_test.go` covers read of a real temp file (sha matches `sha256sum`), missing file,

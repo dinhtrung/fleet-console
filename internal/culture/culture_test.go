@@ -10,9 +10,24 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
+
+// writeRigSpec makes <specs>/rigs/<rig>/ a real rig spec directory: the marker
+// Resolve looks for before it will call a path "derived".
+func writeRigSpec(t *testing.T, specs, rig string) string {
+	t.Helper()
+	dir := filepath.Join(specs, "rigs", rig)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "rig.yaml"), []byte("name: "+rig+"\n"), 0o644); err != nil {
+		t.Fatalf("write rig.yaml: %v", err)
+	}
+	return dir
+}
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
@@ -48,6 +63,9 @@ func TestResolveConfigBeatsDerived(t *testing.T) {
 
 func TestResolveDerivedFromFirstRig(t *testing.T) {
 	specs := t.TempDir()
+	for _, rig := range []string{"second", "first"} {
+		writeRigSpec(t, specs, rig)
+	}
 	target := Resolve(Project{Rigs: []string{"second", "first"}}, specs)
 	want := filepath.Join(specs, "rigs", "second", "CULTURE.md")
 	if target.Source != SourceDerived || target.Path != want || target.Rig != "second" {
@@ -78,12 +96,14 @@ func TestResolveSpecsRoot(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	t.Setenv(SpecsDirEnv, filepath.Join(home, "elsewhere"))
+	writeRigSpec(t, filepath.Join(home, "elsewhere"), "rig-a")
 	target := Resolve(Project{Rigs: []string{"rig-a"}}, "")
 	if want := filepath.Join(home, "elsewhere", "rigs", "rig-a", "CULTURE.md"); target.Path != want {
 		t.Fatalf("path = %q, want %q from %s", target.Path, want, SpecsDirEnv)
 	}
 
 	t.Setenv(SpecsDirEnv, "")
+	writeRigSpec(t, filepath.Join(home, "specs"), "rig-a")
 	target = Resolve(Project{Rigs: []string{"rig-a"}}, "~/specs")
 	if want := filepath.Join(home, "specs", "rigs", "rig-a", "CULTURE.md"); target.Path != want {
 		t.Fatalf("path = %q, want %q with ~ expanded", target.Path, want)
@@ -609,5 +629,215 @@ func TestReadRefusesSymlink(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "PRIVATE KEY") {
 		t.Fatalf("the refusal leaked the linked file's content: %v", err)
+	}
+}
+
+// TestWriteRefusesSymlinkBeforeDisclosingAnything: with base_sha null the absence
+// rule used to fire first, so a symlink answered *StaleError carrying the linked
+// file's sha and mtime — the metadata Read refuses to disclose. Guard now runs
+// before the first read, so every base gives the same refusal.
+func TestWriteRefusesSymlinkBeforeDisclosingAnything(t *testing.T) {
+	root := t.TempDir()
+	secret := filepath.Join(t.TempDir(), "id_ed25519")
+	writeFile(t, secret, "PRIVATE KEY\n")
+	link := filepath.Join(root, "CULTURE.md")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	target := Target{Path: link, Source: SourceDerived, Root: root}
+
+	secretBytes, err := os.ReadFile(secret)
+	if err != nil {
+		t.Fatalf("read secret: %v", err)
+	}
+	sum := sha256.Sum256(secretBytes)
+	secretSHA := hex.EncodeToString(sum[:])
+	secretInfo, err := os.Stat(secret)
+	if err != nil {
+		t.Fatalf("stat secret: %v", err)
+	}
+
+	staleSHA := strings.Repeat("0", 64)
+	cases := []struct {
+		name string
+		base *string
+	}{
+		{name: "null base names the symlink", base: nil},
+		{name: "base matching the linked file names the symlink", base: &secretSHA},
+		{name: "stale base names the symlink", base: &staleSHA},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Write(target, "attacker text\n", tc.base)
+			var refused *RefusedError
+			if !errors.As(err, &refused) || !errors.Is(err, ErrRefused) {
+				t.Fatalf("write = %v, want a RefusedError", err)
+			}
+			message := err.Error()
+			if strings.Contains(message, secretSHA) || strings.Contains(message, shortSHA(secretSHA)) {
+				t.Fatalf("the refusal disclosed the linked file's sha: %v", err)
+			}
+			if strings.Contains(message, secretInfo.ModTime().UTC().Format(time.RFC3339)) {
+				t.Fatalf("the refusal disclosed the linked file's mtime: %v", err)
+			}
+			if strings.Contains(message, "PRIVATE KEY") {
+				t.Fatalf("the refusal disclosed the linked file's content: %v", err)
+			}
+		})
+	}
+
+	// Nothing outside Root changed, and nothing was created beside the link.
+	data, err := os.ReadFile(secret)
+	if err != nil || string(data) != "PRIVATE KEY\n" {
+		t.Fatalf("secret = %q (%v), want it untouched", data, err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "CULTURE.md" {
+		t.Fatalf("root holds %d entries, want only the link", len(entries))
+	}
+}
+
+// TestWriteRefusesNonRegularFileWithoutBlocking: a FIFO in the target's place
+// used to hang Write forever, because opening a FIFO for reading waits for a
+// writer. The guard runs first now, so the refusal is immediate.
+//
+// The test is bounded on purpose: if the regression returns, it fails with a
+// message instead of taking the suite down with it.
+func TestWriteRefusesNonRegularFileWithoutBlocking(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CULTURE.md")
+	if err := syscall.Mkfifo(path, 0o644); err != nil {
+		t.Skipf("mkfifo is unavailable here: %v", err)
+	}
+	target := Target{Path: path, Source: SourceDerived, Root: dir}
+
+	anySHA := strings.Repeat("0", 64)
+	for _, tc := range []struct {
+		name string
+		base *string
+	}{
+		{name: "null base", base: nil},
+		{name: "any base", base: &anySHA},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			done := make(chan error, 1)
+			go func() { _, err := Write(target, "content\n", tc.base); done <- err }()
+
+			select {
+			case err := <-done:
+				var refused *RefusedError
+				if !errors.As(err, &refused) || !errors.Is(err, ErrRefused) {
+					t.Fatalf("write = %v, want a RefusedError", err)
+				}
+				if !strings.Contains(err.Error(), "not a regular file") {
+					t.Fatalf("error = %v, want it to name the file type", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("Write blocked on a FIFO: the guard must run before the first read")
+			}
+		})
+	}
+}
+
+// TestReadRefusesNonRegularFile: the read path already refused a FIFO; this pins
+// it beside the write case so the pair cannot drift apart.
+func TestReadRefusesNonRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CULTURE.md")
+	if err := syscall.Mkfifo(path, 0o644); err != nil {
+		t.Skipf("mkfifo is unavailable here: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := Read(Target{Path: path, Source: SourceDerived, Root: dir})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrRefused) {
+			t.Fatalf("read = %v, want ErrRefused", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Read blocked on a FIFO")
+	}
+}
+
+// TestResolveDerivedWithoutRigYaml: design §1 says a path whose parent is not a
+// rig spec directory is not_configured with the expected path. A directory that
+// shares the rig's name but carries no rig.yaml is not a rig, and reporting it
+// as derived would point the operator at a location that cannot be right.
+func TestResolveDerivedWithoutRigYaml(t *testing.T) {
+	specs := t.TempDir()
+
+	// No specs tree at all.
+	target := Resolve(Project{Rigs: []string{"ghost"}}, specs)
+	want := filepath.Join(specs, "rigs", "ghost", "CULTURE.md")
+	if target.Source != SourceNotConfigured || target.Path != want || target.Rig != "ghost" {
+		t.Fatalf("target = %+v, want not_configured naming %s", target, want)
+	}
+	if _, err := Read(target); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("read = %v, want ErrNotConfigured", err)
+	}
+	if _, err := Write(target, "x\n", nil); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("write = %v, want ErrNotConfigured", err)
+	}
+	if _, err := os.Stat(filepath.Join(specs, "rigs", "ghost")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the resolution created a directory")
+	}
+
+	// The directory exists but is not a rig: no rig.yaml.
+	dir := filepath.Join(specs, "rigs", "ghost")
+	if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if got := Resolve(Project{Rigs: []string{"ghost"}}, specs); got.Source != SourceNotConfigured {
+		t.Fatalf("source = %s, want not_configured for a directory without rig.yaml", got.Source)
+	}
+
+	// The marker turns it into a real rig.
+	if err := os.WriteFile(filepath.Join(dir, "rig.yaml"), []byte("name: ghost\n"), 0o644); err != nil {
+		t.Fatalf("write rig.yaml: %v", err)
+	}
+	if got := Resolve(Project{Rigs: []string{"ghost"}}, specs); got.Source != SourceDerived {
+		t.Fatalf("source = %s, want derived once rig.yaml exists", got.Source)
+	}
+}
+
+// TestResolveExplicitPathIsNotSecondGuessed: the rig.yaml rule is for derived
+// paths only. An operator who names culture_file chose that location, and it
+// need not sit under a rig directory.
+func TestResolveExplicitPathIsNotSecondGuessed(t *testing.T) {
+	specs := t.TempDir()
+	explicit := filepath.Join(t.TempDir(), "notes", "RULES.md")
+	target := Resolve(Project{Rigs: []string{"ghost"}, CultureFile: explicit}, specs)
+	if target.Source != SourceConfig || target.Path != explicit {
+		t.Fatalf("target = %+v, want the explicit path even though the rig has no spec dir", target)
+	}
+}
+
+// TestNotConfiguredNamesTheCause: one sentinel, two causes, and a sentence that
+// says which. An operator reading "no rigs" for a project that has one would go
+// looking in the wrong place.
+func TestNotConfiguredNamesTheCause(t *testing.T) {
+	specs := t.TempDir()
+
+	bare := Resolve(Project{}, specs)
+	_, err := Read(bare)
+	if !errors.Is(err, ErrNotConfigured) || !strings.Contains(err.Error(), "no rigs") {
+		t.Fatalf("err = %v, want it to name the missing rigs", err)
+	}
+
+	ghost := Resolve(Project{Rigs: []string{"ghost"}}, specs)
+	_, err = Write(ghost, "x\n", nil)
+	if !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("err = %v, want ErrNotConfigured", err)
+	}
+	for _, want := range []string{"ghost", "no spec directory", "rig.yaml"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %q, want it to mention %q", err, want)
+		}
 	}
 }

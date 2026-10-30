@@ -14,8 +14,10 @@ Resolution order, once per project, in `internal/culture.Resolve`:
    the specs live elsewhere.
 
 The resolved path carries its provenance (`source: config | derived`, `rig: <name>`) so the screen can say why it is
-looking where it looks. A path whose parent is not a directory that contains `rig.yaml` is reported as
-`not_configured` with the expected path — never created silently.
+looking where it looks. A **derived** path whose rig directory does not contain `rig.yaml` is reported as
+`not_configured` with the expected path — never created silently. This applies to derived paths only: an explicit
+`culture_file` is the owner naming a location, and it need not sit under a rig directory at all, so it is never
+second-guessed this way.
 
 ## 2. Reading
 
@@ -44,10 +46,17 @@ Order of checks, first failure wins, each with its own status:
 |---|---|---|
 | content is not a string, or `len > 256 KiB` | `413` | `{"error":"content too large","limit":262144}` |
 | content contains NUL or is not valid UTF-8 | `422` | `{"error":"content must be UTF-8 text"}` |
+| the path is a symlink, is not a regular file, or resolves outside the rig spec dir | `403` | `{"error":"refused","path":"…","resolved":"…"}` |
 | file absent and `base_sha` is not `null` | `409` | `{"error":"no culture file","sha":null}` |
 | file present and `base_sha` != current sha | `409` | `{"error":"stale","sha":"<current>","mtime":"…"}` |
 | file present but not writable, or its directory is not writable | `403` | `{"error":"not writable","path":"…","mode":"0444"}` |
-| the path is a symlink, or resolves outside the rig spec dir | `403` | `{"error":"refused","path":"…","resolved":"…"}` |
+
+The guard is third, not last. Ordering it after the base rules was wrong in two ways: a symlink with
+`base_sha: null` answered `409 stale` carrying the sha and mtime of a file outside the rig, and a FIFO in the
+target's place made the write block forever — opening a FIFO for reading waits for a writer. Both are
+preconditions about *which file this is*, not judgements about its content, so they are settled before anything
+opens the path. The absence and staleness rules keep their relative order, so `base_sha: null` still means
+"create".
 
 On success:
 

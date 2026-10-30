@@ -54,8 +54,11 @@ const (
 // Typed refusals. Each names one cause so a handler maps it to a status without
 // re-deriving the reason, and each leaves the target untouched.
 var (
-	// ErrNotConfigured: the project names no culture file and has no rigs.
-	ErrNotConfigured = errors.New("culture: project names no culture file and has no rigs")
+	// ErrNotConfigured: there is no culture file to act on. Two causes share it —
+	// a project with no culture_file and no rigs, and a derived path whose rig
+	// spec directory carries no rig.yaml — so the sentence comes from
+	// notConfiguredError, and errors.Is is how a caller tells it from a refusal.
+	ErrNotConfigured = errors.New("culture: no culture file is configured")
 	// ErrTooLarge: the content is over MaxBytes.
 	ErrTooLarge = errors.New("culture: content too large")
 	// ErrNotText: the content is not UTF-8 or contains a NUL byte.
@@ -138,9 +141,14 @@ type Target struct {
 //
 // projects[i].culture_file wins (with ~ expanded); otherwise the first rig gives
 // <specsDir>/rigs/<rig>/CULTURE.md. specsDir may be empty, in which case
-// OPENRIG_SPECS_DIR is used and then DefaultSpecsRoot. A project with neither a
-// key nor a rig is not_configured: an empty Path is the honest answer, and no
-// directory is invented.
+// OPENRIG_SPECS_DIR is used and then DefaultSpecsRoot.
+//
+// A project with neither a key nor a rig is not_configured with an empty Path:
+// there is nothing to name. A derived path is not_configured too when the rig's
+// spec directory does not carry a rig.yaml (design §1), and then Path is the
+// path that *would* be used, because the screen has to show the operator what to
+// create. An explicit culture_file is never second-guessed this way: the owner
+// named that location, and it need not sit under a rig directory at all.
 func Resolve(project Project, specsDir string) Target {
 	if configured := strings.TrimSpace(project.CultureFile); configured != "" {
 		path := ExpandHome(configured, homeDir())
@@ -156,12 +164,26 @@ func Resolve(project Project, specsDir string) Target {
 		return Target{Source: SourceNotConfigured}
 	}
 	root := rigSpecDir(specsDir, rig)
-	return Target{
+	target := Target{
 		Path:   filepath.Join(root, FileName),
 		Source: SourceDerived,
 		Rig:    rig,
 		Root:   root,
 	}
+	// A directory without rig.yaml is not a rig spec directory. Reporting it as
+	// derived would point the operator at a path that cannot be right, and would
+	// let a save create a file in whatever happens to share the rig's name.
+	if !isRigSpecDir(root) {
+		target.Source = SourceNotConfigured
+	}
+	return target
+}
+
+// isRigSpecDir reports whether dir holds a rig.yaml. It is the one filesystem
+// question Resolve asks, and it is deliberately cheap: a stat, not a read.
+func isRigSpecDir(dir string) bool {
+	info, err := os.Stat(filepath.Join(dir, "rig.yaml"))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // Project is the part of a project a culture path depends on. internal/config
@@ -198,6 +220,21 @@ func ExpandHome(path, home string) string {
 	}
 }
 
+// notConfiguredError says which of the two causes applies: nothing was named at
+// all, or a rig was named whose spec directory has no rig.yaml. Both wrap
+// ErrNotConfigured so a caller has one test, and the operator gets a sentence
+// that names the thing to create.
+func notConfiguredError(target Target) error {
+	if target.Path == "" {
+		return fmt.Errorf("%w: the project names no culture_file and has no rigs", ErrNotConfigured)
+	}
+	if target.Rig != "" {
+		return fmt.Errorf("%w: rig %q has no spec directory at %s (expected rig.yaml beside CULTURE.md)",
+			ErrNotConfigured, target.Rig, filepath.Dir(target.Path))
+	}
+	return fmt.Errorf("%w: %s", ErrNotConfigured, target.Path)
+}
+
 // Snapshot is the file as the board reads it. A missing file is a normal
 // answer: Exists is false and Content is empty.
 type Snapshot struct {
@@ -219,7 +256,7 @@ type Snapshot struct {
 // stay a normal answer even on a box whose specs tree does not exist.
 func Read(target Target) (Snapshot, error) {
 	if target.Source == SourceNotConfigured || target.Path == "" {
-		return Snapshot{}, ErrNotConfigured
+		return Snapshot{}, notConfiguredError(target)
 	}
 	info, err := os.Stat(target.Path)
 	if err != nil {
@@ -303,10 +340,17 @@ type Result struct {
 	Backup string
 }
 
-// Write saves content to the target in the order design §3 lists, first failure
-// wins: size, text, absence/base rules, staleness, writability, guard. Exactly
-// one typed error comes back per refusal and the file is untouched in every one
-// of those cases.
+// Write saves content to the target in this order, first failure wins:
+// size, text, guard, absence/base rules, staleness, writability. Exactly one
+// typed error comes back per refusal and the file is untouched in every one of
+// those cases.
+//
+// Guard runs before anything opens the path, which is one step earlier than
+// design §3 lists it. §3's order governs checks about *content*; a path that is
+// not the file the resolver named — a symlink, a directory, a FIFO — is a
+// precondition, not a content judgement. It also has to precede the first read:
+// opening a FIFO blocks until a writer appears, so a guard placed later turns a
+// refusal into a request that never returns.
 //
 // baseSHA is the sha the editor loaded; nil means "I expect no file" and creates
 // one. A write that succeeds replaces the file atomically, preserves its mode,
@@ -314,7 +358,7 @@ type Result struct {
 // culture.edited event belongs to the caller that owns the store.
 func Write(target Target, content string, baseSHA *string) (Result, error) {
 	if target.Source == SourceNotConfigured || target.Path == "" {
-		return Result{}, ErrNotConfigured
+		return Result{}, notConfiguredError(target)
 	}
 
 	// 1. Size, then 2. text. Both are about the request alone.
@@ -325,7 +369,14 @@ func Write(target Target, content string, baseSHA *string) (Result, error) {
 		return Result{}, ErrNotText
 	}
 
-	// 3. Absence and base rules.
+	// 3. Guard, before the first read of the path. A symlink, a directory or a
+	// FIFO is refused here, so the write never discloses the sha or mtime of a
+	// file outside Root and never blocks on a FIFO's open.
+	if err := Guard(target); err != nil {
+		return Result{}, err
+	}
+
+	// 4. Absence and base rules.
 	current, err := currentState(target.Path)
 	if err != nil {
 		return Result{}, err
@@ -338,11 +389,11 @@ func Write(target Target, content string, baseSHA *string) (Result, error) {
 	case baseSHA == nil:
 		return Result{}, &StaleError{Path: target.Path, SHA: current.sha, MTime: current.mtime}
 	case *baseSHA != current.sha:
-		// 4. Stale: the file moved since the editor read it.
+		// 5. Stale: the file moved since the editor read it.
 		return Result{}, &StaleError{Path: target.Path, SHA: current.sha, MTime: current.mtime}
 	}
 
-	// 5. Writability, of the file if there is one and of its directory always,
+	// 6. Writability, of the file if there is one and of its directory always,
 	// because the write is a temp file beside it.
 	if current.exists && current.mode.Perm()&0o222 == 0 {
 		return Result{}, &NotWritableError{Path: target.Path, Mode: current.mode}
@@ -354,11 +405,6 @@ func Write(target Target, content string, baseSHA *string) (Result, error) {
 		return Result{}, &RefusedError{Path: target.Path, Reason: "its parent is not a directory"}
 	} else if info.Mode().Perm()&0o222 == 0 {
 		return Result{}, &NotWritableError{Path: dir, Mode: info.Mode()}
-	}
-
-	// 6. Guard: the last check, and the one that decides what may be replaced.
-	if err := Guard(target); err != nil {
-		return Result{}, err
 	}
 
 	mode := defaultMode
