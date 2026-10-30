@@ -92,6 +92,36 @@ names the file. Do not paste the token into a shell history or a repository.
 **Success:** `stat -c '%a %n' "$HOME"/.config/fleet-console/*` prints `600` for
 both files.
 
+### Telegram, optional
+
+Two more environment variables, in the same `EnvironmentFile`:
+
+```bash
+(umask 077; printf 'TELEGRAM_BOT_TOKEN=%s\nTELEGRAM_CHAT_ID=%s\n' "<token>" "<chat id>" \
+  >> "$HOME/.config/fleet-console/fleet-console.env")
+```
+
+`TELEGRAM_BOT_TOKEN` is the bot's token and `TELEGRAM_CHAT_ID` the conversation
+that receives decision escalations and progress reports.
+
+**Unset means off.** With either missing, the service prints one line at boot —
+`notify: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set; completion notices are off`
+— and sends nothing; the board and the act loop are unaffected. That is a
+configuration, not a failure, so a box without a phone costs nothing.
+
+To try it without waiting for a merge:
+
+```bash
+fleet-console --config "$CONFIG" --notify-report --notify-project my-project
+```
+
+That renders the report from the store and the rig roster — no mirror, no
+dispatch — and exits `0` delivered (or already current), `1` when the transport
+fails, and `3` when the two variables are unset. `notify_interval: 30m` in the
+config adds an optional digest at most that often, and only when the rendered
+state changed; the default `0` is off.
+
+
 **The board has no sign-in screen.** It is served on a loopback listener, so a
 request from `127.0.0.1` is granted the board session when the page loads: open
 `http://127.0.0.1:8787/` and the board is there. Every other caller still needs

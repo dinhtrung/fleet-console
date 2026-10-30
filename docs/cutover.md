@@ -140,10 +140,26 @@ a repeat inside the window writes nothing.
 
 ### Telegram
 
-`internal/alert` sends one message per decision and edits that message on later breaches
-(`TestEscalationSendsOnceThenEdits`: one send, then one edit of message id 42 from the test Bot API server).
-A real message id is **not** available here: `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are not present in this
-seat. The client reads both from the environment; no token is stored or logged.
+One client, two kinds of message, and they behave differently on purpose.
+
+**A decision is editable.** `internal/alert` sends one message per decision and edits that message on later
+breaches (`TestEscalationSendsOnceThenEdits`: one send, then one edit of message id 42 from the test Bot API
+server). Editing is right here because a question has one current answer — a second unanswered copy of the same
+question is noise.
+
+**A progress report is a photograph.** After a merge, `--notify-report`, or the optional digest, the service
+renders the whole state and sends it as a new message. It is never edited, because editing yesterday's report
+lies about what was true yesterday. Repeats are prevented by a hash of the rendered body, not by editing: the
+same state sends nothing, a changed state sends one new message.
+
+Both read `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from the environment; no token is stored or logged. With
+either unset the service prints one line at boot —
+`notify: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set; completion notices are off` — and every trigger becomes a
+no-op. That is a configuration, not an error.
+
+A real message id is **not** available here: neither variable is present in this seat. The transport is proven
+against a fake Bot API server instead (see the PR's `--notify-report` transcript), and `TELEGRAM_API_BASE`
+exists so a self-hosted Bot API server — or that test — can replace `api.telegram.org`.
 
 ### End-to-end item
 

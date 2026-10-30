@@ -21,6 +21,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/dinhtrung/fleet-console/internal/act"
+	"github.com/dinhtrung/fleet-console/internal/alert"
 	"github.com/dinhtrung/fleet-console/internal/config"
 	"github.com/dinhtrung/fleet-console/internal/dblock"
 	"github.com/dinhtrung/fleet-console/internal/decide"
@@ -28,6 +29,7 @@ import (
 	"github.com/dinhtrung/fleet-console/internal/git"
 	"github.com/dinhtrung/fleet-console/internal/hostcheck"
 	"github.com/dinhtrung/fleet-console/internal/mirror"
+	"github.com/dinhtrung/fleet-console/internal/progress"
 	"github.com/dinhtrung/fleet-console/internal/registry"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
@@ -51,6 +53,12 @@ type buildInfo struct {
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		var code exitCode
+		if errors.As(err, &code) {
+			// --notify-report answers with the severity of its own failure:
+			// 3 not configured, 1 transport. Its message already went to stderr.
+			os.Exit(int(code))
+		}
 		fmt.Fprintln(os.Stderr, "fleet-console:", err)
 		if errors.Is(err, dblock.ErrHeld) {
 			// 3 is distinct from a config or flag error (1) so a supervisor can
@@ -188,6 +196,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	applyConfig := flags.Bool("apply-config", false, "create or refresh the projects from the config; projects absent from the file are disabled")
 	prune := flags.Bool("prune", false, "delete projects absent from the config and exit; refused while a live dispatch exists")
 	syncOnHold := flags.Bool("sync-onhold", false, "with --apply-config, copy each project's onhold from the config")
+	notifyReportFlag := flags.Bool("notify-report", false, "render the progress report from the store and send it; no mirror, no dispatch")
+	notifyProject := flags.String("notify-project", "fleet-console", "with --notify-report, the project to report on")
 	flags.String("tick-interval", "", "mirror interval (overrides the config)")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -308,6 +318,22 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runTick(ctx, db, stdout, stderr, forgeRunner, rigRunner, mirrorTimeouts(eff))
 	}
 
+	if *notifyReportFlag {
+		// No mirror, no dispatch, no server: read what the store already holds,
+		// render, send. The exit code is the report's result.
+		code, err := runNotifyReport(ctx, notifyReportArgs{
+			eff: eff, projectKey: *notifyProject, adapter: rig.NewAdapter(rigRunner),
+			log: stderr, boardURL: boardURLFrom(eff.Listen),
+		})
+		if err != nil {
+			return err
+		}
+		if code != 0 {
+			return exitCode(code)
+		}
+		return nil
+	}
+
 	if *importState != "" {
 		db, err := store.Open(ctx, eff.Database)
 		if err != nil {
@@ -388,6 +414,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 	} else {
 		fmt.Fprintf(stderr, "fleet-console: compat: rig %s at or above floor %s\n", report.Version, report.Floor)
 	}
+
+	// One Telegram client for both kinds of message (design.md §6). Missing
+	// credentials print one line and leave every trigger a no-op; they are a
+	// configuration, not an error.
+	notify := newNotifier(db, eff, stderr, boardURLFrom(eff.Listen))
+	digest := &digestGate{interval: eff.NotifyInterval}
 	// The act loop's first check. A failed probe is a hard refusal with one named
 	// reason; the mirror and the board keep serving and no dispatch or merge runs.
 	gate := act.NewGate(report)
@@ -481,11 +513,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 					continue
 				}
 				gitRunner := act.ExecGit{RepoPath: source.RepoPath, DefaultBranch: project.DefaultBranch}
+				projectKey := project.Key
 				report, err := act.RunTick(ctx, act.TickInput{
 					Store: db, Project: project, Forge: source.Forge,
 					Rig: rig.NewAdapter(rigRunner), Git: gitRunner, Gate: gate, Apply: true,
 					Items: projectRead.Items, CRs: projectRead.CRs, Rows: projectRead.Rows,
 					Plan: plan, WorktreeRoot: worktreeRoot(eff, project, source),
+					// A raised decision reaches the phone from here: the tick
+					// knows the row exists, and the notifier owns the transport.
+					OnDecision: func(raised act.DecisionRaised) {
+						notify.escalate(ctx, projectKey, raised)
+					},
 				})
 				if err != nil {
 					fmt.Fprintf(stderr, "act: %s: %v\n", project.Key, err)
@@ -497,6 +535,25 @@ func run(args []string, stdout, stderr io.Writer) error {
 				// "skipped=2" over one project tells the operator nothing about which write failed.
 				for _, why := range report.Skipped {
 					fmt.Fprintf(stderr, "act-skip: %s: %s\n", project.Key, why)
+				}
+				// A merge is the only "code done" moment (design.md §4.1), so
+				// it is the only trigger that reports without being asked, and
+				// it builds the snapshot after the merge rather than before.
+				// A failed send never fails the tick and never blocks a merge.
+				if len(report.Merges) > 0 || digest.allow(read.At) {
+					seats, seatsErr := rig.NewAdapter(rigRunner).Seats(ctx)
+					snapshot := progress.Build(read, dispatches, project, eff, progress.Roster{
+						Seats: seats, Err: seatsErr, Plan: &plan,
+					})
+					result, sendErr := notify.sendProgress(ctx, snapshot, read.At)
+					switch {
+					case sendErr != nil && !errors.Is(sendErr, alert.ErrNotConfigured):
+						fmt.Fprintf(stderr, "notify: %s: %v\n", project.Key, sendErr)
+					case result.Failed:
+						fmt.Fprintf(stderr, "notify: %s: send failed: %s\n", project.Key, result.Reason)
+					case result.Sent:
+						fmt.Fprintf(stderr, "notify: %s: sent message %s\n", project.Key, result.MessageID)
+					}
 				}
 			}
 		},
