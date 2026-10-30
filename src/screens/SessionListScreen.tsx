@@ -1,8 +1,8 @@
 /** The workspace session inventory, scoped to the current organization.
  *
  *  This is the security board: every active session on the board, who holds it, where it came from
- *  and when it was last seen. The operator's own session is marked, because revoking it does not
- *  leave a dead board behind — it ends the operator's session and returns them to sign-in. */
+ *  and when it was last seen. The operator's own session is marked; revoking it closes the row and
+ *  nothing else, because the board serves the local operator and has no sign-in to return them to. */
 
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
@@ -15,7 +15,6 @@ import { RequirePermission } from "../components/RequirePermission";
 import { Gate } from "../access/access";
 import { PageHeader } from "../shell/PageHeader";
 import { useScope } from "../shell/scope";
-import { useAuth } from "../auth/session";
 import { useListState } from "../lib/urlState";
 import { DEFAULT_PAGE_SIZE, listSessions, revokeOtherSessions, revokeSession } from "../mock/api";
 import type { ListQuery } from "../mock/types";
@@ -37,7 +36,6 @@ export function SessionListScreen() {
 
 function SessionBoard() {
   const { orgId, sweepKey } = useScope();
-  const { signOut } = useAuth();
   const toast = useToast();
   const queryClient = useQueryClient();
 
@@ -86,8 +84,7 @@ function SessionBoard() {
       setPending(null);
       refresh();
       if (row.current) {
-        toast.done("Your session was revoked", "Sign in again to keep working on this board.");
-        signOut("revoked");
+        toast.done("Your session was revoked", "The board keeps serving the local operator.");
       } else {
         toast.done("Session revoked", `${row.device} · ${row.location} must sign in again.`);
       }
@@ -309,11 +306,11 @@ function SessionBoard() {
         description={
           pending
             ? pending.current
-              ? "This is the session you are using. Revoking it signs you out immediately and you will have to sign in again."
+              ? "This is the session you are using. Revoking it closes the row; the board keeps serving the local operator."
               : `${pending.user?.name ?? pending.userId}'s session on ${pending.device} (${pending.location}) will be signed out. That device must sign in again.`
             : ""
         }
-        confirmLabel={pending?.current ? "Revoke and sign out" : "Revoke session"}
+        confirmLabel="Revoke session"
         busy={revokeOne.isPending}
         error={revokeOne.isError ? errorMessage(revokeOne.error) : undefined}
       />

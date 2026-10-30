@@ -92,6 +92,13 @@ names the file. Do not paste the token into a shell history or a repository.
 **Success:** `stat -c '%a %n' "$HOME"/.config/fleet-console/*` prints `600` for
 both files.
 
+**The board has no sign-in screen.** It is served on a loopback listener, so a
+request from `127.0.0.1` is granted the board session when the page loads: open
+`http://127.0.0.1:8787/` and the board is there. Every other caller still needs
+the token: the `Authorization: Bearer` header on `/api`, `POST /api/session`, or the
+`/login` form — which is what protects the surface if the listen address is ever
+changed to anything other than loopback.
+
 ## 4. Config
 
 The minimal file for the first project. `~` expands and relative paths resolve
@@ -194,7 +201,8 @@ network interface:
 ssh -N -L 8787:127.0.0.1:8787 you@box
 ```
 
-Open <http://127.0.0.1:8787>, and paste the token from step 3 when asked. A
+Open <http://127.0.0.1:8787>: over the tunnel the request still arrives from
+loopback, so the board opens with no sign-in. The
 curl check uses the same token:
 
 ```bash

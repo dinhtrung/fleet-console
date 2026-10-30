@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
@@ -48,6 +49,11 @@ func clearBoardCookie(c fiber.Ctx) {
 	})
 }
 
+// isLoopback reports whether the request arrived over the loopback interface.
+func isLoopback(ip string) bool {
+	parsed := net.ParseIP(ip)
+	return parsed != nil && parsed.IsLoopback()
+}
 func isBoardCookie(c fiber.Ctx, token string) bool {
 	got := c.Cookies(boardCookieName)
 	return got != "" && hmac.Equal([]byte(got), []byte(boardCookieValue(token)))

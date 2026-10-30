@@ -229,7 +229,7 @@ function SettingsForm({ settings }: { settings: WorkspaceSettings }) {
       if (changed.displayName && identity) {
         try {
           await updateUser(identity.userId, { name: draft.displayName.trim() });
-          // Re-apply the identity so the rail shows the new name without a fresh sign-in.
+          // Re-apply the identity so the rail shows the new name without a reload.
           await switchTo(identity.userId);
         } catch (error) {
           const message = isApiError(error) ? error.message : "The display name was refused.";

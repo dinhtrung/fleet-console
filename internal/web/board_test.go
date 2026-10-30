@@ -16,7 +16,7 @@ func boardApp() *fiber.App {
 		"assets/app.js": {Data: []byte("console.log('board')")},
 	}
 	app := fiber.New()
-	app.Use(boardHandler(board))
+	app.Use(boardHandler(board, "test-token"))
 	return app
 }
 

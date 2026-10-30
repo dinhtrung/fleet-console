@@ -71,7 +71,7 @@ func New(cfg Config) (*fiber.App, error) {
 	api.Get("/events", fleet.Events)
 	api.Get("/stream", hub.Stream)
 	if board, ok := webui.FS(); ok {
-		app.Use(boardHandler(board))
+		app.Use(boardHandler(board, cfg.Token))
 	}
 	return app, nil
 }

@@ -1,8 +1,8 @@
 /** The four demo identities.
  *
- *  Every permission state has to be reachable without an administrator ceremony, so the seed always
- *  contains exactly one account per system role and the sign-in screen offers them directly. They
- *  are authored synthetic people; nothing here refers to a real person. */
+ *  The board has one operator account (`usr_owner`, every permission); the other three exist so each
+ *  system role has a holder and the people screens have something real to show. They are authored
+ *  synthetic people; nothing here refers to a real person. */
 
 import type { User } from "./types";
 
@@ -17,10 +17,10 @@ export interface DemoIdentity {
 export const DEMO_IDENTITIES: DemoIdentity[] = [
   {
     id: "usr_owner",
-    name: "Mara Ilesanmi",
-    email: "mara.ilesanmi@panel.example",
+    name: "Operator",
+    email: "operator@fleet-console.local",
     roleId: "role_owner",
-    note: "Owner — every permission, including workspace settings",
+    note: "The local operator — every permission, including workspace settings",
   },
   {
     id: "usr_admin",
@@ -46,7 +46,7 @@ export const DEMO_IDENTITIES: DemoIdentity[] = [
 ];
 
 /** A fallback board containing only the demo accounts, used before the store has ever been written
- *  (the sign-in screen can then list accounts even if storage is unavailable). */
+ *  (the session can then resolve the operator even if storage is unavailable). */
 export const DEMO_ACCOUNTS: User[] = DEMO_IDENTITIES.map((d, i) => ({
   id: d.id,
   name: d.name,

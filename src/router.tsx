@@ -1,17 +1,15 @@
 /** The route tree.
  *
  *  Code-based routes rather than a generated tree: the addresses are part of the frozen contract
- *  (deep links must resolve), so they are declared in one file. The root route owns the auth gate and
- *  the shell; each screen owns its own header and permission gate. */
+ *  (deep links must resolve), so they are declared in one file. The root route owns the shell; each
+ *  screen owns its own header and permission gate. */
 
 import { useEffect, useRef } from "react";
 import { createRootRoute, createRoute, createRouter, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "./shell/AppShell";
-import { useAuth } from "./auth/session";
 import { getSettings } from "./mock/api";
 import type { WorkspaceSettings } from "./mock/types";
-import { SignInScreen } from "./screens/SignInScreen";
 import { BoardScreen } from "./screens/BoardScreen";
 import { DecisionsScreen } from "./screens/DecisionsScreen";
 import { SeatsScreen } from "./screens/SeatsScreen";
@@ -28,7 +26,7 @@ import { AuditDetailScreen } from "./screens/AuditDetailScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 import { ApiKeysScreen } from "./screens/ApiKeysScreen";
 import { FeatureFlagsScreen } from "./screens/FeatureFlagsScreen";
-import { Button, ErrorState, LoadingRows, NotFoundState } from "./components/ui";
+import { Button, ErrorState, NotFoundState } from "./components/ui";
 
 /** The saved default landing surface, as an address. */
 const LANDING: Record<WorkspaceSettings["defaultLanding"], string> = {
@@ -39,41 +37,21 @@ const LANDING: Record<WorkspaceSettings["defaultLanding"], string> = {
 };
 
 function RootLayout() {
-  const { state } = useAuth();
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const applied = useRef(false);
-  const { data: settings } = useQuery({
-    queryKey: ["settings"],
-    queryFn: getSettings,
-    enabled: state === "signed_in",
-  });
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettings });
 
-  // The saved default landing surface is honoured once per sign-in, and only when the operator
+  // The saved default landing surface is honoured once per load, and only when the operator
   // arrived on the landing surface itself: an explicit deep link is never hijacked.
   useEffect(() => {
-    if (state !== "signed_in") {
-      applied.current = false;
-      return;
-    }
     if (applied.current || !settings) return;
     applied.current = true;
     if (pathname !== "/") return;
     const target = LANDING[settings.defaultLanding] ?? "/";
     if (target !== "/") void navigate({ to: target });
-  }, [state, settings, pathname, navigate]);
+  }, [settings, pathname, navigate]);
 
-  if (state === "restoring") {
-    return (
-      <div className="min-h-svh bg-ground px-3 py-4 sm:px-5">
-        <p className="label text-ink-muted">Restoring your session</p>
-        <div className="mt-3 border border-rule bg-panel">
-          <LoadingRows rows={6} />
-        </div>
-      </div>
-    );
-  }
-  if (state !== "signed_in") return <SignInScreen expired={state === "expired"} />;
   return (
     <AppShell>
       <Outlet />

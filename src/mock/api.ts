@@ -64,7 +64,7 @@ function storedFailure(): FailureMode {
 const runtime: Runtime = {
   latencyMs: 160,
   failure: storedFailure(),
-  actor: { id: "usr_owner", name: "Mara Ilesanmi" },
+  actor: { id: "usr_owner", name: "Operator" },
 };
 
 let store: Database | null = null;

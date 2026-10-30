@@ -85,7 +85,7 @@ function RailNav({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 function IdentityBlock() {
-  const { identity, signOut } = useAuth();
+  const { identity } = useAuth();
   if (!identity) return null;
   return (
     <div className="border-t border-rail-ink/20 px-3 py-3">
@@ -100,15 +100,6 @@ function IdentityBlock() {
           <span className="block truncate text-[0.6875rem] font-semibold text-rail-ink">{identity.name}</span>
           <span className="block truncate font-mono text-[0.625rem] text-rail-ink/65">{identity.email}</span>
         </span>
-      </div>
-      <div className="mt-2.5 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => signOut("user")}
-          className="relative text-[0.6875rem] font-semibold text-rail-ink/80 underline decoration-rail-ink/40 hover:text-rail-ink after:absolute after:-inset-3 after:content-['']"
-        >
-          Sign out
-        </button>
       </div>
     </div>
   );

@@ -2,11 +2,13 @@ package web
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -20,17 +22,57 @@ func boardCookie(resp *http.Response) *http.Cookie {
 	return nil
 }
 
-// TestBoardPageDoesNotIssueCookie is the regression for the auth bypass: loading
-// the board must not hand a working session to an anonymous visitor.
-func TestBoardPageDoesNotIssueCookie(t *testing.T) {
-	app := testApp(t)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	resp, err := app.Test(req)
+// TestBoardPageGrantsSessionOnlyOnLoopback replaces the old no-cookie-on-/ guard. The board has
+// no sign-in screen, so the loopback request that loads it is granted the session — a real
+// listener is used because only a real connection carries the client address.
+func TestBoardPageGrantsSessionOnlyOnLoopback(t *testing.T) {
+	board := fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>board</title>")}}
+	app := fiber.New()
+	app.Use(boardHandler(board, "test-token"))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("listen: %v", err)
 	}
-	if cookie := boardCookie(resp); cookie != nil {
-		t.Fatalf("GET / issued %s=%q to an anonymous visitor", cookie.Name, cookie.Value)
+	go func() { _ = app.Listener(ln) }()
+	t.Cleanup(func() { _ = app.Shutdown() })
+
+	resp, err := http.Get("http://" + ln.Addr().String() + "/")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	cookie := boardCookie(resp)
+	if cookie == nil {
+		t.Fatal("loopback GET / issued no board session")
+	}
+	if want := boardCookieValue("test-token"); cookie.Value != want {
+		t.Fatalf("loopback session = %q, want %q", cookie.Value, want)
+	}
+}
+
+// TestIsLoopback pins the address test the grant rests on: only a real loopback client is
+// trusted, so a spoofed X-Forwarded-For cannot mint a session for a remote caller.
+func TestIsLoopback(t *testing.T) {
+	cases := []struct {
+		ip   string
+		want bool
+	}{
+		{"127.0.0.1", true},
+		{"::1", true},
+		{"::ffff:127.0.0.1", true},
+		{"192.0.2.1", false},
+		{"10.0.0.5", false},
+		{"", false},
+		{"not-an-ip", false},
+	}
+	for _, tc := range cases {
+		if got := isLoopback(tc.ip); got != tc.want {
+			t.Errorf("isLoopback(%q) = %v, want %v", tc.ip, got, tc.want)
+		}
 	}
 }
 

@@ -7,11 +7,13 @@ Wants=network-online.target
 Type=simple
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=%h/.config/fleet-console/fleet-console.env
-ExecStart=%h/.local/bin/fleet-console --addr 127.0.0.1:8787 --db %h/.local/state/fleet-console/fleet-console.db
+ExecStart=%h/.local/bin/fleet-console --config %h/.config/fleet-console/config.yaml
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true
-PrivateTmp=true
-
+# No PrivateTmp here: the per-unit mount namespace maps root-owned files to `nobody`, so ssh
+# refuses its own system config ("Bad owner or permissions on
+# /etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf") and every git ls-remote the mirror makes
+# fails. Loopback-only listen is the isolation that matters for this service.
 [Install]
 WantedBy=default.target
