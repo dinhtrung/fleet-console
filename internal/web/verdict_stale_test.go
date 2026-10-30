@@ -65,8 +65,10 @@ func TestBoardShowsStaleVerdict(t *testing.T) {
 	defer st.Close()
 	seedStaleVerdict(t, st)
 	app, err := New(Config{
-		Token: "test-token", Store: st,
-		Compat: func(context.Context) rig.Report { return rig.Report{OK: true, Status: rig.StatusOK} },
+		Token:      "test-token",
+		ConfigPath: "/tmp/fake-config.yaml",
+		Store:      st,
+		Compat:     func(context.Context) rig.Report { return rig.Report{OK: true, Status: rig.StatusOK} },
 	})
 	if err != nil {
 		t.Fatalf("app: %v", err)
