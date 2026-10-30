@@ -522,6 +522,9 @@ func ValidateProject(p *Project, dir, home string) error {
 	if len(failures) > 0 {
 		return &ValidationError{Errors: failures}
 	}
+	// culture_file is resolved and checked here rather than in the loader's own
+	// loop, because ValidateProject is the one place both the loader and the
+	// board's create route reach.
 	if err := validateCultureFile(p, dir, home); err != nil {
 		return err
 	}
