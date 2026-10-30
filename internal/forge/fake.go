@@ -13,8 +13,15 @@ type Fake struct {
 	ItemsErr      error
 	RequestsErr   error
 	WriteErr      error
-	Accepted      map[string]struct{}
-	Writes        []Write
+	// Per-method write errors, for tests that need one forge write to fail and
+	// the others to succeed — a merge that lands and whose post-merge close
+	// fails cannot be expressed with a single WriteErr.
+	CloseErr  error
+	MarkerErr error
+	ReadyErr  error
+	MergeErr  error
+	Accepted  map[string]struct{}
+	Writes    []Write
 	// NotesAsked and CRNotesAsked record the numbers each reader was asked
 	// about, in order. A verdict lives on the change request, so CRNotesAsked is
 	// where a test proves the gate read the right conversation.
@@ -91,6 +98,9 @@ func (f *Fake) Ready(_ context.Context, number int) error {
 	if f.WriteErr != nil {
 		return f.WriteErr
 	}
+	if f.ReadyErr != nil {
+		return f.ReadyErr
+	}
 	f.Writes = append(f.Writes, Write{Op: "ready", Number: number})
 	for i := range f.RequestsValue {
 		if f.RequestsValue[i].Number == number {
@@ -103,6 +113,9 @@ func (f *Fake) Ready(_ context.Context, number int) error {
 func (f *Fake) SetMarker(_ context.Context, number int, present bool) error {
 	if f.WriteErr != nil {
 		return f.WriteErr
+	}
+	if f.MarkerErr != nil {
+		return f.MarkerErr
 	}
 	value := "off"
 	if present {
@@ -126,6 +139,9 @@ func (f *Fake) CloseItem(_ context.Context, number int) error {
 	if f.WriteErr != nil {
 		return f.WriteErr
 	}
+	if f.CloseErr != nil {
+		return f.CloseErr
+	}
 	f.Writes = append(f.Writes, Write{Op: "close", Number: number})
 	return nil
 }
@@ -134,6 +150,9 @@ func (f *Fake) CloseItem(_ context.Context, number int) error {
 func (f *Fake) Merge(_ context.Context, number int, sha string) error {
 	if f.WriteErr != nil {
 		return f.WriteErr
+	}
+	if f.MergeErr != nil {
+		return f.MergeErr
 	}
 	f.Writes = append(f.Writes, Write{Op: "merge", Number: number, Value: sha})
 	return nil
