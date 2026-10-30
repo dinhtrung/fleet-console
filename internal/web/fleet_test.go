@@ -44,7 +44,7 @@ func TestBoardReportsStaleWithLastSyncAndCachedItems(t *testing.T) {
 		t.Fatalf("status: %v", err)
 	}
 
-	app, err := New(Config{Token: "test-token", Store: st})
+	app, err := New(Config{Token: "test-token", Store: st, ConfigPath: "/tmp/fake-config.yaml"})
 	if err != nil {
 		t.Fatalf("app: %v", err)
 	}
@@ -116,7 +116,7 @@ func decisionsApp(t *testing.T, list, show string) *fiber.App {
 		t.Fatalf("store: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	app, err := New(Config{Token: "test-token", Store: st, Rig: rig.NewAdapter(runner)})
+	app, err := New(Config{Token: "test-token", Store: st, ConfigPath: "/tmp/fake-config.yaml", Rig: rig.NewAdapter(runner)})
 	if err != nil {
 		t.Fatalf("app: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestBoardMovesQueuedToBuildingAfterDispatch(t *testing.T) {
 	}
 
 	app, err := New(Config{
-		Token: "test-token", Store: st,
+		Token: "test-token", Store: st, ConfigPath: "/tmp/fake-config.yaml",
 		Compat: func(context.Context) rig.Report { return rig.Report{OK: true, Status: rig.StatusOK} },
 	})
 	if err != nil {

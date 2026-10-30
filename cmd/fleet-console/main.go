@@ -28,6 +28,7 @@ import (
 	"github.com/dinhtrung/fleet-console/internal/git"
 	"github.com/dinhtrung/fleet-console/internal/hostcheck"
 	"github.com/dinhtrung/fleet-console/internal/mirror"
+	"github.com/dinhtrung/fleet-console/internal/registry"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/dinhtrung/fleet-console/internal/web"
@@ -259,7 +260,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		defer db.Close()
-		pruned, err := pruneProjects(context.Background(), db, eff.Projects)
+		pruned, err := registry.Prune(context.Background(), db, eff.Projects)
 		if err != nil {
 			return err
 		}
@@ -275,7 +276,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		defer db.Close()
-		applied, err := applyProjects(context.Background(), db, eff.Projects, *syncOnHold, true)
+		applied, err := registry.Apply(context.Background(), db, eff.Projects, *syncOnHold, true)
 		if err != nil {
 			return err
 		}
@@ -370,7 +371,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	defer db.Close()
 
 	if eff.ConfigPath != "" {
-		applied, err := applyProjects(ctx, db, eff.Projects, false, true)
+		applied, err := registry.Apply(ctx, db, eff.Projects, false, true)
 		if err != nil {
 			return err
 		}
@@ -502,10 +503,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	)
 
 	app, err := web.New(web.Config{
-		Token:  token,
-		Compat: func(context.Context) rig.Report { return report },
-		Store:  db,
-		Rig:    rig.NewAdapter(rigRunner),
+		Token:      token,
+		ConfigPath: eff.ConfigPath,
+		Compat:     func(context.Context) rig.Report { return report },
+		Store:      db,
+		Rig:        rig.NewAdapter(rigRunner),
 	})
 	if err != nil {
 		return err
@@ -525,106 +527,6 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case err := <-listenErr:
 		return err
 	}
-}
-
-type appliedProject struct {
-	Key    string
-	Result store.UpsertResult
-}
-
-// applyProjects refreshes the project registry from config.yaml. Projects absent
-// from the file are disabled, never deleted, and an onhold project is not
-// resumed without syncOnHold.
-func applyProjects(ctx context.Context, db *store.Store, projects []config.Project, syncOnHold, disableAbsent bool) ([]appliedProject, error) {
-	applied := make([]appliedProject, 0, len(projects))
-	for _, project := range projects {
-		name := project.Name
-		if name == "" {
-			name = project.Key
-		}
-		labels := []byte("{}")
-		if project.Labels != nil {
-			encoded, err := json.Marshal(project.Labels)
-			if err != nil {
-				return applied, fmt.Errorf("config: project %s labels: %w", project.Key, err)
-			}
-			labels = encoded
-		}
-		onhold := project.OnHold != nil && *project.OnHold
-		result, _, err := db.UpsertProject(ctx, store.UpsertInput{
-			Project: store.ProjectInput{
-				Key: project.Key, Name: name, ForgeKind: project.Forge, ForgeProject: project.Repo,
-				DefaultBranch: project.DefaultBranch, Rig: project.Rig, Rigs: project.Rigs, RigTemplate: project.RigTemplate,
-				ConcurrencyCap: project.ConcurrencyCap, Enabled: true, OnHold: onhold, GateCmd: project.GateCmd,
-			},
-			LabelsJSON: string(labels), RepoKey: "main",
-			RepoPath: project.Paths.Main, WorktreeRoot: project.Paths.Worktrees,
-			SyncOnHold: syncOnHold,
-		})
-		if err != nil {
-			return applied, err
-		}
-		applied = append(applied, appliedProject{Key: project.Key, Result: result})
-	}
-	if disableAbsent {
-		keep := make(map[string]bool, len(projects))
-		for _, project := range projects {
-			keep[project.Key] = true
-		}
-		rows, err := db.Projects(ctx)
-		if err != nil {
-			return applied, err
-		}
-		for _, row := range rows {
-			if keep[row.Key] || !row.Enabled {
-				continue
-			}
-			changed, err := db.SetProjectEnabled(ctx, row.ID, false)
-			if err != nil {
-				return applied, err
-			}
-			if changed {
-				applied = append(applied, appliedProject{Key: row.Key, Result: store.UpsertResult("disabled")})
-			}
-		}
-	}
-	return applied, nil
-}
-
-// pruneProjects deletes every project absent from the config. It refuses
-// before deleting anything when one of them has a live dispatch.
-func pruneProjects(ctx context.Context, db *store.Store, projects []config.Project) ([]string, error) {
-	keep := make(map[string]bool, len(projects))
-	for _, project := range projects {
-		keep[project.Key] = true
-	}
-	rows, err := db.Projects(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var absent []store.ProjectRow
-	for _, row := range rows {
-		if !keep[row.Key] {
-			absent = append(absent, row)
-		}
-	}
-	for _, row := range absent {
-		id, live, err := db.LiveDispatch(ctx, row.ID)
-		if err != nil {
-			return nil, err
-		}
-		if live {
-			return nil, fmt.Errorf("prune: project %s has a live dispatch %d", row.Key, id)
-		}
-	}
-	pruned := make([]string, 0, len(absent))
-	for _, row := range absent {
-		if err := db.DeleteProject(ctx, row.ID); err != nil {
-			return pruned, err
-		}
-		pruned = append(pruned, row.Key)
-	}
-	return pruned, nil
 }
 
 // adoptPendingDispatches resolves two-phase dispatches for every project. It is

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -274,74 +275,11 @@ func Load(opts Options) (*Effective, error) {
 	default:
 		eff.Sources["token"] = "none"
 	}
-
-	rigOwners := make(map[string]string)
-	for index, project := range file.Projects {
-		project.Key = strings.TrimSpace(project.Key)
-		project.Forge = strings.ToLower(strings.TrimSpace(project.Forge))
-		project.Repo = strings.TrimSpace(project.Repo)
-		if project.Key == "" {
-			return nil, fmt.Errorf("config: project %d: key is required", index)
-		}
-		for prior := range index {
-			if file.Projects[prior].Key == project.Key {
-				return nil, fmt.Errorf("config: duplicate project key %q", project.Key)
-			}
-		}
-		switch project.Forge {
-		case "github", "gitlab":
-		default:
-			return nil, fmt.Errorf("config: project %q: unknown forge %q", project.Key, project.Forge)
-		}
-		if project.Repo == "" {
-			return nil, fmt.Errorf("config: project %q: repo is required", project.Key)
-		}
-		if project.Rig != "" && project.Rigs != nil {
-			return nil, fmt.Errorf("config: project %q: rig and rigs are mutually exclusive", project.Key)
-		}
-		if project.Rig != "" {
-			project.Rigs = []string{strings.TrimSpace(project.Rig)}
-		}
-		if len(project.Rigs) == 0 {
-			return nil, fmt.Errorf("config: project %q: rig or rigs is required", project.Key)
-		}
-		seen := make(map[string]bool, len(project.Rigs))
-		for index, name := range project.Rigs {
-			name = strings.TrimSpace(name)
-			if name == "" {
-				return nil, fmt.Errorf("config: project %q: rigs must be non-empty names", project.Key)
-			}
-			if seen[name] {
-				return nil, fmt.Errorf("config: project %q: duplicate rig %q", project.Key, name)
-			}
-			seen[name] = true
-			project.Rigs[index] = name
-		}
-		for _, name := range project.Rigs {
-			if owner, ok := rigOwners[name]; ok {
-				return nil, fmt.Errorf("config: rig %q is assigned to both %q and %q", name, owner, project.Key)
-			}
-			rigOwners[name] = project.Key
-		}
-		project.Rig = "" // the resolved list is the source
-		project.Paths.Main = resolve(dir, project.Paths.Main, home)
-		project.Paths.Worktrees = resolve(dir, project.Paths.Worktrees, home)
-		if project.Paths.Main != "" {
-			if _, err := os.Stat(project.Paths.Main); err != nil {
-				eff.Warnings = append(eff.Warnings,
-					fmt.Sprintf("project %q: paths.main %s does not exist yet", project.Key, project.Paths.Main))
-			}
-		}
-		if err := validateCultureFile(&project, dir, home); err != nil {
-			return nil, err
-		}
-		if project.DefaultBranch == "" {
-			project.DefaultBranch = "main"
-		}
-		if project.RigTemplate == "" {
-			project.RigTemplate = "default"
-		}
-		file.Projects[index] = project
+	if err := validateProjects(&file, dir, home); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	for _, project := range file.Projects {
+		eff.Warnings = append(eff.Warnings, ProjectWarnings(project)...)
 	}
 	eff.Projects = file.Projects
 	if len(file.Projects) > 0 {
@@ -479,3 +417,172 @@ func validateCultureFile(project *Project, dir, home string) error {
 	project.CultureFile = resolved
 	return nil
 }
+
+// FieldError is one rule failure on one field of a project.
+type FieldError struct {
+	Field   string
+	Message string
+}
+
+// ValidationError carries every rule a single definition failed, in rule
+// order. The board answers it as `422 {"errors": {<field>: <message>}}`; the
+// loader prints Error(), so both speak with the same voice.
+type ValidationError struct {
+	Errors []FieldError
+}
+
+// Error names the first failure; the loader has no per-field surface.
+func (e *ValidationError) Error() string {
+	if len(e.Errors) == 0 {
+		return "invalid project"
+	}
+	return e.Errors[0].Message
+}
+
+// Fields returns the first message per field, which is the 422 body.
+func (e *ValidationError) Fields() map[string]string {
+	fields := make(map[string]string, len(e.Errors))
+	for _, failure := range e.Errors {
+		if _, seen := fields[failure.Field]; !seen {
+			fields[failure.Field] = failure.Message
+		}
+	}
+	return fields
+}
+
+// ValidateProject applies the design §4 rule set to one definition and
+// normalises it in place: trimmed values, `rig` folded into `rigs`, a missing
+// name taken from the key, the default branch and rig template filled in, and
+// paths expanded against dir and home. The loader and the HTTP handler both
+// call it, so a project the board accepts is a project the next boot accepts.
+func ValidateProject(p *Project, dir, home string) error {
+	var failures []FieldError
+	add := func(field, format string, args ...any) {
+		failures = append(failures, FieldError{Field: field, Message: fmt.Sprintf(format, args...)})
+	}
+
+	p.Key = strings.TrimSpace(p.Key)
+	p.Forge = strings.ToLower(strings.TrimSpace(p.Forge))
+	p.Repo = strings.TrimSpace(p.Repo)
+	p.Name = strings.TrimSpace(p.Name)
+	p.DefaultBranch = strings.TrimSpace(p.DefaultBranch)
+
+	switch {
+	case p.Key == "":
+		add("key", "key is required")
+	case !projectKeyRe.MatchString(p.Key):
+		add("key", "key must match %s", projectKeyRe.String())
+	}
+	if p.Name == "" {
+		p.Name = p.Key
+	}
+	if p.Repo == "" {
+		add("repo", "repo is required")
+	}
+	switch p.Forge {
+	case "github", "gitlab":
+	default:
+		add("forge", "forge must be github or gitlab")
+	}
+	if p.DefaultBranch == "" {
+		p.DefaultBranch = "main"
+	}
+	if p.Rig != "" && p.Rigs != nil {
+		add("rigs", "rig and rigs are mutually exclusive")
+	} else if p.Rig != "" {
+		p.Rigs = []string{strings.TrimSpace(p.Rig)}
+	}
+	if len(p.Rigs) == 0 {
+		add("rigs", "rig or rigs is required")
+	}
+	seen := make(map[string]bool, len(p.Rigs))
+	for index, name := range p.Rigs {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			add("rigs", "rigs[%d] must be non-empty", index)
+			continue
+		}
+		if seen[name] {
+			add("rigs", "rigs[%d] duplicates rig %q", index, name)
+			continue
+		}
+		seen[name] = true
+		p.Rigs[index] = name
+	}
+	p.Rig = ""
+	if p.ConcurrencyCap < 0 {
+		add("concurrency_cap", "concurrency_cap must not be negative")
+	}
+	if p.RigTemplate == "" {
+		p.RigTemplate = "default"
+	}
+	p.Paths.Main = resolve(dir, p.Paths.Main, home)
+	p.Paths.Worktrees = resolve(dir, p.Paths.Worktrees, home)
+
+	if len(failures) > 0 {
+		return &ValidationError{Errors: failures}
+	}
+	// culture_file is resolved and checked here rather than in the loader's own
+	// loop, because ValidateProject is the one place both the loader and the
+	// board's create route reach.
+	if err := validateCultureFile(p, dir, home); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ProjectWarnings names what a valid definition is missing but may not be
+// refused for: cloning paths.main is the operator's next step, so a missing
+// directory is a note, not a rejection.
+func ProjectWarnings(p Project) []string {
+	if p.Paths.Main == "" {
+		return nil
+	}
+	if _, err := os.Stat(p.Paths.Main); err != nil {
+		return []string{fmt.Sprintf("project %q: paths.main %s does not exist yet", p.Key, p.Paths.Main)}
+	}
+	return nil
+}
+
+// ValidateContent applies the loader's whole-file rules to a document the
+// caller is about to write: the strict schema, every project rule, one key
+// each, and one owner per rig. internal/configfile calls it before the rename,
+// so a write that would produce an unloadable file never reaches the disk.
+func ValidateContent(data []byte, dir, home string) error {
+	var file File
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&file); err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("decode: %w", err)
+	}
+	return validateProjects(&file, dir, home)
+}
+
+// validateProjects runs the per-project rules and the cross-project rules on a
+// decoded file and normalises each project in place.
+func validateProjects(file *File, dir, home string) error {
+	owners := make(map[string]string, len(file.Projects))
+	keys := make(map[string]bool, len(file.Projects))
+	for index := range file.Projects {
+		project := &file.Projects[index]
+		if err := ValidateProject(project, dir, home); err != nil {
+			return fmt.Errorf("project %q: %w", project.Key, err)
+		}
+		if keys[project.Key] {
+			return fmt.Errorf("duplicate project key %q", project.Key)
+		}
+		keys[project.Key] = true
+		for _, name := range project.Rigs {
+			if owner, ok := owners[name]; ok {
+				return &ValidationError{Errors: []FieldError{{
+					Field:   "rigs",
+					Message: fmt.Sprintf("rig %q is assigned to both %q and %q", name, owner, project.Key),
+				}}}
+			}
+			owners[name] = project.Key
+		}
+	}
+	return nil
+}
+
+var projectKeyRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
