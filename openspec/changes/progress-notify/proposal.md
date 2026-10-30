@@ -18,7 +18,9 @@ which project.
 - The message carries **the project in full, not a name**: key, name, forge, repo slug, repo URL, default
   branch, concurrency cap, on-hold, act on/off, `paths.main`, `paths.worktrees` — every field of the project row
   as the service reads it, so the message is enough to reconstruct what is running where.
-- Then the **rig**, by name and with its live roster (which seats exist, how many are busy), and then the work:
+- Then the **rig**, by name, with its live roster (which seats exist, how many are busy) and — when nothing is
+  in flight — **why it is idle**, one sentence naming the cause, plus the same for each idle seat, and then
+  the work:
   **in progress** (issue, seat, branch, age), **pending**, **on hold**, **epic in progress**.
 - Delivery reuses `internal/alert`'s Telegram client. Token and chat id come from the environment only.
 
@@ -26,7 +28,8 @@ which project.
 
 ### New Capabilities
 
-- `progress-notify` — the message contract (project record, rig, the four work buckets; order and caps), the
+- `progress-notify` — the message contract (project record, rig with every seat and the idle reason, the four
+  work buckets; order and caps), the
   triggers (merge, on-demand, optional digest), the dedupe rule, the disabled-without-credentials path, and the
   never-fail-a-tick rule.
 
