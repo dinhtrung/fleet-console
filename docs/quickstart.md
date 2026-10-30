@@ -256,6 +256,44 @@ The board table has six columns: **#** (the issue number), **Task**, **State**,
 **Success:** the board shows the project panel from step 5 and `/api/board`
 returns `"projects":[{...}]`.
 
+### What the board checks before it dispatches
+
+Open **Projects**, pick a project, and the board runs four checks against it.
+They are the same four the dispatcher would discover the hard way, and they are
+the only place a red badge means "this will not work":
+
+| Check | `ok` means | the fix it offers |
+|---|---|---|
+| `git_url` | `git ls-remote --heads <url>` answers and the default branch is there | `git ls-remote --heads <url>` by hand, then the forge's own login |
+| `base_dir` | `paths.main` is a checkout of *this* project's repository | `mkdir_base` when it is missing, `clone` when it is empty; a checkout of another repository is a `fail` with **no** step, because the app must not replace it |
+| `rig` | the spec exists, the rig is up, its seat count is builders + 1, and every seat runs the project's runtime | `apply_rig` to render and sync, `up_rig` to launch |
+| `runtime` | the runtime is installed **and** a credential for it exists on this box | the login command, which **you** run — the box never asks for the credential |
+
+Each row renders the failing command's own last line, verbatim, because
+`fatal: could not read Username for 'https://github.com'` tells you what a
+cheerful "auth failed" does not. `Copy command` puts the exact command on your
+clipboard; `Set up this step` runs the one allowlisted step that fixes it; **Set
+up what the app can** posts the whole list in the fixed order
+(`mkdir_base`, `clone`, `apply_rig`, `up_rig`) and reports each step as `done`,
+`skipped` or `failed`. A step never runs a login and never writes a credential.
+
+The four runtimes, and the login each one needs:
+
+| Runtime | Login | Where the credential lives |
+|---|---|---|
+| `pi` | `pi auth` | `~/.pi/agent/auth.json` |
+| `omp` | `omp login` | `~/.omp`, or the provider's environment variable |
+| `codex` | `codex login` | `~/.codex/auth.json` |
+| `claude` | `claude auth` | `~/.claude` |
+
+**Unset means off** applies here too: a runtime with no credential is a `fail`
+with its login hint, not a hidden state. The picker in the create dialog is
+driven by the service (`GET /api/runtimes`), so the four values are never
+hardcoded in the page.
+
+**Success:** every row is `ok` (a `warn` still dispatches), or the failing row
+names a command you can paste.
+
 ## 8. First ticket
 
 Create a normal open issue; the dispatcher sets the `status::ongoing` marker
