@@ -277,11 +277,12 @@ export function DraftPreflight({ input, enabled }: { input: CreateProjectInput; 
   });
   const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: getRuntimes });
 
+
   return (
     <div className="border-t border-rule bg-ground/40">
       <div className="flex flex-wrap items-baseline gap-2 px-3 pt-2">
         <span className="label text-ink-muted">Checked before it exists</span>
-        {draft.isFetching ? <span className="text-[0.6875rem] text-ink-muted">checking…</span> : null}
+        {draft.isFetching ? <ElapsedChecking /> : null}
         {draft.data ? (
           <Badge tone={draft.data.ready ? "quiet" : "ink"} mono>
             {draft.data.ready ? "would be ready" : "would not be ready"}
@@ -307,6 +308,22 @@ export function DraftPreflight({ input, enabled }: { input: CreateProjectInput; 
         </p>
       )}
     </div>
+  );
+}
+
+/** "checking… 8s of up to 20s" — a bounded wait with no counter reads as a hang, which is what the
+ *  reviewer saw. The component is mounted only while a check is in flight, so its timer always
+ *  starts at zero for the current check and needs no state in the parent. */
+function ElapsedChecking() {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setSeconds((current) => current + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return (
+    <span className="text-[0.6875rem] text-ink-muted" aria-live="polite">
+      checking… {seconds}s of up to 20s
+    </span>
   );
 }
 
