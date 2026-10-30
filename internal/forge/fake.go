@@ -15,6 +15,11 @@ type Fake struct {
 	WriteErr      error
 	Accepted      map[string]struct{}
 	Writes        []Write
+	// NotesAsked and CRNotesAsked record the numbers each reader was asked
+	// about, in order. A verdict lives on the change request, so CRNotesAsked is
+	// where a test proves the gate read the right conversation.
+	NotesAsked   []int
+	CRNotesAsked []int
 }
 
 // Write is one recorded mutation.
@@ -59,8 +64,21 @@ func (f *Fake) ChangeRequestsFor(ctx context.Context, accepted map[string]struct
 	return f.ChangeRequests(ctx)
 }
 
-// Notes returns the configured reviewer notes.
-func (f *Fake) Notes(context.Context, int) ([]Comment, error) {
+// Notes returns the configured reviewer notes, recording the number it was asked
+// about so a test can assert the caller passed the item's number.
+func (f *Fake) Notes(_ context.Context, number int) ([]Comment, error) {
+	f.NotesAsked = append(f.NotesAsked, number)
+	if f.ReadErr != nil {
+		return nil, f.ReadErr
+	}
+	return append([]Comment(nil), f.NotesValue...), nil
+}
+
+// CRNotes returns the same configured notes, recording the number it was asked
+// about. A verdict is posted on the change request, so the number a caller
+// passes here is the one that decides whether the gate can see the verdict.
+func (f *Fake) CRNotes(_ context.Context, number int) ([]Comment, error) {
+	f.CRNotesAsked = append(f.CRNotesAsked, number)
 	if f.ReadErr != nil {
 		return nil, f.ReadErr
 	}

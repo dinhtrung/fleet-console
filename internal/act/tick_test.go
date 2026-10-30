@@ -261,3 +261,79 @@ func TestRunTickRaisesOneStaleVerdictDecision(t *testing.T) {
 		t.Fatalf("decision.stale events = %d, want one", stale)
 	}
 }
+
+// TestRunTickReadsVerdictsFromTheChangeRequest is the boundary test for #90.
+//
+// A verdict is posted on the change request, and on GitHub a pull request's
+// number is not the number of the issue it closes. The tick used to hand the
+// item's number to the verdict reader, which read the issue's conversation,
+// found no verdict, and left the merge refused — with a green pipeline and an
+// ACCEPT sitting one stream away. So the assertion is about the number, not
+// about the classification: CaptureVerdict's own tests cannot see this.
+func TestRunTickReadsVerdictsFromTheChangeRequest(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 30, 17, 0, 0, 0, time.UTC)
+	st := newStore(t)
+	pid := newProject(t, st)
+
+	const itemNumber, changeRequestNumber = 63, 75
+	if _, err := st.CreateDispatch(ctx, store.NewDispatch{
+		ProjectID: pid, ItemNumber: itemNumber, Attempt: 1, Seat: "seat@rig",
+		Branch: "feature/63-x", Worktree: "wt", BaseSHA: "base", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	fake := forge.NewFake(forge.KindGitHub)
+	fake.ItemsValue = []forge.Item{{Number: itemNumber, Kind: forge.KindTask, State: forge.StateOpen, Title: "Sixty-three"}}
+	fake.RequestsValue = []forge.ChangeRequest{{
+		Number: changeRequestNumber, HeadSHA: "d00f0dd", Mergeable: true,
+		Body: "Closes #63", DocsOnly: true,
+	}}
+	fake.NotesValue = []forge.Comment{{
+		ID: "n1", Body: "ACCEPT d00f0dd", CreatedAt: "2026-10-30T16:00:00Z",
+	}}
+
+	project := store.ProjectRow{ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r", Rig: "rig", ConcurrencyCap: 2, Enabled: true}
+	report, err := RunTick(ctx, TickInput{
+		Store: st, Project: project, Forge: fake, Rig: &queueStub{}, Git: &fakeGit{},
+		Gate: openGate(), Apply: true, Items: fake.ItemsValue, CRs: fake.RequestsValue,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	// The gate must read the change request's conversation...
+	if want := []int{changeRequestNumber}; len(fake.CRNotesAsked) != 1 || fake.CRNotesAsked[0] != want[0] {
+		t.Fatalf("CRNotes asked about %v, want %v", fake.CRNotesAsked, want)
+	}
+	// ...and must not read the item's, which is a different conversation.
+	if len(fake.NotesAsked) != 0 {
+		t.Fatalf("Notes asked about %v, want no item read for a verdict", fake.NotesAsked)
+	}
+	// The verdict is therefore visible, and the merge lands at the verdict's sha.
+	if len(report.Verdicts) != 1 {
+		t.Fatalf("verdicts = %+v, want one captured", report.Verdicts)
+	}
+	if len(report.Merges) != 1 || !report.Merges[0].Merged {
+		t.Fatalf("merges = %+v, want one merged", report.Merges)
+	}
+	if !hasWrite(fake.Writes, "merge", changeRequestNumber, "d00f0dd") {
+		t.Fatalf("writes = %+v, want the merge at the verdict's sha", fake.Writes)
+	}
+}
+
+// TestCaptureFromForgeRefusesNoChangeRequest pins the guard: a caller with no
+// change request cannot be given a verdict, and must not silently read item 0's
+// conversation (which is also nobody's conversation).
+func TestCaptureFromForgeRefusesNoChangeRequest(t *testing.T) {
+	fake := forge.NewFake(forge.KindGitHub)
+	a := &Actions{Store: newStore(t), Forge: fake}
+	if _, err := a.CaptureFromForge(context.Background(), 1, 63, 0, "d00f0dd"); err == nil {
+		t.Fatal("CaptureFromForge accepted change request 0")
+	}
+	if len(fake.CRNotesAsked) != 0 || len(fake.NotesAsked) != 0 {
+		t.Fatalf("read %v / %v, want no read when the number is unusable", fake.CRNotesAsked, fake.NotesAsked)
+	}
+}

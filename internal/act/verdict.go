@@ -135,9 +135,19 @@ func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, 
 	return &CapturedVerdict{VerdictID: verdictID, SHA: sha, Decision: decision, Source: "note " + noteID, NoteID: noteID}, nil
 }
 
-// CaptureFromForge reads the item's notes and stores the verdict.
-func (a *Actions) CaptureFromForge(ctx context.Context, dispatchID int64, item int, headSHA string) (*CapturedVerdict, error) {
-	notes, err := a.Forge.Notes(ctx, item)
+// CaptureFromForge reads the change request's notes and stores the verdict.
+//
+// The two numbers are separate arguments because they are separate numbers: a
+// pull request has its own number, and it is not the number of the issue it
+// closes. A verdict is posted on the change request, so reading the item's
+// conversation finds nothing, stores nothing, and leaves the merge gate waiting
+// on an acceptance the reviewer did write. Passing changeRequest == 0 means the
+// caller has no change request and the read is skipped.
+func (a *Actions) CaptureFromForge(ctx context.Context, dispatchID int64, item, changeRequest int, headSHA string) (*CapturedVerdict, error) {
+	if changeRequest <= 0 {
+		return nil, fmt.Errorf("act: verdict capture needs a change request number, got %d", changeRequest)
+	}
+	notes, err := a.Forge.CRNotes(ctx, changeRequest)
 	if err != nil {
 		return nil, err
 	}

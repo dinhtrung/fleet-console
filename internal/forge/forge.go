@@ -175,11 +175,23 @@ type CandidateReader interface {
 
 // Forge is the whole interface the app has to a forge. Exactly four writes: the marker
 // label, a comment, closing an item, and merging a change request at a sha.
+//
+// Notes and CRNotes are two calls on purpose. On GitHub both read the same
+// issue-comment stream, but under different numbers: a pull request has its own
+// number, which is not the number of the issue it closes. A verdict is posted on
+// the pull request, so reading Notes(issueNumber) finds no verdict and the merge
+// gate waits on an acceptance nobody failed to write. On GitLab the two are
+// different endpoints and asking for an issue's notes by merge-request number is
+// a 404.
 type Forge interface {
 	Kind() Kind
 	Items(ctx context.Context, timeout Timeout) ([]Item, error)
 	ChangeRequests(ctx context.Context) ([]ChangeRequest, error)
+	// Notes reads an item's conversation, keyed by the item's number.
 	Notes(ctx context.Context, number int) ([]Comment, error)
+	// CRNotes reads a change request's conversation, keyed by the change
+	// request's own number. This is where verdicts are posted.
+	CRNotes(ctx context.Context, number int) ([]Comment, error)
 	SetMarker(ctx context.Context, number int, present bool) error
 	Comment(ctx context.Context, number int, body string) error
 	CloseItem(ctx context.Context, number int) error
