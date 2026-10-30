@@ -635,3 +635,217 @@ func (f *Fleet) Events(c fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"events": events})
 }
+
+// ProjectOut is the web shape of a project.
+type ProjectOut struct {
+	Key             string            `json:"key"`
+	Name            string            `json:"name"`
+	Forge           string            `json:"forge"`
+	Repo            string            `json:"repo"`
+	DefaultBranch   string            `json:"default_branch"`
+	Rigs            []string          `json:"rigs"`
+	ConcurrencyCap  int               `json:"concurrency_cap"`
+	Paths           struct {
+		Main      string `json:"main"`
+		Worktrees string `json:"worktrees"`
+	} `json:"paths"`
+	RigTemplate    string            `json:"rig_template"`
+	Labels         map[string]string `json:"labels"`
+	OnHold         *bool             `json:"onhold"`
+	GateCmd        string            `json:"gate_cmd"`
+}
+
+func projectToOut(p store.ProjectRow) ProjectOut {
+	return ProjectOut{
+		Key:            p.Key,
+		Name:           p.Name,
+		Forge:          p.ForgeKind,
+		Repo:           p.ForgeProject,
+		DefaultBranch:  p.DefaultBranch,
+		Rigs:           p.Rigs,
+		ConcurrencyCap: p.ConcurrencyCap,
+		Paths: struct {
+			Main      string `json:"main"`
+			Worktrees string `json:"worktrees"`
+		}{Main: "", Worktrees: ""},
+		RigTemplate: p.RigTemplate,
+		Labels:      map[string]string{},
+		OnHold:      &p.OnHold,
+		GateCmd:     p.GateCmd,
+	}
+}
+
+// Projects lists all registered projects.
+func (f *Fleet) Projects(c fiber.Ctx) error {
+	ctx := c.Context()
+	projects, err := f.Store.Projects(ctx)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	out := make([]ProjectOut, 0, len(projects))
+	for _, p := range projects {
+		out = append(out, projectToOut(p))
+	}
+	return c.JSON(fiber.Map{"projects": out, "synced_at": f.now().UTC().Format(time.RFC3339)})
+}
+
+type createProjectInput struct {
+	Key            string            `json:"key"`
+	Name           string            `json:"name"`
+	Forge          string            `json:"forge"`
+	Repo           string            `json:"repo"`
+	DefaultBranch  string            `json:"default_branch"`
+	Rigs           []string          `json:"rigs"`
+	ConcurrencyCap int               `json:"concurrency_cap"`
+	Paths          struct {
+		Main      string `json:"main"`
+		Worktrees string `json:"worktrees"`
+	} `json:"paths"`
+	RigTemplate   string            `json:"rig_template"`
+	Labels        map[string]string `json:"labels"`
+	OnHold        bool              `json:"onhold"`
+	GateCmd       string            `json:"gate_cmd"`
+}
+
+type createProjectResponse struct {
+	Project  ProjectOut   `json:"project"`
+	Warnings []string     `json:"warnings"`
+}
+
+// CreateProject registers a new project from the board.
+func (f *Fleet) CreateProject(c fiber.Ctx) error {
+	ctx := c.Context()
+	var in createProjectInput
+	if err := c.Bind().Body(&in); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"status":       fiber.StatusBadRequest,
+			"field_errors": map[string]string{"_": "invalid JSON body"},
+			"message":      "invalid request body",
+		})
+	}
+
+	var fieldErrors map[string]string
+	if in.Key == "" {
+		fieldErrors["key"] = "key is required"
+	} else if !isValidKey(in.Key) {
+		fieldErrors["key"] = "key must be lowercase alphanumeric with hyphens"
+	}
+	if in.Name == "" {
+		fieldErrors["name"] = "name is required"
+	}
+	if in.Forge != "github" && in.Forge != "gitlab" {
+		fieldErrors["forge"] = "forge must be github or gitlab"
+	}
+	if in.Repo == "" {
+		fieldErrors["repo"] = "repo is required"
+	}
+	if in.DefaultBranch == "" {
+		in.DefaultBranch = "main"
+	}
+	if len(in.Rigs) == 0 {
+		fieldErrors["rigs"] = "at least one rig is required"
+	}
+	if in.ConcurrencyCap < 1 {
+		fieldErrors["concurrency_cap"] = "concurrency_cap must be at least 1"
+	}
+	if in.Paths.Main == "" {
+		fieldErrors["paths.main"] = "paths.main is required"
+	}
+
+	if len(fieldErrors) > 0 {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"status":       fiber.StatusUnprocessableEntity,
+			"field_errors": fieldErrors,
+			"message":      "validation failed",
+		})
+	}
+
+	_, _, err := f.Store.UpsertProject(ctx, store.UpsertInput{
+		Project: store.ProjectInput{
+			Key:            in.Key,
+			Name:           in.Name,
+			ForgeKind:      in.Forge,
+			ForgeProject:   in.Repo,
+			DefaultBranch:  in.DefaultBranch,
+			Rigs:           in.Rigs,
+			RigTemplate:    in.RigTemplate,
+			ConcurrencyCap: in.ConcurrencyCap,
+			Enabled:        true,
+			OnHold:         false,
+			GateCmd:        in.GateCmd,
+		},
+		LabelsJSON:    "{}",
+		RepoKey:       "main",
+		RepoPath:      in.Paths.Main,
+		WorktreeRoot:  in.Paths.Worktrees,
+		SyncOnHold:    false,
+	})
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "rig") && strings.Contains(errMsg, "assigned to both") {
+			return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+				"status":       fiber.StatusUnprocessableEntity,
+				"field_errors": map[string]string{"rigs": errMsg},
+				"message":      "validation failed",
+			})
+		}
+		if strings.Contains(errMsg, "duplicate") {
+			return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+				"status":       fiber.StatusUnprocessableEntity,
+				"field_errors": map[string]string{"rigs": errMsg},
+				"message":      "validation failed",
+			})
+		}
+		if strings.Contains(errMsg, "key") && strings.Contains(errMsg, "duplicate") {
+			return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+				"status":       fiber.StatusUnprocessableEntity,
+				"field_errors": map[string]string{"key": errMsg},
+				"message":      "validation failed",
+			})
+		}
+		if strings.Contains(errMsg, "rig or rigs is required") {
+			return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+				"status":       fiber.StatusUnprocessableEntity,
+				"field_errors": map[string]string{"rigs": errMsg},
+				"message":      "validation failed",
+			})
+		}
+		if strings.Contains(errMsg, "rigs must not be empty") {
+			return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+				"status":       fiber.StatusUnprocessableEntity,
+				"field_errors": map[string]string{"rigs": errMsg},
+				"message":      "validation failed",
+			})
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, errMsg)
+	}
+
+	project, err := f.Store.ProjectByKey(ctx, in.Key)
+	if err != nil || project == nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "project created but not found")
+	}
+
+	return c.JSON(createProjectResponse{
+		Project:  projectToOut(*project),
+		Warnings: f.getProjectWarnings(ctx, in.Key, in.Paths.Main),
+	})
+}
+
+func isValidKey(key string) bool {
+	for _, r := range key {
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+			return false
+		}
+	}
+	return len(key) > 0 && len(key) <= 64
+}
+
+func (f *Fleet) getProjectWarnings(ctx context.Context, key, mainPath string) []string {
+	warnings := []string{}
+	if mainPath != "" {
+		if _, err := os.Stat(mainPath); err != nil {
+			warnings = append(warnings, fmt.Sprintf("paths.main %s does not exist yet", mainPath))
+		}
+	}
+	return warnings
+}
