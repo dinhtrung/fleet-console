@@ -133,6 +133,7 @@ export interface Project {
     main: string;
     worktrees: string;
   };
+  runtime?: string;
   rig_template?: string;
   labels?: Record<string, string>;
   onhold?: boolean | null;
@@ -143,6 +144,55 @@ export interface ProjectsResponse {
   projects: Project[];
 }
 
+/** Preflight: four checks, each with a verdict, the fact found and how to fix it. `detail` is the
+ *  command's own last line, rendered verbatim — a paraphrase would hide a typo behind "auth failed". */
+export type CheckState = "ok" | "warn" | "fail" | "unknown";
+
+export interface PreflightFix {
+  command: string;
+  step: string;
+  why: string;
+}
+
+export interface PreflightCheck {
+  id: "git_url" | "base_dir" | "rig" | "runtime" | string;
+  label: string;
+  state: CheckState;
+  detail: string;
+  fix: PreflightFix;
+}
+
+export interface RuntimeInfo {
+  id: string;
+  supported: boolean;
+  auth_present: boolean;
+  login_hint: string;
+  login_doc: string;
+}
+
+export interface PreflightReport {
+  project: string;
+  checks: PreflightCheck[];
+  ready: boolean;
+  runtime: RuntimeInfo;
+  checked_at: string;
+}
+
+export interface SetupStepResult {
+  step: string;
+  state: "done" | "skipped" | "failed";
+  command: string;
+  output: string;
+}
+
+export interface SetupResponse {
+  project: string;
+  steps: SetupStepResult[];
+}
+
+/** The four step ids, in the order the server runs them. The client never chooses the order. */
+export const SETUP_STEPS = ["mkdir_base", "clone", "apply_rig", "up_rig"] as const;
+
 export interface CreateProjectInput {
   key: string;
   name: string;
@@ -151,6 +201,8 @@ export interface CreateProjectInput {
   default_branch: string;
   rigs: string[];
   concurrency_cap: number;
+  /** The runtime the picker chose; the server validates it against the same four it lists. */
+  runtime: string;
   paths: {
     main: string;
     worktrees: string;
@@ -230,6 +282,29 @@ export const createProject = (input: CreateProjectInput) =>
     method: "POST",
     body: JSON.stringify(input),
   });
+
+/** The four checks for a registered project. */
+export const getPreflight = (key: string) =>
+  request<PreflightReport>(`/api/projects/${encodeURIComponent(key)}/preflight`);
+
+/** The same checks against a body that is not a project yet. `rig` answers unknown, because the
+ *  rig is created with the project — a draft cannot have one. */
+export const preflightDraft = (input: CreateProjectInput) =>
+  request<PreflightReport>("/api/projects/preflight", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
+/** Run the allowlisted steps. An empty list means all four, in the server's fixed order. */
+export const runSetup = (key: string, steps: string[] = []) =>
+  request<SetupResponse>(`/api/projects/${encodeURIComponent(key)}/setup`, {
+    method: "POST",
+    body: JSON.stringify({ steps }),
+  });
+
+/** The runtime list the picker is driven by. Nothing is hardcoded on the client: a fifth runtime
+ *  added on the server appears here without a client change. */
+export const getRuntimes = () => request<{ runtimes: RuntimeInfo[] }>("/api/runtimes");
 
 export const getItem = (number: number) => request<ItemDetail>(`/api/items/${number}`);
 

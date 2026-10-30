@@ -27,6 +27,10 @@ type Config struct {
 	// A test installs a wrapper here to hand-edit the file between the request's
 	// read and its write, which is the stale-read case.
 	WriteProject func(path string, in configfile.Project, expected *[32]byte) (configfile.Outcome, error)
+	// SetupExec runs one setup step's external command and returns its combined
+	// output. Nil means the setup endpoint answers 500: a test supplies a fake,
+	// the binary supplies the real runner.
+	SetupExec func(ctx context.Context, name string, args ...string) (string, error)
 }
 
 // New builds the HTTP app. /api/health is open; every other /api route needs
@@ -77,6 +81,7 @@ func New(cfg Config) (*fiber.App, error) {
 	// Projects routes
 	RegisterProjectsRoutes(api, cfg, cfg.ConfigPath)
 	RegisterCultureRoutes(api, cfg, cfg.ConfigPath)
+	RegisterPreflightRoutes(api, cfg, cfg.ConfigPath)
 	if board, ok := webui.FS(); ok {
 		app.Use(boardHandler(board, cfg.Token))
 	}

@@ -29,10 +29,15 @@ import {
   useToast,
 } from "../components/ui";
 import { PageHeader } from "../shell/PageHeader";
+import { DraftPreflight, ProjectPreflight, RuntimePicker } from "../components/ProjectPreflight";
 
 /** The server's key rule, verbatim (`config.ValidateProject`): lowercase, 1–32 characters, starting
  *  with a letter or a digit. */
 const KEY_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+/** The four the server validates against. The picker is driven by `GET /api/runtimes`; this list is
+ *  only the client-side mirror, so a typo costs no round trip. */
+const RUNTIMES = ["pi", "omp", "codex", "claude"];
 
 const FORGES = [
   { value: "github", label: "GitHub" },
@@ -61,6 +66,7 @@ type Draft = {
   default_branch: string;
   rigs: string;
   concurrency_cap: string;
+  runtime: string;
   paths_main: string;
   paths_worktrees: string;
 };
@@ -76,6 +82,7 @@ const ERROR_KEY: Record<keyof Draft, string> = {
   default_branch: "default_branch",
   rigs: "rigs",
   concurrency_cap: "concurrency_cap",
+  runtime: "runtime",
   paths_main: "paths.main",
   paths_worktrees: "paths.worktrees",
 };
@@ -88,9 +95,29 @@ const BLANK: Draft = {
   default_branch: "main",
   rigs: "",
   concurrency_cap: "2",
+  runtime: "omp",
   paths_main: "",
   paths_worktrees: "",
 };
+
+/** The draft as the wire shape. Submit and the live panel both use this, so the checks run against
+ *  exactly the body the create would send — not a second construction that could drift. */
+function draftInput(draft: Draft): CreateProjectInput {
+  return {
+    key: draft.key.trim(),
+    name: draft.name.trim(),
+    forge: draft.forge === "gitlab" ? "gitlab" : "github",
+    repo: draft.repo.trim(),
+    default_branch: draft.default_branch.trim(),
+    rigs: splitRigs(draft.rigs),
+    concurrency_cap: Number(draft.concurrency_cap),
+    runtime: draft.runtime,
+    paths: {
+      main: draft.paths_main.trim(),
+      worktrees: draft.paths_worktrees.trim(),
+    },
+  };
+}
 
 function splitRigs(value: string): string[] {
   return value
@@ -124,6 +151,7 @@ function validate(draft: Draft, existing: Project[]): Record<string, string> {
   }
   const cap = Number(draft.concurrency_cap);
   if (!Number.isInteger(cap) || cap < 0) errors.concurrency_cap = "A whole number, zero or more.";
+  if (!RUNTIMES.includes(draft.runtime)) errors.runtime = "Choose one of the runtimes this host lists.";
   return errors;
 }
 
@@ -137,6 +165,9 @@ export function ProjectsScreen() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [created, setCreated] = useState<{ project: Project; warnings: string[] } | null>(null);
+  // The project whose preflight is open. A row is the entry point: the surface exists to answer
+  // "will this dispatch?", and that question belongs to one project, not to the list.
+  const [inspecting, setInspecting] = useState<Project | null>(null);
 
   const create = useMutation({
     mutationFn: (input: CreateProjectInput) => createProject(input),
@@ -208,19 +239,7 @@ export function ProjectsScreen() {
     setErrors(found);
     setFormError(null);
     if (Object.keys(found).length > 0) return;
-    create.mutate({
-      key: draft.key.trim(),
-      name: draft.name.trim(),
-      forge: draft.forge === "gitlab" ? "gitlab" : "github",
-      repo: draft.repo.trim(),
-      default_branch: draft.default_branch.trim(),
-      rigs: splitRigs(draft.rigs),
-      concurrency_cap: Number(draft.concurrency_cap),
-      paths: {
-        main: draft.paths_main.trim(),
-        worktrees: draft.paths_worktrees.trim(),
-      },
-    });
+    create.mutate(draftInput(draft));
   };
 
   const list = projects.data?.projects ?? [];
@@ -238,6 +257,20 @@ export function ProjectsScreen() {
         }
       />
       <div className="px-3 py-3 sm:px-5">
+        {inspecting ? (
+          <div className="mb-3">
+            <div className="flex flex-wrap items-baseline gap-2 pb-1">
+              <h2 className="text-body font-semibold text-ink">{inspecting.name}</h2>
+              <span className="font-mono text-[0.6875rem] text-ink-muted">{inspecting.key}</span>
+              <Button variant="quiet" size="sm" className="ml-auto" onClick={() => setInspecting(null)}>
+                Close
+              </Button>
+            </div>
+            <Panel>
+              <ProjectPreflight projectKey={inspecting.key} />
+            </Panel>
+          </div>
+        ) : null}
         <Panel>
           {projects.isLoading ? (
             <LoadingRows rows={4} />
@@ -272,7 +305,18 @@ export function ProjectsScreen() {
                 </thead>
                 <tbody>
                   {list.map((project) => (
-                    <tr key={project.key} className="border-b border-rule last:border-0">
+                    <tr
+                      key={project.key}
+                      className="cursor-pointer border-b border-rule last:border-0 hover:bg-hover"
+                      tabIndex={0}
+                      onClick={() => setInspecting(project)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setInspecting(project);
+                        }
+                      }}
+                    >
                       <td className="px-3 py-[var(--density-row-pad-y)] font-mono text-[0.6875rem] text-ink">
                         {project.key}
                       </td>
@@ -397,6 +441,12 @@ export function ProjectsScreen() {
                   hint="How many items may build at once."
                 />
               </div>
+              <RuntimePicker
+                value={draft.runtime}
+                onChange={(next) => change("runtime", next)}
+                busy={busy}
+              />
+              {errors.runtime ? <p className="text-[0.6875rem] font-semibold text-attention">{errors.runtime}</p> : null}
               <TextInput
                 label="Rigs"
                 value={draft.rigs}
@@ -450,6 +500,10 @@ export function ProjectsScreen() {
               </>
             )}
           </DialogFooter>
+          {/* The live panel: it runs against the draft, and creation stays enabled whatever it
+              says. Refusing to write a half-configured project is how the registry starts lying
+              about what exists. */}
+          {!created && draft.key.trim() ? <DraftPreflight input={draftInput(draft)} enabled /> : null}
         </DialogContent>
       </Dialog>
     </div>

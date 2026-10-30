@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -568,6 +569,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 		Compat:     func(context.Context) rig.Report { return report },
 		Store:      db,
 		Rig:        rig.NewAdapter(rigRunner),
+		// The setup chain runs `mkdir`, `git clone` and the rig CLI. Only an allowlisted
+		// step builds a command, and no step builds a login: the operator's credential
+		// never passes through here.
+		SetupExec: func(ctx context.Context, name string, args ...string) (string, error) {
+			cmd := exec.CommandContext(ctx, name, args...)
+			cmd.WaitDelay = 200 * time.Millisecond
+			output, err := cmd.CombinedOutput()
+			return string(output), err
+		},
 	})
 	if err != nil {
 		return err
