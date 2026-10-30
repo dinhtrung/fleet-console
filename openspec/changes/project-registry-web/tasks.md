@@ -15,11 +15,11 @@ A box is ticked only with the command that proved it, quoted in the pull request
 
 ## 2. Web — the Projects surface (issue: web)
 
-- [ ] 2.1 `src/lib/fleet.ts`: `listProjects()` and `createProject(input)` typed against the design's shapes, with the `422` field map surfaced as a typed error rather than a string.
-- [ ] 2.2 `src/screens/ProjectsScreen.tsx` + route `/projects` + nav entry in the Board group: table of projects (key, name, forge badge, repo, rigs, cap), empty state, error state with retry.
-- [ ] 2.3 New project dialog: every field the file accepts, client-side rules mirroring the server's, per-field server errors rendered on the field, `warnings` rendered as a non-blocking note after success.
-- [ ] 2.4 Success path: dialog closes, a toast names the project, and both `["projects"]` and `["board"]` are invalidated so the project is visible without a reload.
-- [ ] 2.5 The PR carries before/after screenshots of `/projects` (the reviewer requires them for any `src/` diff) and says what was not verified.
+- [x] 2.1 `src/lib/fleet.ts`: `listProjects()` and `createProject(input)` typed against the design's shapes, with the `422` field map surfaced as a typed error rather than a string. Verified: `src/lib/fleet.ts:122-181` (the `Project` shape, `ApiError.fieldErrors`), `:183-216` (`request` maps `{error, errors}` and sends `Idempotency-Key`); live `GET /api/projects` returned the project with its paths, and a `422` came back as `{"errors":{"":"key must match …"}}` which the client keeps as a map.
+- [x] 2.2 `src/screens/ProjectsScreen.tsx` + route `/projects` + nav entry in the Board group: table of projects (key, name, forge badge, repo, rigs, cap), empty state, error state with retry. Verified in a browser against a built binary: `docs/screenshots/issue-63/after-table.png`, nav `Board | Decisions | Seats | Projects`.
+- [x] 2.3 New project dialog: every field the file accepts, client-side rules mirroring the server's, per-field server errors rendered on the field, `warnings` rendered as a non-blocking note after success. Verified: `docs/screenshots/issue-63/dialog-validation.png` (the key's message on the key) and `dialog-warnings.png` (`project "mnp-third": paths.main /tmp/…/not-cloned-yet does not exist yet` after a real create). Limit: the current backend answers its `422` with the message under the empty field key, so a server refusal renders as the dialog-level line; a per-field map renders on the field by construction.
+- [x] 2.4 Success path: dialog closes, a toast names the project, and both `["projects"]` and `["board"]` are invalidated so the project is visible without a reload. Verified: `docs/screenshots/issue-63/after-create-toast.png` (dialog gone, toast, both rows) and `after-board.png` (the board lists all three, including the two created through the dialog). Network trace: `POST /api/projects` → `GET /api/projects`; the `["board"]` refetch is not separable from a fresh mount in the browser.
+- [x] 2.5 The PR carries before/after screenshots of `/projects` (the reviewer requires them for any `src/` diff) and says what was not verified. Verified: `docs/screenshots/issue-63/` — `before-projects-404.png` (main: nav without Projects, `/projects` answers "No such page") and the four after images.
 
 ## 3. Gate
 
