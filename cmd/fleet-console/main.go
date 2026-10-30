@@ -83,7 +83,7 @@ func projectSources(ctx context.Context, db *store.Store, runner forge.Runner) (
 		default:
 			return nil, fmt.Errorf("tick: project %s has unknown forge %q", project.Key, project.ForgeKind)
 		}
-		spec := mirror.Project{ID: project.ID, Key: project.Key, Forge: source, Rigs: project.Rigs}
+		spec := mirror.Project{ID: project.ID, Key: project.Key, Forge: source, Rigs: project.Rigs, RepoPath: repoPath}
 		if repoPath != "" {
 			spec.Git = git.ExecRunner{RepoPath: repoPath}
 		}
@@ -492,6 +492,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 				}
 				fmt.Fprintf(stderr, "act: %s dispatches=%d verdicts=%d merges=%d skipped=%d\n",
 					project.Key, len(report.Dispatches), len(report.Verdicts), len(report.Merges), len(report.Skipped))
+					// A skip is the only place a dispatch failure is visible: name each one, because
+					// "skipped=2" over one project tells the operator nothing about which write failed.
+					for _, why := range report.Skipped {
+						fmt.Fprintf(stderr, "act-skip: %s: %s\n", project.Key, why)
+					}
 			}
 		},
 	)
