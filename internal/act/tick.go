@@ -135,6 +135,12 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			continue
 		}
 		report.Merges = append(report.Merges, merged)
+		// The merge landed; a gap means part of its audit trail did not. It is
+		// reported on the same channel as a skip so the tick log names it, but it
+		// is not a skip: `merged` above is already recorded.
+		for _, why := range merged.AuditGaps {
+			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d merged, audit gap: %s", item, why))
+		}
 	}
 	for _, intent := range in.Plan.Intents {
 		if intent.Kind != decide.IntentRaiseDecision {
