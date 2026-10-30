@@ -427,7 +427,6 @@ func conclusionOf(status string) string {
 	}
 }
 
-// SetMarker adds or removes the in-flight marker label.
 // Notes reads an issue's notes.
 func (g *GitLab) Notes(ctx context.Context, number int) ([]Comment, error) {
 	raw, err := g.cli.api(ctx, fmt.Sprintf("projects/%s/issues/%d/notes?per_page=100&sort=desc", g.enc, number))
@@ -449,6 +448,31 @@ func (g *GitLab) Notes(ctx context.Context, number int) ([]Comment, error) {
 	return out, nil
 }
 
+// CRNotes reads a merge request's notes. A merge request is not an issue on
+// GitLab: asking for an issue's notes by merge-request number is a 404, and the
+// two numbers are unrelated. Verdicts are posted on the merge request, so this
+// is the conversation the merge gate has to read.
+func (g *GitLab) CRNotes(ctx context.Context, number int) ([]Comment, error) {
+	raw, err := g.cli.api(ctx, fmt.Sprintf("projects/%s/merge_requests/%d/notes?per_page=100&sort=desc", g.enc, number))
+	if err != nil {
+		return nil, err
+	}
+	var batch []struct {
+		ID        int64  `json:"id"`
+		Body      string `json:"body"`
+		CreatedAt string `json:"created_at"`
+	}
+	if err := json.Unmarshal(raw, &batch); err != nil {
+		return nil, fmt.Errorf("forge: decode GitLab merge request notes: %w", err)
+	}
+	out := make([]Comment, 0, len(batch))
+	for _, note := range batch {
+		out = append(out, Comment{ID: fmt.Sprint(note.ID), Body: note.Body, CreatedAt: note.CreatedAt})
+	}
+	return out, nil
+}
+
+// SetMarker adds or removes the in-flight marker label.
 func (g *GitLab) SetMarker(ctx context.Context, number int, present bool) error {
 	field := "add_labels=" + MarkerLabel
 	if !present {

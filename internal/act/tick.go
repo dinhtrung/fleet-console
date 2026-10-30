@@ -80,7 +80,9 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		if request == nil {
 			continue
 		}
-		captured, err := actions.CaptureFromForge(ctx, dispatch.ID, dispatch.ItemNumber, request.HeadSHA)
+		// The verdict is posted on the change request, under the change
+		// request's own number; item is only for the report and the store.
+		captured, err := actions.CaptureFromForge(ctx, dispatch.ID, dispatch.ItemNumber, request.Number, request.HeadSHA)
 		if err != nil {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d verdict: %v", dispatch.ItemNumber, err))
 			continue
