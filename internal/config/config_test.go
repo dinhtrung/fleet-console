@@ -166,6 +166,54 @@ func TestMissingMainPathWarns(t *testing.T) {
 	}
 }
 
+// TestRepoURLWarning: a GitLab project without repo_url cannot be derived
+// correctly, so the load says so; GitHub and an explicit repo_url are silent.
+func TestRepoURLWarning(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name     string
+		body     string
+		warnings int
+	}{
+		{
+			name:     "gitlab derived warns",
+			body:     "projects:\n  - key: a\n    forge: gitlab\n    repo: team/app\n    rig: r\n",
+			warnings: 1,
+		},
+		{
+			name:     "gitlab with repo_url is silent",
+			body:     "projects:\n  - key: a\n    forge: gitlab\n    repo: team/app\n    rig: r\n    repo_url: https://gitlab.horisen.org/team/app\n",
+			warnings: 0,
+		},
+		{
+			name:     "github is silent",
+			body:     "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rig: r\n",
+			warnings: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfig(t, dir, tc.body)
+			eff, err := Load(Options{FlagPath: path, Home: dir, Cwd: dir})
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if len(eff.Warnings) != tc.warnings {
+				t.Fatalf("warnings = %v, want %d", eff.Warnings, tc.warnings)
+			}
+			if tc.warnings > 0 {
+				want := "project \"a\": repo_url is not set; deriving https://gitlab.com/team/app — set repo_url for a self-hosted GitLab"
+				if eff.Warnings[0] != want {
+					t.Fatalf("warning = %q, want %q", eff.Warnings[0], want)
+				}
+				if eff.Projects[0].RepoURL != "" {
+					t.Fatalf("repo_url = %q, want it unset", eff.Projects[0].RepoURL)
+				}
+			}
+		})
+	}
+}
+
 func TestLookupOrder(t *testing.T) {
 	home := t.TempDir()
 	xdg := filepath.Join(home, "xdg")

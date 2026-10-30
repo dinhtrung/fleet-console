@@ -38,6 +38,7 @@ type Project struct {
 	Name           string            `yaml:"name"`
 	Forge          string            `yaml:"forge"`
 	Repo           string            `yaml:"repo"`
+	RepoURL        string            `yaml:"repo_url"`
 	DefaultBranch  string            `yaml:"default_branch"`
 	Rig            string            `yaml:"rig,omitempty"`
 	Rigs           []string          `yaml:"rigs"`
@@ -276,6 +277,7 @@ func Load(opts Options) (*Effective, error) {
 		project.Key = strings.TrimSpace(project.Key)
 		project.Forge = strings.ToLower(strings.TrimSpace(project.Forge))
 		project.Repo = strings.TrimSpace(project.Repo)
+		project.RepoURL = strings.TrimSpace(project.RepoURL)
 		if project.Key == "" {
 			return nil, fmt.Errorf("config: project %d: key is required", index)
 		}
@@ -291,6 +293,11 @@ func Load(opts Options) (*Effective, error) {
 		}
 		if project.Repo == "" {
 			return nil, fmt.Errorf("config: project %q: repo is required", project.Key)
+		}
+		if project.Forge == "gitlab" && project.RepoURL == "" {
+			eff.Warnings = append(eff.Warnings, fmt.Sprintf(
+				"project %q: repo_url is not set; deriving https://gitlab.com/%s — set repo_url for a self-hosted GitLab",
+				project.Key, project.Repo))
 		}
 		if project.Rig != "" && project.Rigs != nil {
 			return nil, fmt.Errorf("config: project %q: rig and rigs are mutually exclusive", project.Key)
