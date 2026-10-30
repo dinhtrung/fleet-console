@@ -15,6 +15,7 @@ import { SignInScreen } from "./screens/SignInScreen";
 import { BoardScreen } from "./screens/BoardScreen";
 import { DecisionsScreen } from "./screens/DecisionsScreen";
 import { SeatsScreen } from "./screens/SeatsScreen";
+import { ProjectsScreen } from "./screens/ProjectsScreen";
 import { TaskDrawerScreen } from "./screens/TaskDrawerScreen";
 import { UserListScreen } from "./screens/UserListScreen";
 import { UserDetailScreen } from "./screens/UserDetailScreen";
@@ -106,6 +107,8 @@ const rootRoute = createRootRoute({
 
 const dashboardRoute = createRoute({ getParentRoute: () => rootRoute, path: "/", component: BoardScreen });
 
+const projectsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/projects", component: ProjectsScreen });
+
 const decisionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/decisions",
@@ -191,25 +194,25 @@ const featureFlagsRoute = createRoute({
   path: "/feature-flags",
   component: FeatureFlagsScreen,
 });
-
-const routeTree = rootRoute.addChildren([
-  dashboardRoute,
-  decisionsRoute,
-  seatsRoute,
-  taskDrawerRoute,
-  usersRoute,
-  userDetailRoute,
-  rolesRoute,
-  roleDetailRoute,
-  organizationsRoute,
-  organizationDetailRoute,
-  sessionsRoute,
-  auditRoute,
-  auditDetailRoute,
-  settingsRoute,
-  apiKeysRoute,
-  featureFlagsRoute,
-]);
+	const routeTree = rootRoute.addChildren([
+		dashboardRoute,
+		projectsRoute,
+		decisionsRoute,
+		seatsRoute,
+		taskDrawerRoute,
+		usersRoute,
+		userDetailRoute,
+		rolesRoute,
+		roleDetailRoute,
+		organizationsRoute,
+		organizationDetailRoute,
+		sessionsRoute,
+		auditRoute,
+		auditDetailRoute,
+		settingsRoute,
+		apiKeysRoute,
+		featureFlagsRoute,
+	]);
 
 export const router = createRouter({ routeTree, defaultPreload: false });
 

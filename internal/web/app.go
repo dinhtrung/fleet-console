@@ -63,6 +63,8 @@ func New(cfg Config) (*fiber.App, error) {
 		return c.JSON(compat(c.Context()))
 	})
 	api.Get("/board", fleet.Board)
+	api.Get("/projects", fleet.Projects)
+	api.Post("/projects", fleet.CreateProject)
 	api.Get("/items/:number", fleet.Item)
 	api.Get("/decisions", fleet.Decisions)
 	api.Post("/decisions/:id/answer", fleet.AnswerDecision)
@@ -72,6 +74,7 @@ func New(cfg Config) (*fiber.App, error) {
 	api.Get("/stream", hub.Stream)
 	if board, ok := webui.FS(); ok {
 		app.Use(boardHandler(board))
+		return app, nil
 	}
 	return app, nil
 }

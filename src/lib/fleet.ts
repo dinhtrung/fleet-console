@@ -1,6 +1,5 @@
 /** Typed reads for the product screens. The board authenticates with the session cookie served at
  *  `/`, so every call is same-origin and carries no token. */
-
 export interface BoardItem {
   number: number;
   title: string;
@@ -120,30 +119,103 @@ export interface ItemDetail {
   events: EventRow[] | null;
 }
 
+/** Project registry */
+export interface Project {
+  key: string;
+  name: string;
+  forge: "github" | "gitlab";
+  repo: string;
+  default_branch: string;
+  rigs: string[];
+  concurrency_cap: number;
+  paths: {
+    main: string;
+    worktrees: string;
+  };
+  rig_template: string;
+  labels: Record<string, string>;
+  onhold: boolean | null;
+  gate_cmd: string | null;
+}
+
+export interface ProjectsResponse {
+  projects: Project[];
+  synced_at: string;
+}
+
+export interface CreateProjectInput {
+  key: string;
+  name: string;
+  forge: "github" | "gitlab";
+  repo: string;
+  default_branch: string;
+  rigs: string[];
+  concurrency_cap: number;
+  paths: {
+    main: string;
+    worktrees: string;
+  };
+  rig_template: string;
+  labels: Record<string, string>;
+  onhold: boolean;
+  gate_cmd: string;
+}
+
+export interface CreateProjectResponse {
+  project: Project;
+  warnings: string[];
+}
+
+export interface ApiError {
+  status: number;
+  field_errors: Record<string, string>;
+  message: string;
+}
+
+export function isApiError(error: unknown): error is ApiError {
+  return typeof error === "object" && error !== null && "status" in error && "field_errors" in error;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
+      ...init?.headers,
     },
   });
   if (!response.ok) {
-    const text = await response.text();
-    let message = text;
+    const error: ApiError = {
+      status: response.status,
+      field_errors: {},
+      message: "",
+    };
     try {
-      const parsed = JSON.parse(text) as { error?: string };
-      message = parsed.error ?? text;
+      const body = await response.json();
+      if (body.field_errors) {
+        error.field_errors = body.field_errors;
+      }
+      if (body.message) {
+        error.message = body.message;
+      }
     } catch {
-      // keep the raw body
+      error.message = response.statusText;
     }
-    throw new Error(message || `HTTP ${response.status}`);
+    throw error;
   }
-  return (await response.json()) as T;
+  return response.json();
 }
 
 export const getBoard = () => request<BoardResponse>("/api/board");
+
+export const getProjects = () => request<ProjectsResponse>("/api/projects");
+
+export const createProject = (input: CreateProjectInput) =>
+  request<CreateProjectResponse>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 
 export const getItem = (number: number) => request<ItemDetail>(`/api/items/${number}`);
 
@@ -154,7 +226,6 @@ export const answerDecision = (id: string, decision: string) =>
     `/api/decisions/${encodeURIComponent(id)}/answer`,
     {
       method: "POST",
-      headers: { "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({ decision }),
     },
   );
@@ -169,12 +240,8 @@ export const getSeatTail = (session: string, lines = 24) =>
 export const getEvents = () => request<{ events: EventRow[] }>("/api/events?limit=50");
 
 export function shortTime(value?: string): string {
-  if (!value) return "—";
-  const at = new Date(value);
-  if (Number.isNaN(at.getTime())) return value;
-  const seconds = Math.max(0, Math.round((Date.now() - at.getTime()) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
-  return `${Math.round(seconds / 86400)}d ago`;
+  if (!value) return "";
+  const date = new Date(value);
+  if (isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
