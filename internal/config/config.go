@@ -68,6 +68,7 @@ type File struct {
 	GhBinary       string         `yaml:"gh_binary"`
 	GlabBinary     string         `yaml:"glab_binary"`
 	TickInterval   Duration       `yaml:"tick_interval"`
+	NotifyInterval Duration       `yaml:"notify_interval"`
 	ProjectTimeout ProjectTimeout `yaml:"project_timeout"`
 	Act            bool           `yaml:"act"`
 	Projects       []Project      `yaml:"projects"`
@@ -105,6 +106,7 @@ type Effective struct {
 	GhBinary       string
 	GlabBinary     string
 	TickInterval   time.Duration
+	NotifyInterval time.Duration // digest cadence; 0 means off
 	ProjectTimeout Timeouts
 	Act            bool
 	Projects       []Project
@@ -230,6 +232,10 @@ func Load(opts Options) (*Effective, error) {
 		tick, tickSource = parsed, "flag"
 	}
 	eff.TickInterval, eff.Sources["tick_interval"] = tick, tickSource
+
+	// notify_interval is the optional digest cadence. Zero means off, which is
+	// the default: an unattended run should not start talking on its own.
+	eff.NotifyInterval, eff.Sources["notify_interval"] = time.Duration(file.NotifyInterval), "file"
 
 	base, perItem, ceiling := 30*time.Second, 2*time.Second, 2*time.Minute
 	timeoutSource := "default"
@@ -375,6 +381,7 @@ func (e *Effective) Print() ([]byte, error) {
 		GhBinary   string `yaml:"gh_binary"`
 		GlabBinary string `yaml:"glab_binary"`
 		Tick       string `yaml:"tick_interval"`
+		Notify     string `yaml:"notify_interval"`
 		Timeout    struct {
 			Base    string `yaml:"base"`
 			PerItem string `yaml:"per_item"`
@@ -388,7 +395,8 @@ func (e *Effective) Print() ([]byte, error) {
 	out := view{
 		Config: e.ConfigPath, Listen: e.Listen, Database: e.Database, TokenFile: e.TokenFile,
 		RigBinary: e.RigBinary, GhBinary: e.GhBinary, GlabBinary: e.GlabBinary,
-		Tick: e.TickInterval.String(), Act: e.Act, Projects: e.Projects, Sources: e.Sources, Warnings: e.Warnings,
+		Tick: e.TickInterval.String(), Notify: e.NotifyInterval.String(),
+		Act: e.Act, Projects: e.Projects, Sources: e.Sources, Warnings: e.Warnings,
 	}
 	out.Timeout.Base = e.ProjectTimeout.Base.String()
 	out.Timeout.PerItem = e.ProjectTimeout.PerItem.String()

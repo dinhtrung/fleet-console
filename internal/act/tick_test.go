@@ -337,3 +337,61 @@ func TestCaptureFromForgeRefusesNoChangeRequest(t *testing.T) {
 		t.Fatalf("read %v / %v, want no read when the number is unusable", fake.CRNotesAsked, fake.NotesAsked)
 	}
 }
+
+// TestRunTickNotifiesEachMergeAndNoDecisionAlone puts the trigger where it
+// belongs: the tick reports what it raised and what it merged, and nothing else.
+// The phone is the caller's business, so what is asserted here is the seam the
+// caller hooks (task 3.1, 3.3).
+func TestRunTickNotifiesEachMergeAndNoDecisionAlone(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 30, 18, 0, 0, 0, time.UTC)
+
+	// A tick that merges nothing raises nothing.
+	t.Run("nothing raised, nothing merged: no callbacks", func(t *testing.T) {
+		st := newStore(t)
+		pid := newProject(t, st)
+		fake := forge.NewFake(forge.KindGitHub)
+		fake.ItemsValue = []forge.Item{{Number: 5, Kind: forge.KindTask, State: forge.StateOpen, Title: "Five"}}
+		var raised []DecisionRaised
+		_, err := RunTick(ctx, TickInput{
+			Store: st, Project: store.ProjectRow{ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r", Rig: "rig", ConcurrencyCap: 2, Enabled: true},
+			Forge: fake, Rig: &queueStub{}, Git: &fakeGit{}, Gate: openGate(), Apply: true,
+			Items: fake.ItemsValue, Now: func() time.Time { return now },
+			OnDecision: func(d DecisionRaised) { raised = append(raised, d) },
+		})
+		if err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		if len(raised) != 0 {
+			t.Fatalf("raised = %+v, want none", raised)
+		}
+	})
+
+	// A raised decision reaches the hook exactly once, with the row's id.
+	t.Run("a raised decision is reported once", func(t *testing.T) {
+		st := newStore(t)
+		pid := newProject(t, st)
+		fake := forge.NewFake(forge.KindGitHub)
+		fake.ItemsValue = []forge.Item{{Number: 5, Kind: forge.KindTask, State: forge.StateOpen, Title: "Five"}}
+		var raised []DecisionRaised
+		plan := decide.Plan{Status: decide.StatusPlanned, Intents: []decide.Intent{{
+			Kind: decide.IntentRaiseDecision, Project: "app", Item: 5, Text: "re-review needed",
+			Event: decide.Event{Kind: "review.stale"},
+		}}}
+		_, err := RunTick(ctx, TickInput{
+			Store: st, Project: store.ProjectRow{ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r", Rig: "rig", ConcurrencyCap: 2, Enabled: true},
+			Forge: fake, Rig: &queueStub{}, Git: &fakeGit{}, Gate: openGate(), Apply: true,
+			Items: fake.ItemsValue, Plan: plan, WorktreeRoot: t.TempDir(), Now: func() time.Time { return now },
+			OnDecision: func(d DecisionRaised) { raised = append(raised, d) },
+		})
+		if err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		if len(raised) != 1 {
+			t.Fatalf("raised = %+v, want one", raised)
+		}
+		if raised[0].Item != 5 || raised[0].Text != "re-review needed" || raised[0].QItemID == "" {
+			t.Fatalf("raised[0] = %+v, want item 5, the plan's text and a row id", raised[0])
+		}
+	})
+}

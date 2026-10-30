@@ -30,6 +30,20 @@ type TickInput struct {
 	Plan         decide.Plan
 	WorktreeRoot string
 	Now          func() time.Time
+	// OnDecision receives every decision this tick raised, so the caller can
+	// put it on somebody's phone. It is called after the row exists. It cannot
+	// fail the tick: a dead transport is not a dead fleet (design.md §5), so a
+	// nil hook and a broken one are the same to the caller — nothing is sent,
+	// and the tick carries on.
+	OnDecision func(DecisionRaised)
+}
+
+// DecisionRaised is one decision a tick created, described the way the phone
+// message needs it and the way the tick already knows it.
+type DecisionRaised struct {
+	QItemID string // the queue row holding the question
+	Item    int    // the issue it is about
+	Text    string // the question, as the plan worded it
 }
 
 // TickReport is what one applied tick did, for the log and the board.
@@ -109,6 +123,11 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		}
 		if !result.NoOp {
 			report.Decisions = append(report.Decisions, result.QItemID)
+			// The row exists before the phone is told about it, so a message
+			// never points at something the store cannot show.
+			if in.OnDecision != nil {
+				in.OnDecision(DecisionRaised{QItemID: result.QItemID, Item: intent.Item, Text: intent.Text})
+			}
 		}
 	}
 
