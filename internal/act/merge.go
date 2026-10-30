@@ -71,6 +71,18 @@ func (a *Actions) Merge(ctx context.Context, dispatchID int64, item int) (*Merge
 		return nil, fmt.Errorf("refusing merge: body does not close #%d", item)
 	}
 
+	// A draft pull request cannot be merged: GitHub answers `Pull request is still a
+	// draft`, which reads like a real refusal in the log. Readiness is the integrator's.
+	if request.Draft {
+		if err := a.Forge.Ready(ctx, request.Number); err != nil {
+			return nil, fmt.Errorf("refusing merge: change request #%d is a draft and could not be marked ready: %w", request.Number, err)
+		}
+		if eventID, err := a.event(ctx, "act", "change_request.ready", fmt.Sprintf("#%d", item),
+			fmt.Sprintf("change request #%d taken out of draft before merge", request.Number)); err == nil {
+			_ = eventID
+		}
+	}
+
 	if err := a.Forge.Merge(ctx, request.Number, verdict.SHA); err != nil {
 		return nil, err
 	}
@@ -81,7 +93,13 @@ func (a *Actions) Merge(ctx context.Context, dispatchID int64, item int) (*Merge
 		return nil, err
 	}
 	result.Events = append(result.Events, eventID)
-	if err := a.Store.EndDispatch(ctx, dispatchID, "merged"); err != nil {
+	if dispatch.EndedAt != nil {
+		// The builder ended its row when it delivered; the merge still has to land and
+		// the item still has to close, so the row is bookkeeping, not the trigger.
+		if eventID, err := a.event(ctx, "act", "dispatch.merged", fmt.Sprintf("#%d", item), "merge landed after the row ended: "+dispatch.EndReason); err == nil {
+			result.Events = append(result.Events, eventID)
+		}
+	} else if err := a.Store.EndDispatch(ctx, dispatchID, "merged"); err != nil {
 		return nil, err
 	}
 	if eventID, err := a.event(ctx, "act", "dispatch.merged", fmt.Sprintf("#%d", item), "dispatch ended merged"); err != nil {

@@ -82,7 +82,10 @@ func projectSources(ctx context.Context, db *store.Store, runner forge.Runner) (
 		if err != nil {
 			return nil, err
 		}
-		budget := &forge.Budget{Max: 400}
+		// One tick reads items, change requests, their checks and the notes on each change
+		// request; nine open pull requests is a normal afternoon. 400 ran out in the middle
+		// of the merge loop and looked like a forge outage.
+		budget := &forge.Budget{Max: 1500}
 		var source forge.Forge
 		switch forge.Kind(project.ForgeKind) {
 		case forge.KindGitHub:

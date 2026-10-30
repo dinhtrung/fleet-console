@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -493,6 +494,28 @@ func (g *GitLab) Comment(ctx context.Context, number int, body string) error {
 func (g *GitLab) CloseItem(ctx context.Context, number int) error {
 	_, err := g.cli.api(ctx, "-X", "PUT", fmt.Sprintf("projects/%s/issues/%d", g.enc, number),
 		"-f", "state_event=close")
+	return err
+}
+
+// Ready removes a leading Draft:/WIP: marker from a merge request title; GitLab has no
+// separate draft flag to flip.
+func (g *GitLab) Ready(ctx context.Context, number int) error {
+	raw, err := g.cli.api(ctx, fmt.Sprintf("projects/%s/merge_requests/%d", g.enc, number))
+	if err != nil {
+		return err
+	}
+	var request struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(raw, &request); err != nil {
+		return fmt.Errorf("forge: decode GitLab merge request: %w", err)
+	}
+	title := strings.TrimSpace(regexp.MustCompile(`(?i)^(draft|wip):\s*`).ReplaceAllString(request.Title, ""))
+	if title == "" || title == request.Title {
+		return nil
+	}
+	_, err = g.cli.api(ctx, "-X", "PUT", fmt.Sprintf("projects/%s/merge_requests/%d", g.enc, number),
+		"-f", "title="+title)
 	return err
 }
 

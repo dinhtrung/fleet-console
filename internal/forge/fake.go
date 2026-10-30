@@ -86,6 +86,20 @@ func (f *Fake) CRNotes(_ context.Context, number int) ([]Comment, error) {
 }
 
 // SetMarker records a marker write.
+// Ready records a readiness write and clears the draft flag on a matching request.
+func (f *Fake) Ready(_ context.Context, number int) error {
+	if f.WriteErr != nil {
+		return f.WriteErr
+	}
+	f.Writes = append(f.Writes, Write{Op: "ready", Number: number})
+	for i := range f.RequestsValue {
+		if f.RequestsValue[i].Number == number {
+			f.RequestsValue[i].Draft = false
+		}
+	}
+	return nil
+}
+
 func (f *Fake) SetMarker(_ context.Context, number int, present bool) error {
 	if f.WriteErr != nil {
 		return f.WriteErr

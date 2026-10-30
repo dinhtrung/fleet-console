@@ -249,6 +249,16 @@ func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 
 	requests := make([]ChangeRequest, 0, len(pulls))
 	for _, pull := range pulls {
+		if pull.State != "open" || pull.MergedAt != nil {
+			// A closed or merged pull request can never merge again: its files, its
+			// checks and its mergeable flag are dead weight the tick must not pay for.
+			requests = append(requests, ChangeRequest{
+				Number: pull.Number, State: pull.State, Merged: pull.MergedAt != nil,
+				HeadSHA: pull.Head.SHA, Draft: pull.Draft, Body: pull.Body,
+				ClosesItem: ParseCloses(pull.Body), URL: pull.HTMLURL,
+			})
+			continue
+		}
 		paths, err := g.files(ctx, pull.Number)
 		if err != nil {
 			return nil, err
@@ -410,8 +420,18 @@ func (g *GitHub) CloseItem(ctx context.Context, number int) error {
 	return err
 }
 
+// Ready takes a pull request out of draft.
+func (g *GitHub) Ready(ctx context.Context, number int) error {
+	_, err := g.cli.run(ctx, "pr", "ready", fmt.Sprint(number), "-R", g.slug)
+	return err
+}
+
 // Merge merges a pull request only if its head is still sha.
 func (g *GitHub) Merge(ctx context.Context, number int, sha string) error {
-	_, err := g.cli.run(ctx, "pr", "merge", fmt.Sprint(number), "--squash", "--match-head-commit", sha)
+	// -R is not optional: the service runs in $HOME where `gh pr merge` finds no
+	// repository and dies with "failed to run git: not a git repository". Every
+	// `gh api` call carries the slug in its path, so only the verbs needed it.
+	_, err := g.cli.run(ctx, "pr", "merge", fmt.Sprint(number), "--squash",
+		"--match-head-commit", sha, "-R", g.slug)
 	return err
 }

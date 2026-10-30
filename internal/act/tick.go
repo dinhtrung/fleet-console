@@ -86,32 +86,56 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	if err != nil {
 		return report, err
 	}
+	// The watchdog walks the open change requests, not the live dispatches. A builder
+	// ends its row when it delivers, and that supersedes the dispatch; keying the
+	// watchdog on live dispatches left accepted pull requests waiting on a row that no
+	// longer existed, so nothing merged for hours while every check was green.
+	latest := make(map[int]store.DispatchRow, len(dispatches))
 	for _, dispatch := range dispatches {
-		if dispatch.EndedAt != nil || dispatch.ItemNumber == 0 {
+		if dispatch.ItemNumber == 0 {
 			continue
 		}
-		request := changeRequestFor(in.CRs, dispatch.ItemNumber)
-		if request == nil {
+		if current, ok := latest[dispatch.ItemNumber]; !ok || dispatch.ID > current.ID {
+			latest[dispatch.ItemNumber] = dispatch
+		}
+	}
+	for _, request := range in.CRs {
+		if request.Merged {
 			continue
 		}
-		// The verdict is posted on the change request, under the change
-		// request's own number; item is only for the report and the store.
-		captured, err := actions.CaptureFromForge(ctx, dispatch.ID, dispatch.ItemNumber, request.Number, request.HeadSHA)
+		switch strings.ToLower(request.State) {
+		case "closed", "merged":
+			continue
+		}
+		item := forge.ParseCloses(request.Body)
+		if item == 0 {
+			item = request.ClosesItem
+		}
+		if item == 0 {
+			continue
+		}
+		dispatch, ok := latest[item]
+		if !ok {
+			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d: change request #%d closes no dispatch", item, request.Number))
+			continue
+		}
+		// The verdict is posted on the change request, under the change request's own
+		// number; item is only for the report and the store.
+		captured, err := actions.CaptureFromForge(ctx, dispatch.ID, item, request.Number, request.HeadSHA)
 		if err != nil {
-			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d verdict: %v", dispatch.ItemNumber, err))
+			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d verdict: %v", item, err))
 			continue
 		}
 		if captured != nil {
 			report.Verdicts = append(report.Verdicts, *captured)
 		}
-		merged, err := actions.Merge(ctx, dispatch.ID, dispatch.ItemNumber)
+		merged, err := actions.Merge(ctx, dispatch.ID, item)
 		if err != nil {
-			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d merge waiting: %v", dispatch.ItemNumber, err))
+			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d merge waiting: %v", item, err))
 			continue
 		}
 		report.Merges = append(report.Merges, merged)
 	}
-
 	for _, intent := range in.Plan.Intents {
 		if intent.Kind != decide.IntentRaiseDecision {
 			continue

@@ -195,6 +195,10 @@ type Forge interface {
 	SetMarker(ctx context.Context, number int, present bool) error
 	Comment(ctx context.Context, number int, body string) error
 	CloseItem(ctx context.Context, number int) error
+	// Ready takes a change request out of draft. This fleet opens every pull request
+	// as a draft on purpose and `gh pr merge` refuses a draft, so readiness belongs to
+	// the integrator, not to a seat.
+	Ready(ctx context.Context, number int) error
 	Merge(ctx context.Context, number int, sha string) error
 }
 

@@ -19,7 +19,7 @@ func TestMergeMatchHeadCommit(t *testing.T) {
 	if err := github.Merge(context.Background(), 9, "abc1234"); err != nil {
 		t.Fatalf("merge: %v", err)
 	}
-	want := []string{"gh", "pr", "merge", "9", "--squash", "--match-head-commit", "abc1234"}
+	want := []string{"gh", "pr", "merge", "9", "--squash", "--match-head-commit", "abc1234", "-R", "dinhtrung/fleet-console"}
 	if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0], want) {
 		t.Fatalf("argv = %v, want %v", runner.calls, want)
 	}

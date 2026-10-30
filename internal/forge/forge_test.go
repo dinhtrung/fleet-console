@@ -361,6 +361,9 @@ func TestWritesAreExactlyTheFour(t *testing.T) {
 	if err := github.CloseItem(ctx, 5); err != nil {
 		t.Fatal(err)
 	}
+	if err := github.Ready(ctx, 14); err != nil {
+		t.Fatal(err)
+	}
 	if err := github.Merge(ctx, 14, "abc123"); err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +390,8 @@ func TestWritesAreExactlyTheFour(t *testing.T) {
 		"gh issue edit 5 --remove-label status::ongoing",
 		"gh issue comment 5 --body hello",
 		"gh issue close 5",
-		"gh pr merge 14 --squash --match-head-commit abc123",
+		"gh pr ready 14 -R dinhtrung/fleet-console",
+		"gh pr merge 14 --squash --match-head-commit abc123 -R dinhtrung/fleet-console",
 	}
 	glCalls := []string{
 		"glab api -X PUT projects/horisen%2Fmnp%2Fengine%2Ftraffic-simulator-v2/issues/5 -f add_labels=status::ongoing",
