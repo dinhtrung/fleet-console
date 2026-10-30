@@ -49,14 +49,23 @@ function bytes(n: number): string {
 
 /** The header line: `rig fleet-console · derived · /path · sha 3f2a91c4 · 5.4 KB · 2m ago`. */
 function CultureHeader({ culture }: { culture: CultureSnapshot }) {
-  const parts = [
-    culture.rig ? `rig ${culture.rig}` : "no rig",
-    culture.source === "not_configured" ? "not configured" : culture.source,
-    culture.path || "no path",
-    `sha ${shortSha(culture.sha256)}`,
-    bytes(culture.bytes),
-    culture.mtime ? shortTime(culture.mtime) : "never written",
-  ];
+  // A file that does not exist has no size and no sha: "0 B" reads like an empty file, which is a
+  // different fact and a more alarming one.
+  const parts = culture.exists
+    ? [
+        culture.rig ? `rig ${culture.rig}` : "no rig",
+        culture.source,
+        culture.path,
+        `sha ${shortSha(culture.sha256)}`,
+        bytes(culture.bytes),
+        culture.mtime ? shortTime(culture.mtime) : "never written",
+      ]
+    : [
+        culture.rig ? `rig ${culture.rig}` : "no rig",
+        culture.source === "not_configured" ? "not configured" : culture.source,
+        culture.path || "no path",
+        "no file yet",
+      ];
   return (
     <p className="font-mono text-xs text-muted-foreground" data-testid="culture-header">
       {parts.join(" · ")}
@@ -83,15 +92,26 @@ function CopyPath({ path }: { path: string }) {
   );
 }
 
-/** No file yet: say where it would live and which key moves it. No editor. */
-function NotConfigured({ culture, onCreate }: { culture: CultureSnapshot; onCreate: () => void }) {
+/** No file yet: say where it would live and which key moves it. `canCreate` is false when the
+ *  project names no culture file at all — there is no path to create, so offering the button would
+ *  be offering something that cannot work. */
+function NotConfigured({
+  culture,
+  canCreate,
+  onCreate,
+}: {
+  culture: CultureSnapshot;
+  canCreate: boolean;
+  onCreate: () => void;
+}) {
   return (
     <Panel>
       <PanelHead title="No culture file yet" />
       <div className="space-y-3 p-4 text-sm">
         <p className="text-muted-foreground">
-          The board reads this project&apos;s culture from the path below. Nothing has been created:
-          the fleet keeps running on the files it started with.
+          {canCreate
+            ? "The board reads this project's culture from the path below. Nothing has been created: the fleet keeps running on the files it started with."
+            : "This project names no culture file, so the board has no path to read or write. Set culture_file below and reload."}
         </p>
         <FieldRow label="Expected path">
           <code className="font-mono text-xs">{culture.path || "(no path resolved)"}</code>
@@ -102,9 +122,11 @@ function NotConfigured({ culture, onCreate }: { culture: CultureSnapshot; onCrea
         </FieldRow>
         <div className="flex gap-2">
           {culture.path ? <CopyPath path={culture.path} /> : null}
-          <Button size="sm" onClick={onCreate}>
-            <FileText size={14} /> Create it
-          </Button>
+          {canCreate ? (
+            <Button size="sm" onClick={onCreate}>
+              <FileText size={14} /> Create it
+            </Button>
+          ) : null}
         </div>
       </div>
     </Panel>
@@ -191,7 +213,12 @@ export function CultureScreen() {
   }
 
   const snapshot = culture.data as CultureSnapshot;
-  const unavailable = !snapshot.exists || snapshot.source === "not_configured";
+  // Two different facts, not one. `not_configured` means the project names no culture file and the
+  // resolver produced no path: nothing can be created until the operator sets `culture_file`. A
+  // missing file at a real path is the case `Create it` is for. Conflating them made the button
+  // appear where it could not possibly work.
+  const notConfigured = snapshot.source === "not_configured" || !snapshot.path;
+  const missing = !notConfigured && !snapshot.exists;
 
   return (
     <div className="space-y-4">
@@ -288,11 +315,14 @@ export function CultureScreen() {
         </Panel>
       ) : null}
 
-      {unavailable ? (
+      {(notConfigured || missing) && !editing ? (
         <NotConfigured
           culture={snapshot}
+          canCreate={missing}
           onCreate={() => {
             setDraft("");
+            setConflict(null);
+            setSaved(null);
             setEditing(true);
           }}
         />
@@ -344,7 +374,7 @@ export function CultureScreen() {
                   <Button
                     size="sm"
                     disabled={!dirty || overLimit || save.isPending}
-                    onClick={() => save.mutate(snapshot.sha256)}
+                    onClick={() => save.mutate(snapshot.exists ? snapshot.sha256 : null)}
                   >
                     Save
                   </Button>
