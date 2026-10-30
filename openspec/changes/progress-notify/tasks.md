@@ -12,8 +12,8 @@ A box is ticked only with the command that proved it, quoted in the pull request
 
 ## 2. Delivery and dedupe (issue: reporting)
 
-- [ ] 2.1 `internal/alert`: a `Notifier` that renders, hashes the body minus the timestamp, and sends only when the hash is new; `progress.sent` stores `<hash>:<messageID>`. Verify: two identical renders → one `Send`; a changed bucket → a second `Send`.
-- [ ] 2.2 Failure path: 15s timeout, one retry after 2s, then stderr `alert: progress send: …` plus a `progress.failed` event, and the caller's tick still returns nil. Verify: fake transport returning an error, tick result asserted nil.
+- [x] 2.1 `internal/alert`: a `Notifier` that renders, hashes the body minus the timestamp, and sends only when the hash is new; `progress.sent` stores `<hash>:<messageID>`. Verify: two identical renders → one `Send`; a changed bucket → a second `Send`.
+- [x] 2.2 Failure path: 15s timeout, one retry after 2s, then stderr `alert: progress send: …` plus a `progress.failed` event, and the caller's tick still returns nil. Verify: fake transport returning an error, tick result asserted nil.
 - [ ] 2.3 Boot behaviour: one line when the token or chat id is missing, and every trigger becomes a no-op. Verify: boot log assertion in `cmd/fleet-console` (empty env) and zero sends through the fake.
 
 ## 3. Triggers (issue: wiring)
