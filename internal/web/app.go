@@ -17,10 +17,11 @@ import (
 // Config wires the app. Token is required; the server refuses to start without
 // it rather than accepting an empty bearer.
 type Config struct {
-	Token  string
-	Compat func(ctx context.Context) rig.Report
-	Store  *store.Store
-	Rig    *rig.Adapter
+	Token      string
+	ConfigPath string
+	Compat     func(ctx context.Context) rig.Report
+	Store      *store.Store
+	Rig        *rig.Adapter
 }
 
 // New builds the HTTP app. /api/health is open; every other /api route needs
@@ -28,6 +29,9 @@ type Config struct {
 func New(cfg Config) (*fiber.App, error) {
 	if cfg.Token == "" {
 		return nil, errors.New("web: bearer token is empty")
+	}
+	if cfg.ConfigPath == "" {
+		return nil, errors.New("web: config path is required")
 	}
 	compat := cfg.Compat
 	if compat == nil {
@@ -39,8 +43,6 @@ func New(cfg Config) (*fiber.App, error) {
 	app := fiber.New(fiber.Config{
 		AppName:     "fleet-console",
 		ReadTimeout: 15 * time.Second,
-		// The event stream is long-lived, so the write timeout is long rather
-		// than absent; EventSource reconnects when a stream hits it.
 		WriteTimeout: 10 * time.Minute,
 		IdleTimeout:  60 * time.Second,
 	})
@@ -51,8 +53,6 @@ func New(cfg Config) (*fiber.App, error) {
 	app.Get("/api/health", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
-	// A board session is minted only after the token is presented. The board page
-	// itself is public; it must sign in to call /api.
 	app.Get("/login", loginPage)
 	app.Post("/login", loginSubmit(cfg.Token))
 	app.Post("/logout", logout)
@@ -70,6 +70,8 @@ func New(cfg Config) (*fiber.App, error) {
 	api.Get("/seats/:session/tail", fleet.SeatTail)
 	api.Get("/events", fleet.Events)
 	api.Get("/stream", hub.Stream)
+	// Projects routes
+	RegisterProjectsRoutes(api, cfg, cfg.ConfigPath)
 	if board, ok := webui.FS(); ok {
 		app.Use(boardHandler(board, cfg.Token))
 	}

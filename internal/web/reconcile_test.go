@@ -60,7 +60,7 @@ func TestBoardReconciledDispatches(t *testing.T) {
 			}
 
 			app, err := New(Config{
-				Token: "test-token", Store: st,
+				Token: "test-token", Store: st, ConfigPath: "/tmp/fake-config.yaml",
 				Compat: func(context.Context) rig.Report { return rig.Report{OK: true, Status: rig.StatusOK} },
 			})
 			if err != nil {

@@ -21,8 +21,9 @@ const testToken = "test-token"
 func testApp(t *testing.T) *fiber.App {
 	t.Helper()
 	app, err := New(Config{
-		Token: testToken,
-		Compat: func(context.Context) rig.Report {
+		Token:       testToken,
+		ConfigPath:  "/tmp/fake-config.yaml",
+		Compat:      func(context.Context) rig.Report {
 			return rig.Report{OK: true, Version: "0.7.0", Floor: rig.Floor, VersionOK: true}
 		},
 	})

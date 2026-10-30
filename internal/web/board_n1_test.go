@@ -96,7 +96,7 @@ func boardQueryCount(t *testing.T, items int) int64 {
 	t.Helper()
 	st := countingStore(t)
 	seedBoard(t, st, items)
-	app, err := New(Config{Token: "test-token", Store: st})
+	app, err := New(Config{Token: "test-token",  Store: st,  ConfigPath: "/tmp/fake-config.yaml"})
 	if err != nil {
 		t.Fatalf("app: %v", err)
 	}

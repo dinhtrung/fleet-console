@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -270,49 +271,12 @@ func Load(opts Options) (*Effective, error) {
 	default:
 		eff.Sources["token"] = "none"
 	}
-
 	rigOwners := make(map[string]string)
 	for index, project := range file.Projects {
-		project.Key = strings.TrimSpace(project.Key)
-		project.Forge = strings.ToLower(strings.TrimSpace(project.Forge))
-		project.Repo = strings.TrimSpace(project.Repo)
-		if project.Key == "" {
-			return nil, fmt.Errorf("config: project %d: key is required", index)
+		if err := ValidateProject(&project, dir, home); err != nil {
+			return nil, fmt.Errorf("config: project %q: %w", project.Key, err)
 		}
-		for prior := range index {
-			if file.Projects[prior].Key == project.Key {
-				return nil, fmt.Errorf("config: duplicate project key %q", project.Key)
-			}
-		}
-		switch project.Forge {
-		case "github", "gitlab":
-		default:
-			return nil, fmt.Errorf("config: project %q: unknown forge %q", project.Key, project.Forge)
-		}
-		if project.Repo == "" {
-			return nil, fmt.Errorf("config: project %q: repo is required", project.Key)
-		}
-		if project.Rig != "" && project.Rigs != nil {
-			return nil, fmt.Errorf("config: project %q: rig and rigs are mutually exclusive", project.Key)
-		}
-		if project.Rig != "" {
-			project.Rigs = []string{strings.TrimSpace(project.Rig)}
-		}
-		if len(project.Rigs) == 0 {
-			return nil, fmt.Errorf("config: project %q: rig or rigs is required", project.Key)
-		}
-		seen := make(map[string]bool, len(project.Rigs))
-		for index, name := range project.Rigs {
-			name = strings.TrimSpace(name)
-			if name == "" {
-				return nil, fmt.Errorf("config: project %q: rigs must be non-empty names", project.Key)
-			}
-			if seen[name] {
-				return nil, fmt.Errorf("config: project %q: duplicate rig %q", project.Key, name)
-			}
-			seen[name] = true
-			project.Rigs[index] = name
-		}
+		// Check rig sharing across projects
 		for _, name := range project.Rigs {
 			if owner, ok := rigOwners[name]; ok {
 				return nil, fmt.Errorf("config: rig %q is assigned to both %q and %q", name, owner, project.Key)
@@ -448,3 +412,51 @@ func (e *Effective) Print() ([]byte, error) {
 	}
 	return yaml.Marshal(out)
 }
+
+// ValidateProject validates a single project configuration.
+// It is called by both the loader and the HTTP handler to ensure a single
+// rule set. It returns an error with a field-specific message for 422 responses.
+func ValidateProject(p *Project, dir, home string) error {
+	p.Key = strings.TrimSpace(p.Key)
+	p.Forge = strings.ToLower(strings.TrimSpace(p.Forge))
+	p.Repo = strings.TrimSpace(p.Repo)
+	if p.Key == "" {
+		return fmt.Errorf("key is required")
+	}
+	if !projectKeyRe.MatchString(p.Key) {
+		return fmt.Errorf("key must match %s", projectKeyRe.String())
+	}
+	switch p.Forge {
+	case "github", "gitlab":
+	default:
+		return fmt.Errorf("forge must be github or gitlab")
+	}
+	if p.Repo == "" {
+		return fmt.Errorf("repo is required")
+	}
+	if p.Rig != "" && p.Rigs != nil {
+		return fmt.Errorf("rig and rigs are mutually exclusive")
+	}
+	if p.Rig != "" {
+		p.Rigs = []string{strings.TrimSpace(p.Rig)}
+	}
+	if len(p.Rigs) == 0 {
+		return fmt.Errorf("rig or rigs is required")
+	}
+	seen := make(map[string]bool, len(p.Rigs))
+	for index, name := range p.Rigs {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return fmt.Errorf("rigs[%d] must be non-empty", index)
+		}
+		if seen[name] {
+			return fmt.Errorf("rigs[%d] duplicate rig %q", index, name)
+		}
+		seen[name] = true
+		p.Rigs[index] = name
+	}
+	// concurrency_cap >= 0 is already enforced by the type (int)
+	return nil
+}
+
+var projectKeyRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
