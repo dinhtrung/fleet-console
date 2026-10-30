@@ -181,11 +181,17 @@ export function isApiError(error: unknown): error is ApiError {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  // Every mutating route sits behind the service's idempotency middleware, which answers `400`
+  // without this header. One key per call: a retry is a new request unless the caller reuses it.
+  const idempotencyKey =
+    method === "GET" || method === "HEAD" || method === "OPTIONS" ? null : crypto.randomUUID();
   const response = await fetch(path, {
     credentials: "same-origin",
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
       ...init?.headers,
     },
   });
@@ -228,6 +234,7 @@ export const answerDecision = (id: string, decision: string) =>
     `/api/decisions/${encodeURIComponent(id)}/answer`,
     {
       method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({ decision }),
     },
   );
