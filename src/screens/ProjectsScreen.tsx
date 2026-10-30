@@ -84,17 +84,29 @@ function splitRigs(value: string): string[] {
     .filter(Boolean);
 }
 
-function validate(draft: Draft): Record<string, string> {
+/** The rules the loader applies, so the common mistake costs no round trip. `existing` is the
+ *  registry as listed: the loader also refuses a rig claimed by two projects, and a file it refuses
+ *  is a registry the service can no longer list. */
+function validate(draft: Draft, existing: Project[]): Record<string, string> {
   const errors: Record<string, string> = {};
   if (!draft.key.trim()) errors.key = "A key is required.";
   else if (!KEY_RE.test(draft.key.trim()))
     errors.key = "Lowercase letters, digits and hyphens only, up to 32 characters, starting with a letter or digit.";
+  else if (existing.some((project) => project.key === draft.key.trim()))
+    errors.key = "A project with that key is already registered.";
   if (!draft.name.trim()) errors.name = "A name is required.";
   if (!draft.repo.trim()) errors.repo = "A repo is required, as owner/name.";
   if (!draft.default_branch.trim()) errors.default_branch = "A default branch is required.";
   const rigs = splitRigs(draft.rigs);
   if (rigs.length === 0) errors.rigs = "At least one rig is required.";
   else if (new Set(rigs).size !== rigs.length) errors.rigs = "A rig is named twice.";
+  else {
+    const claimed = existing.find((project) => project.rigs.some((rig) => rigs.includes(rig)));
+    if (claimed) {
+      const rig = rigs.find((name) => claimed.rigs.includes(name)) ?? rigs[0];
+      errors.rigs = `“${rig}” already belongs to ${claimed.key}. A rig may belong to one project.`;
+    }
+  }
   const cap = Number(draft.concurrency_cap);
   if (!Number.isInteger(cap) || cap < 0) errors.concurrency_cap = "A whole number, zero or more.";
   return errors;
@@ -177,7 +189,7 @@ export function ProjectsScreen() {
   };
 
   const submit = () => {
-    const found = validate(draft);
+    const found = validate(draft, projects.data?.projects ?? []);
     setErrors(found);
     setFormError(null);
     if (Object.keys(found).length > 0) return;
