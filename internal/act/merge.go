@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/dinhtrung/fleet-console/internal/forge"
+	"strings"
 )
 
 // MergeResult is the evidence of one watchdog merge.
@@ -50,10 +51,18 @@ func (a *Actions) Merge(ctx context.Context, dispatchID int64, item int) (*Merge
 	}
 	var request *forge.ChangeRequest
 	for index := range requests {
-		if requests[index].ClosesItem == item || forge.ParseCloses(requests[index].Body) == item {
-			request = &requests[index]
-			break
+		candidate := &requests[index]
+		if candidate.ClosesItem != item && forge.ParseCloses(candidate.Body) != item {
+			continue
 		}
+		// A closed or merged change request can never merge again, but it stays in the
+		// list: a superseded pull request that also says "Closes #<item>" must not shadow
+		// the live one, or a fresh ACCEPT at the live head is refused against a dead head.
+		if candidate.Merged || strings.EqualFold(candidate.State, "closed") {
+			continue
+		}
+		request = candidate
+		break
 	}
 	if request == nil {
 		return nil, fmt.Errorf("refusing merge: no change request closes #%d", item)

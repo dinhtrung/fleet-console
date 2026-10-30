@@ -93,3 +93,29 @@ func TestMergeLandsWhenTheBuilderAlreadyEndedItsRow(t *testing.T) {
 		t.Fatalf("dispatch = %+v, want it left ended as superseded", dispatch)
 	}
 }
+
+func TestMergeIgnoresAClosedChangeRequestThatClosesTheSameItem(t *testing.T) {
+	ctx, _, _, fake, in := watchdogFixture(t, false)
+	// A superseded pull request also says "Closes #5" and stays in the forge's list forever.
+	fake.RequestsValue = []forge.ChangeRequest{
+		{Number: 3, State: "closed", HeadSHA: "dead0000", Body: "Closes #5"},
+		{Number: 9, State: "open", HeadSHA: "abc1234", Mergeable: true, Body: "Closes #5", DocsOnly: true},
+	}
+	in.CRs = fake.RequestsValue
+
+	report, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(report.Merges) != 1 {
+		t.Fatalf("report = %+v, want one merge against the open change request", report)
+	}
+	if !hasWrite(fake.Writes, "merge", 9, "abc1234") {
+		t.Fatalf("writes = %+v, want merge(9, abc1234) and never the closed #3", fake.Writes)
+	}
+	for _, w := range fake.Writes {
+		if w.Op == "merge" && w.Number == 3 {
+			t.Fatalf("merged the closed change request: %+v", fake.Writes)
+		}
+	}
+}
