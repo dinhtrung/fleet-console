@@ -76,6 +76,7 @@ func New(cfg Config) (*fiber.App, error) {
 	api.Get("/stream", hub.Stream)
 	// Projects routes
 	RegisterProjectsRoutes(api, cfg, cfg.ConfigPath)
+	RegisterCultureRoutes(api, cfg, cfg.ConfigPath)
 	if board, ok := webui.FS(); ok {
 		app.Use(boardHandler(board, cfg.Token))
 	}

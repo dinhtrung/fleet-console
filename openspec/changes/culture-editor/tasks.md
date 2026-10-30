@@ -24,11 +24,11 @@
 
 ## 3. API (`internal/web`)
 
-- [ ] 3.1 `GET /api/projects/{key}/culture` → the design §2 body; `413` above the limit; unknown project → `404`.
-- [ ] 3.2 `PUT /api/projects/{key}/culture` → design §3 status table, success body `{sha256, bytes, mtime, backup}`.
-- [ ] 3.3 Route registration beside the existing project routes, under the same loopback session middleware.
-- [ ] 3.4 `culture.edited` event with `old_sha`, `new_sha`, `bytes`, `path` on every successful write.
-- [ ] 3.5 Handler tests: read, stale `409`, `413`, `422` (NUL and invalid UTF-8), `403` (mode `0444`), symlink `403`,
+- [x] 3.1 `GET /api/projects/{key}/culture` → the design §2 body; `413` above the limit; unknown project → `404`.
+- [x] 3.2 `PUT /api/projects/{key}/culture` → design §3 status table, success body `{sha256, bytes, mtime, backup}`.
+- [x] 3.3 Route registration beside the existing project routes, under the same loopback session middleware.
+- [x] 3.4 `culture.edited` event with `old_sha`, `new_sha`, `bytes`, `path` on every successful write.
+- [x] 3.5 Handler tests: read, stale `409`, `413`, `422` (NUL and invalid UTF-8), `403` (mode `0444`), symlink `403`,
       and one end-to-end save that leaves a `.bak` and an event row.
 - [x] 3.6 Config: optional `culture_file` on a project, validated at load (absolute or `~`, `.md` suffix) with a unit
       test that a directory or a non-markdown path is refused.
