@@ -2,6 +2,7 @@ package act
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -174,20 +175,52 @@ func TestVerdictCapture(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
-		name  string
-		head  string
-		notes []forge.Comment
-		want  string
+		name    string
+		head    string
+		notes   []forge.Comment
+		want    string
+		wantErr bool
 	}{
-		{"accept", "abc1234", []forge.Comment{{ID: "1", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"}}, "accept"},
+		{"accept", "abc1234", []forge.Comment{{ID: "1", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"}}, "accept", false},
 		{"later reject vetoes", "abc1234", []forge.Comment{
 			{ID: "2", Body: "REJECT abc1234", CreatedAt: "2026-10-29T11:00:00Z"},
 			{ID: "1", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
-		}, "reject"},
-		{"older sha ignored", "abc1234", []forge.Comment{
-			{ID: "2", Body: "REJECT deadbee", CreatedAt: "2026-10-29T11:00:00Z"},
+		}, "reject", false},
+		// The legitimate half of the old "older sha ignored" case: a verdict about
+		// a superseded head does not override one about this head. It holds because
+		// notes are read newest-first and the accept for this head is newer, not
+		// because the other-head note is skipped on sight.
+		{"older other-head reject does not veto a newer accept", "abc1234", []forge.Comment{
+			{ID: "2", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T11:00:00Z"},
+			{ID: "1", Body: "REJECT deadbee", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "accept", false},
+		// The defect this contract fixes: a rejection that cannot be tied to the
+		// head stops the merge instead of falling through to an older accept.
+		{"truncated sha in a rejection blocks", "abc1234", []forge.Comment{
+			{ID: "2", Body: "REJECT abc12", CreatedAt: "2026-10-29T11:00:00Z"},
 			{ID: "1", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
-		}, "accept"},
+		}, "", true},
+		{"rejection with no sha blocks", "abc1234", []forge.Comment{
+			{ID: "2", Body: "REJECT", CreatedAt: "2026-10-29T11:00:00Z"},
+			{ID: "1", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "", true},
+		{"rejection of another sha blocks", "abc1234", []forge.Comment{
+			{ID: "2", Body: "REJECT ffffffff", CreatedAt: "2026-10-29T11:00:00Z"},
+			{ID: "1", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "", true},
+		// Prose that mentions a verdict is not one, in either direction.
+		{"prose accept is not a verdict", "abc1234", []forge.Comment{
+			{ID: "2", Body: "Not ready to ACCEPT abc1234 until CI is green.", CreatedAt: "2026-10-29T11:00:00Z"},
+			{ID: "1", Body: "REJECT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "reject", false},
+		{"prose reject is not a verdict", "abc1234", []forge.Comment{
+			{ID: "2", Body: "I nearly wrote REJECT abc1234 here, but it passes.", CreatedAt: "2026-10-29T11:00:00Z"},
+			{ID: "1", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "accept", false},
+		// A verdict may carry a reason after the sha; that is how people write.
+		{"verdict with a trailing reason", "abc1234", []forge.Comment{
+			{ID: "1", Body: "ACCEPT abc1234 (PR #78, #66)", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "accept", false},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -198,6 +231,18 @@ func TestVerdictCapture(t *testing.T) {
 			}
 			actions := &Actions{Store: st, Now: func() time.Time { return now }}
 			captured, err := actions.CaptureVerdict(ctx, dispatchID, 5, test.head, test.notes)
+			if test.wantErr {
+				if !errors.Is(err, ErrUnattributableVerdict) {
+					t.Fatalf("err = %v, want ErrUnattributableVerdict", err)
+				}
+				if captured != nil {
+					t.Fatalf("captured = %+v, want none on a refusal", captured)
+				}
+				if verdicts, _ := st.Verdicts(ctx, dispatchID); len(verdicts) != 0 {
+					t.Fatalf("verdicts = %+v, want nothing stored on a refusal", verdicts)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("capture: %v", err)
 			}

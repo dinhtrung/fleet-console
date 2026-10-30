@@ -40,6 +40,7 @@ type Project struct {
 	Name           string   `yaml:"name"`
 	Forge          string   `yaml:"forge"`
 	Repo           string   `yaml:"repo"`
+	RepoURL        string   `yaml:"repo_url"`
 	DefaultBranch  string   `yaml:"default_branch"`
 	Rig            string   `yaml:"rig,omitempty"`
 	Rigs           []string `yaml:"rigs"`
@@ -51,7 +52,11 @@ type Project struct {
 	GateCmd string            `yaml:"gate_cmd"`
 	Labels  map[string]string `yaml:"labels"`
 	OnHold  *bool             `yaml:"onhold"`
-	Paths   struct {
+	// CultureFile is where this project's rig culture lives. Unset means the
+	// board derives it from the first rig; the loader resolves ~ here so the
+	// running service never has to guess at a home directory.
+	CultureFile string `yaml:"culture_file"`
+	Paths       struct {
 		Main      string `yaml:"main"`
 		Worktrees string `yaml:"worktrees"`
 	} `yaml:"paths"`
@@ -280,6 +285,13 @@ func Load(opts Options) (*Effective, error) {
 	}
 	for _, project := range file.Projects {
 		eff.Warnings = append(eff.Warnings, ProjectWarnings(project)...)
+		// repo_url is a slug in the file, not a URL: a self-hosted GitLab cannot
+		// be derived from it, so say so once at load rather than guess.
+		if project.Forge == "gitlab" && project.RepoURL == "" {
+			eff.Warnings = append(eff.Warnings, fmt.Sprintf(
+				"project %q: repo_url is not set; deriving https://gitlab.com/%s — set repo_url for a self-hosted GitLab",
+				project.Key, project.Repo))
+		}
 	}
 	eff.Projects = file.Projects
 	if len(file.Projects) > 0 {
@@ -394,6 +406,30 @@ func (e *Effective) Print() ([]byte, error) {
 	return yaml.Marshal(out)
 }
 
+// validateCultureFile resolves a project's culture_file against the config's
+// directory and home, and refuses a value the board could not edit: it must name
+// a markdown file, not a directory, absolute or ~-rooted. An unset key is the
+// normal case — the board derives the path from the first rig — and a path that
+// does not exist yet is accepted, because creating it is the editor's job.
+func validateCultureFile(project *Project, dir, home string) error {
+	value := strings.TrimSpace(project.CultureFile)
+	if value == "" {
+		return nil
+	}
+	if !filepath.IsAbs(value) && !strings.HasPrefix(value, "~/") && value != "~" {
+		return fmt.Errorf("config: project %q: culture_file %s must be absolute or start with ~/", project.Key, value)
+	}
+	resolved := resolve(dir, value, home)
+	if !strings.EqualFold(filepath.Ext(resolved), ".md") {
+		return fmt.Errorf("config: project %q: culture_file %s must be a markdown file", project.Key, resolved)
+	}
+	if info, err := os.Stat(resolved); err == nil && info.IsDir() {
+		return fmt.Errorf("config: project %q: culture_file %s is a directory", project.Key, resolved)
+	}
+	project.CultureFile = resolved
+	return nil
+}
+
 // FieldError is one rule failure on one field of a project.
 type FieldError struct {
 	Field   string
@@ -440,6 +476,7 @@ func ValidateProject(p *Project, dir, home string) error {
 	p.Key = strings.TrimSpace(p.Key)
 	p.Forge = strings.ToLower(strings.TrimSpace(p.Forge))
 	p.Repo = strings.TrimSpace(p.Repo)
+	p.RepoURL = strings.TrimSpace(p.RepoURL)
 	p.Name = strings.TrimSpace(p.Name)
 	p.DefaultBranch = strings.TrimSpace(p.DefaultBranch)
 
@@ -505,6 +542,12 @@ func ValidateProject(p *Project, dir, home string) error {
 
 	if len(failures) > 0 {
 		return &ValidationError{Errors: failures}
+	}
+	// culture_file is resolved and checked here rather than in the loader's own
+	// loop, because ValidateProject is the one place both the loader and the
+	// board's create route reach.
+	if err := validateCultureFile(p, dir, home); err != nil {
+		return err
 	}
 	return nil
 }

@@ -1,0 +1,22 @@
+PROJECT
+  key: fleet-console        name: fleet-console
+  forge: github             repo: dinhtrung/fleet-console
+  url: https://github.com/dinhtrung/fleet-console
+  branch: main              cap: 2
+  onhold: no                act: on
+  paths: main /home/dinhtrung/develop/fleet-console
+         worktrees /home/dinhtrung/develop
+
+RIG fleet-console · busy 2/3
+  ▶ dev-build-1  #62 backend: create a project from the boa…  27m
+  ▶ dev-build-2  #63 web: Projects surface and New project …  41m
+  ⏸ dev-review  idle — nothing to review
+
+▶ in progress (2)
+  #62 backend: create a project from the board
+      dev-build-1 · feature/62-p2-create-a-project · 27m
+  #63 web: Projects surface and New project dialog
+      dev-build-2 · feature/63-p2-projects-surface · 41m
+⏳ pending (0)
+⏸ on hold (0)
+epic: #64 create a project from the board — 1 of 2 done

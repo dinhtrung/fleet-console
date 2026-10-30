@@ -379,6 +379,15 @@ func (g *GitHub) Notes(ctx context.Context, number int) ([]Comment, error) {
 	return out, nil
 }
 
+// CRNotes reads the conversation on a pull request. GitHub keeps pull-request
+// comments in the same issue-comment stream as an issue's, but under the pull
+// request's own number — and that number is not the number of the issue the
+// pull request closes. Reading Notes(itemNumber) for a verdict therefore reads
+// the wrong conversation and finds nothing.
+func (g *GitHub) CRNotes(ctx context.Context, number int) ([]Comment, error) {
+	return g.Notes(ctx, number)
+}
+
 // SetMarker adds or removes the in-flight marker label.
 func (g *GitHub) SetMarker(ctx context.Context, number int, present bool) error {
 	flag := "--remove-label"
