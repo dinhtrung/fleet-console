@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/dinhtrung/fleet-console/internal/configfile"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/dinhtrung/fleet-console/internal/webui"
@@ -17,10 +18,15 @@ import (
 // Config wires the app. Token is required; the server refuses to start without
 // it rather than accepting an empty bearer.
 type Config struct {
-	Token  string
-	Compat func(ctx context.Context) rig.Report
-	Store  *store.Store
-	Rig    *rig.Adapter
+	Token      string
+	ConfigPath string
+	Compat     func(ctx context.Context) rig.Report
+	Store      *store.Store
+	Rig        *rig.Adapter
+	// WriteProject is the config writer, defaulting to configfile.UpsertProject.
+	// A test installs a wrapper here to hand-edit the file between the request's
+	// read and its write, which is the stale-read case.
+	WriteProject func(path string, in configfile.Project, expected *[32]byte) (configfile.Outcome, error)
 }
 
 // New builds the HTTP app. /api/health is open; every other /api route needs
@@ -29,6 +35,8 @@ func New(cfg Config) (*fiber.App, error) {
 	if cfg.Token == "" {
 		return nil, errors.New("web: bearer token is empty")
 	}
+	// ConfigPath is optional: a box with no config file still serves its board,
+	// and only the write route needs a file to write to. It answers 500 there.
 	compat := cfg.Compat
 	if compat == nil {
 		compat = func(context.Context) rig.Report {
@@ -37,10 +45,8 @@ func New(cfg Config) (*fiber.App, error) {
 	}
 
 	app := fiber.New(fiber.Config{
-		AppName:     "fleet-console",
-		ReadTimeout: 15 * time.Second,
-		// The event stream is long-lived, so the write timeout is long rather
-		// than absent; EventSource reconnects when a stream hits it.
+		AppName:      "fleet-console",
+		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 10 * time.Minute,
 		IdleTimeout:  60 * time.Second,
 	})
@@ -51,8 +57,6 @@ func New(cfg Config) (*fiber.App, error) {
 	app.Get("/api/health", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
-	// A board session is minted only after the token is presented. The board page
-	// itself is public; it must sign in to call /api.
 	app.Get("/login", loginPage)
 	app.Post("/login", loginSubmit(cfg.Token))
 	app.Post("/logout", logout)
@@ -70,6 +74,8 @@ func New(cfg Config) (*fiber.App, error) {
 	api.Get("/seats/:session/tail", fleet.SeatTail)
 	api.Get("/events", fleet.Events)
 	api.Get("/stream", hub.Stream)
+	// Projects routes
+	RegisterProjectsRoutes(api, cfg, cfg.ConfigPath)
 	if board, ok := webui.FS(); ok {
 		app.Use(boardHandler(board, cfg.Token))
 	}
