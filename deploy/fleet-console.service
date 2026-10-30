@@ -7,6 +7,9 @@ Wants=network-online.target
 Type=simple
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=%h/.config/fleet-console/fleet-console.env
+# Optional: TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID for the progress notices
+# (mode 0600, never in the repo). Absent -> the app logs one line and sends nothing.
+EnvironmentFile=-%h/.config/fleet-console/telegram.env
 ExecStart=%h/.local/bin/fleet-console --config %h/.config/fleet-console/config.yaml
 Restart=on-failure
 RestartSec=2
