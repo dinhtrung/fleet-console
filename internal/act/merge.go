@@ -10,6 +10,13 @@ import (
 )
 
 // MergeResult is the evidence of one watchdog merge.
+//
+// AuditGaps names every ledger write that failed after the merge had already
+// landed. Those are reported rather than returned: past that point the return
+// value describes the merge, and a merge that happened must not be reported as
+// one that did not. Before that point a ledger failure is returned instead,
+// because refusing then still leaves the pull request untouched and the row
+// retryable on the next tick.
 type MergeResult struct {
 	Merged        bool
 	ChangeRequest int
@@ -19,6 +26,14 @@ type MergeResult struct {
 	MarkerCleared bool
 	NextUnblocked int
 	Events        []int64
+	AuditGaps     []string
+}
+
+// gap records a ledger failure that must not fail the call, because the merge
+// has already landed. Keeping it on the result is the only option left: the
+// durable record is incomplete, and the caller is the one able to say so.
+func gap(result *MergeResult, kind string, err error) {
+	result.AuditGaps = append(result.AuditGaps, fmt.Sprintf("%s: %v", kind, err))
 }
 
 // Merge re-reads the four facts and refuses, naming the missing one. Only then
@@ -86,33 +101,40 @@ func (a *Actions) Merge(ctx context.Context, dispatchID int64, item int) (*Merge
 		if err := a.Forge.Ready(ctx, request.Number); err != nil {
 			return nil, fmt.Errorf("refusing merge: change request #%d is a draft and could not be marked ready: %w", request.Number, err)
 		}
-		if eventID, err := a.event(ctx, "act", "change_request.ready", fmt.Sprintf("#%d", item),
-			fmt.Sprintf("change request #%d taken out of draft before merge", request.Number)); err == nil {
-			_ = eventID
+		// Before Forge.Merge, so a ledger failure still refuses: the pull
+		// request stays out of draft and unmerged, and the next tick retries.
+		if _, err := a.event(ctx, "act", "change_request.ready", fmt.Sprintf("#%d", item),
+			fmt.Sprintf("change request #%d taken out of draft before merge", request.Number)); err != nil {
+			return nil, fmt.Errorf("refusing merge: change request #%d is ready but the ledger could not record it: %w", request.Number, err)
 		}
 	}
 
 	if err := a.Forge.Merge(ctx, request.Number, verdict.SHA); err != nil {
 		return nil, err
 	}
+	// Past this point the merge has landed, so nothing below returns an error for
+	// a bookkeeping failure: `nil, err` from here would tell the caller a merge
+	// did not happen when it did. Failures are collected in AuditGaps instead.
 	result := &MergeResult{Merged: true, ChangeRequest: request.Number, SHA: verdict.SHA}
-	eventID, err := a.event(ctx, "act", "merge", fmt.Sprintf("#%d", item),
-		fmt.Sprintf("change request #%d at %s", request.Number, verdict.SHA))
-	if err != nil {
-		return nil, err
+	if eventID, err := a.event(ctx, "act", "merge", fmt.Sprintf("#%d", item),
+		fmt.Sprintf("change request #%d at %s", request.Number, verdict.SHA)); err != nil {
+		gap(result, "merge event", err)
+	} else {
+		result.Events = append(result.Events, eventID)
 	}
-	result.Events = append(result.Events, eventID)
 	if dispatch.EndedAt != nil {
 		// The builder ended its row when it delivered; the merge still has to land and
 		// the item still has to close, so the row is bookkeeping, not the trigger.
-		if eventID, err := a.event(ctx, "act", "dispatch.merged", fmt.Sprintf("#%d", item), "merge landed after the row ended: "+dispatch.EndReason); err == nil {
+		if eventID, err := a.event(ctx, "act", "dispatch.merged", fmt.Sprintf("#%d", item), "merge landed after the row ended: "+dispatch.EndReason); err != nil {
+			gap(result, "dispatch.merged event", err)
+		} else {
 			result.Events = append(result.Events, eventID)
 		}
 	} else if err := a.Store.EndDispatch(ctx, dispatchID, "merged"); err != nil {
-		return nil, err
+		gap(result, "end dispatch", err)
 	}
 	if eventID, err := a.event(ctx, "act", "dispatch.merged", fmt.Sprintf("#%d", item), "dispatch ended merged"); err != nil {
-		return nil, err
+		gap(result, "dispatch.merged event", err)
 	} else {
 		result.Events = append(result.Events, eventID)
 	}
@@ -160,21 +182,26 @@ func (a *Actions) Finalize(ctx context.Context, dispatchID int64, item int, requ
 			detail = fmt.Sprintf("change request #%d only referenced #%d (Refs); closed by the app", request.Number, item)
 		}
 		if eventID, err := a.event(ctx, "act", "item.close", fmt.Sprintf("#%d", item), detail); err != nil {
-			return result, err
+			gap(result, "item.close event", err)
 		} else {
 			result.Events = append(result.Events, eventID)
 		}
 	} else if current != nil {
 		result.ClosedItem = true
 	}
+	// The forge writes here (CloseItem, SetMarker) still return errors: an item
+	// that stays open or a marker left behind is a real failure an operator must
+	// act on. Only the ledger writes below are gaps, per the rule above.
 	if err := a.Forge.SetMarker(ctx, item, false); err != nil {
-		if eventID, eventErr := a.event(ctx, "act", "marker.clear.failed", fmt.Sprintf("#%d", item), err.Error()); eventErr == nil {
+		if eventID, eventErr := a.event(ctx, "act", "marker.clear.failed", fmt.Sprintf("#%d", item), err.Error()); eventErr != nil {
+			gap(result, "marker.clear.failed event", eventErr)
+		} else {
 			result.Events = append(result.Events, eventID)
 		}
 	} else {
 		result.MarkerCleared = true
 		if eventID, err := a.event(ctx, "act", "marker.clear", fmt.Sprintf("#%d", item), "in-flight marker cleared"); err != nil {
-			return result, err
+			gap(result, "marker.clear event", err)
 		} else {
 			result.Events = append(result.Events, eventID)
 		}
@@ -183,7 +210,7 @@ func (a *Actions) Finalize(ctx context.Context, dispatchID int64, item int, requ
 		result.NextUnblocked = next
 		if eventID, err := a.event(ctx, "act", "item.unblocked", fmt.Sprintf("#%d", next),
 			fmt.Sprintf("waits only on #%d", item)); err != nil {
-			return result, err
+			gap(result, "item.unblocked event", err)
 		} else {
 			result.Events = append(result.Events, eventID)
 		}
