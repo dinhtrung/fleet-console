@@ -119,7 +119,8 @@ export interface ItemDetail {
   events: EventRow[] | null;
 }
 
-/** Project registry */
+/** Project registry. The shapes are the config file's tags (`design.md` §5), so the dialog and the
+ *  writer cannot drift: a field named here is a field `POST /api/projects` reads. */
 export interface Project {
   key: string;
   name: string;
@@ -132,15 +133,14 @@ export interface Project {
     main: string;
     worktrees: string;
   };
-  rig_template: string;
-  labels: Record<string, string>;
-  onhold: boolean | null;
-  gate_cmd: string | null;
+  rig_template?: string;
+  labels?: Record<string, string>;
+  onhold?: boolean | null;
+  gate_cmd?: string;
 }
 
 export interface ProjectsResponse {
   projects: Project[];
-  synced_at: string;
 }
 
 export interface CreateProjectInput {
@@ -155,25 +155,29 @@ export interface CreateProjectInput {
     main: string;
     worktrees: string;
   };
-  rig_template: string;
-  labels: Record<string, string>;
-  onhold: boolean;
-  gate_cmd: string;
 }
 
 export interface CreateProjectResponse {
   project: Project;
-  warnings: string[];
+  warnings: string[] | null;
 }
 
-export interface ApiError {
-  status: number;
-  field_errors: Record<string, string>;
-  message: string;
+/** A refusal from the service. `fieldErrors` is the `422` body's `errors` map, kept as a map so the
+ *  dialog can put each message on the input it belongs to instead of in one flat sentence. */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly fieldErrors: Record<string, string>;
+
+  constructor(status: number, message: string, fieldErrors: Record<string, string> = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.fieldErrors = fieldErrors;
+  }
 }
 
 export function isApiError(error: unknown): error is ApiError {
-  return typeof error === "object" && error !== null && "status" in error && "field_errors" in error;
+  return error instanceof ApiError;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -186,23 +190,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!response.ok) {
-    const error: ApiError = {
-      status: response.status,
-      field_errors: {},
-      message: "",
-    };
+    // Both project routes answer a refusal as `{error: "<sentence>", errors?: {<field>: "<message>"}}`.
+    // The map is the only shape trusted to be one; anything else falls back to the status text.
+    let message = response.statusText;
+    let fieldErrors: Record<string, string> = {};
     try {
-      const body = await response.json();
-      if (body.field_errors) {
-        error.field_errors = body.field_errors;
-      }
-      if (body.message) {
-        error.message = body.message;
+      const body: unknown = await response.json();
+      if (body && typeof body === "object") {
+        const { error, errors } = body as { error?: unknown; errors?: unknown };
+        if (typeof error === "string" && error) message = error;
+        if (errors && typeof errors === "object") fieldErrors = errors as Record<string, string>;
       }
     } catch {
-      error.message = response.statusText;
+      // A body that is not JSON leaves the status text as the message.
     }
-    throw error;
+    throw new ApiError(response.status, message, fieldErrors);
   }
   return response.json();
 }

@@ -172,25 +172,26 @@ const featureFlagsRoute = createRoute({
   path: "/feature-flags",
   component: FeatureFlagsScreen,
 });
-	const routeTree = rootRoute.addChildren([
-		dashboardRoute,
-		projectsRoute,
-		decisionsRoute,
-		seatsRoute,
-		taskDrawerRoute,
-		usersRoute,
-		userDetailRoute,
-		rolesRoute,
-		roleDetailRoute,
-		organizationsRoute,
-		organizationDetailRoute,
-		sessionsRoute,
-		auditRoute,
-		auditDetailRoute,
-		settingsRoute,
-		apiKeysRoute,
-		featureFlagsRoute,
-	]);
+
+const routeTree = rootRoute.addChildren([
+  dashboardRoute,
+  projectsRoute,
+  decisionsRoute,
+  seatsRoute,
+  taskDrawerRoute,
+  usersRoute,
+  userDetailRoute,
+  rolesRoute,
+  roleDetailRoute,
+  organizationsRoute,
+  organizationDetailRoute,
+  sessionsRoute,
+  auditRoute,
+  auditDetailRoute,
+  settingsRoute,
+  apiKeysRoute,
+  featureFlagsRoute,
+]);
 
 export const router = createRouter({ routeTree, defaultPreload: false });
 

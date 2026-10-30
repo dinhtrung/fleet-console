@@ -1,384 +1,430 @@
-import { getProjects, createProject } from "../lib/fleet";
-import { useQuery } from "@tanstack/react-query";
+/** Projects: the registry the dispatcher reads, and the one form that adds to it.
+ *
+ *  The list comes from `GET /api/projects`; the dialog posts the config file's own field names and
+ *  puts a `422` on the input it names. Client-side rules mirror the server's, so the common mistake
+ *  costs no round trip — and a field the server refuses still wins, because its message replaces
+ *  the local one. A create that succeeds but warns (a `paths.main` that does not exist yet) keeps
+ *  the dialog open with the note: the project exists, and the operator still has to clone it. */
+
 import { useState } from "react";
-import { Plus, Loader2 } from "lucide-react";
-import { Badge, Button, Dialog, DialogContent, DialogHeader, DialogTitle, Label } from "../components/ui";
-import { LoadingRows, EmptyState, ErrorState } from "../components/ui";
-import type { FormEvent } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus } from "lucide-react";
+import { createProject, getProjects, isApiError } from "../lib/fleet";
+import type { CreateProjectInput, Project } from "../lib/fleet";
+import {
+  Badge,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  EmptyState,
+  ErrorState,
+  LoadingRows,
+  Panel,
+  SelectInput,
+  TextInput,
+  useToast,
+} from "../components/ui";
+import { PageHeader } from "../shell/PageHeader";
+
+/** The server's key rule, verbatim (`config.ValidateProject`): lowercase, 1–32 characters, starting
+ *  with a letter or a digit. */
+const KEY_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+const FORGES = [
+  { value: "github", label: "GitHub" },
+  { value: "gitlab", label: "GitLab" },
+];
+
+/** Field keys this dialog can paint. Anything else the service names is shown as a dialog-level
+ *  message rather than silently dropped. */
+const FIELD_KEYS: Record<string, true> = {
+  key: true,
+  name: true,
+  forge: true,
+  repo: true,
+  default_branch: true,
+  rigs: true,
+  concurrency_cap: true,
+  "paths.main": true,
+  "paths.worktrees": true,
+};
+
+type Draft = {
+  key: string;
+  name: string;
+  forge: string;
+  repo: string;
+  default_branch: string;
+  rigs: string;
+  concurrency_cap: string;
+  paths_main: string;
+  paths_worktrees: string;
+};
+
+const BLANK: Draft = {
+  key: "",
+  name: "",
+  forge: "github",
+  repo: "",
+  default_branch: "main",
+  rigs: "",
+  concurrency_cap: "2",
+  paths_main: "",
+  paths_worktrees: "",
+};
+
+function splitRigs(value: string): string[] {
+  return value
+    .split(",")
+    .map((rig) => rig.trim())
+    .filter(Boolean);
+}
+
+function validate(draft: Draft): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (!draft.key.trim()) errors.key = "A key is required.";
+  else if (!KEY_RE.test(draft.key.trim()))
+    errors.key = "Lowercase letters, digits and hyphens only, up to 32 characters, starting with a letter or digit.";
+  if (!draft.name.trim()) errors.name = "A name is required.";
+  if (!draft.repo.trim()) errors.repo = "A repo is required, as owner/name.";
+  if (!draft.default_branch.trim()) errors.default_branch = "A default branch is required.";
+  const rigs = splitRigs(draft.rigs);
+  if (rigs.length === 0) errors.rigs = "At least one rig is required.";
+  else if (new Set(rigs).size !== rigs.length) errors.rigs = "A rig is named twice.";
+  const cap = Number(draft.concurrency_cap);
+  if (!Number.isInteger(cap) || cap < 0) errors.concurrency_cap = "A whole number, zero or more.";
+  return errors;
+}
 
 export function ProjectsScreen() {
-  const [toast, setToast] = useState<{ title: string; description: string; variant?: "default" | "destructive" } | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [formData, setFormData] = useState({
-    key: "",
-    name: "",
-    forge: "github" as "github" | "gitlab",
-    repo: "",
-    default_branch: "main",
-    rigs: [] as string[],
-    concurrency_cap: 2,
-    paths: { main: "", worktrees: "" },
-    rig_template: "default",
-    labels: {},
-    onhold: false,
-    gate_cmd: "",
-  });
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const projects = useQuery({ queryKey: ["projects"], queryFn: getProjects });
 
-  const { data: projectsResponse, isLoading, error, refetch } = useQuery({
-    queryKey: ["projects"],
-    queryFn: getProjects,
-  });
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<Draft>(BLANK);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [formError, setFormError] = useState<string | null>(null);
+  const [created, setCreated] = useState<{ project: Project; warnings: string[] } | null>(null);
 
-  const handleFieldChange = (field: string, value: string | number | boolean | string[]) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-    if (fieldErrors[field]) {
-      setFieldErrors((prev) => ({ ...prev, [field]: "" }));
-    }
-  };
-
-  const validateForm = (): boolean => {
-    const errors: Record<string, string> = {};
-    if (!formData.key) errors.key = "Key is required";
-    else if (!/^[a-z0-9-]+$/.test(formData.key)) errors.key = "Must be lowercase alphanumeric with hyphens";
-    if (!formData.name) errors.name = "Name is required";
-    if (!formData.forge) errors.forge = "Forge is required";
-    if (!formData.repo) errors.repo = "Repo is required (owner/name)";
-    if (!formData.paths.main) errors["paths.main"] = "paths.main is required";
-    if (formData.rigs.length === 0) errors.rigs = "At least one rig is required";
-    if (formData.concurrency_cap < 1) errors.concurrency_cap = "Must be at least 1";
-    setFieldErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!validateForm()) return;
-    setSubmitting(true);
-    try {
-      const response = await createProject(formData);
-      setToast({
-        title: "Project created",
-        description: `${response.project.name} (${response.project.key}) added`,
-      });
-      if (response.warnings && response.warnings.length > 0) {
-        setTimeout(() => {
-          setToast({
-            title: "Warning",
-            description: response.warnings.join("; "),
-            variant: "destructive",
-          });
-        }, 500);
+  const create = useMutation({
+    mutationFn: (input: CreateProjectInput) => createProject(input),
+    onSuccess: async (response) => {
+      // The board lists projects from its own query; refreshing both means the new project is there
+      // without a reload (`design.md` §6).
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["projects"] }),
+        queryClient.invalidateQueries({ queryKey: ["board"] }),
+      ]);
+      setDraft(BLANK);
+      setErrors({});
+      setFormError(null);
+      const warnings = response.warnings ?? [];
+      if (warnings.length > 0) {
+        setCreated({ project: response.project, warnings });
+        return;
       }
-      setDialogOpen(false);
-      setFormData({
-        key: "",
-        name: "",
-        forge: "github",
-        repo: "",
-        default_branch: "main",
-        rigs: [],
-        concurrency_cap: 2,
-        paths: { main: "", worktrees: "" },
-        rig_template: "default",
-        labels: {},
-        onhold: false,
-        gate_cmd: "",
-      });
-      refetch();
-    } catch (err: unknown) {
-      if (err && typeof err === "object" && "status" in err && "field_errors" in err) {
-        const apiErr = err as unknown as { field_errors: Record<string, string>; message: string };
-        setFieldErrors(apiErr.field_errors);
-      } else {
-        setToast({ title: "Error", description: "Failed to create project", variant: "destructive" });
+      setOpen(false);
+      toast.done(`“${response.project.name}” added`, `${response.project.key} is on the board.`);
+    },
+    onError: (error) => {
+      if (isApiError(error) && Object.keys(error.fieldErrors).length > 0) {
+        const onField: Record<string, string> = {};
+        const rest: string[] = [];
+        for (const [field, message] of Object.entries(error.fieldErrors)) {
+          if (FIELD_KEYS[field]) onField[field] = message;
+          else rest.push(message);
+        }
+        setErrors(onField);
+        setFormError(rest.length > 0 ? rest.join(" ") : null);
+        return;
       }
-    } finally {
-      setSubmitting(false);
-    }
+      setFormError(isApiError(error) ? error.message : "The service could not be reached.");
+    },
+  });
+
+  const busy = create.isPending;
+
+  const change = (field: keyof Draft, value: string) => {
+    setDraft((current) => ({ ...current, [field]: value }));
+    const errorKey = field.replace("_", ".");
+    setErrors((current) => {
+      if (!current[errorKey]) return current;
+      const next = { ...current };
+      delete next[errorKey];
+      return next;
+    });
   };
+
+  const openDialog = () => {
+    setDraft(BLANK);
+    setErrors({});
+    setFormError(null);
+    setCreated(null);
+    setOpen(true);
+  };
+
+  const closeDialog = () => {
+    if (busy) return;
+    setOpen(false);
+    setCreated(null);
+    setFormError(null);
+    setErrors({});
+  };
+
+  const submit = () => {
+    const found = validate(draft);
+    setErrors(found);
+    setFormError(null);
+    if (Object.keys(found).length > 0) return;
+    create.mutate({
+      key: draft.key.trim(),
+      name: draft.name.trim(),
+      forge: draft.forge === "gitlab" ? "gitlab" : "github",
+      repo: draft.repo.trim(),
+      default_branch: draft.default_branch.trim(),
+      rigs: splitRigs(draft.rigs),
+      concurrency_cap: Number(draft.concurrency_cap),
+      paths: {
+        main: draft.paths_main.trim(),
+        worktrees: draft.paths_worktrees.trim(),
+      },
+    });
+  };
+
+  const list = projects.data?.projects ?? [];
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold">Projects</h1>
-        <Button onClick={() => setDialogOpen(true)} className="gap-2">
-          <Plus className="h-4 w-4" />
-          New project
-        </Button>
+    <div className="flex flex-col">
+      <PageHeader
+        title="Projects"
+        count={projects.data ? list.length : undefined}
+        description="The registry the dispatcher reads. A project added here is written into config.yaml and mirrored to the board."
+        actions={
+          <Button variant="primary" icon={<Plus size={14} aria-hidden="true" />} onClick={openDialog}>
+            New project
+          </Button>
+        }
+      />
+      <div className="px-3 py-3 sm:px-5">
+        <Panel>
+          {projects.isLoading ? (
+            <LoadingRows rows={4} />
+          ) : projects.error ? (
+            <ErrorState
+              title="Projects did not load"
+              error={projects.error}
+              onRetry={() => void projects.refetch()}
+            />
+          ) : list.length === 0 ? (
+            <EmptyState
+              title="The project registry is empty"
+              body="No project is registered in the config file the service was started with. Add the first one and the board has something to dispatch."
+              action={
+                <Button variant="outline" icon={<Plus size={14} aria-hidden="true" />} onClick={openDialog}>
+                  Add first project
+                </Button>
+              }
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-body">
+                <thead>
+                  <tr className="border-b border-rule text-left">
+                    <th className="label px-3 py-1.5 font-medium text-ink-muted">Key</th>
+                    <th className="label px-3 py-1.5 font-medium text-ink-muted">Name</th>
+                    <th className="label px-3 py-1.5 font-medium text-ink-muted">Forge</th>
+                    <th className="label px-3 py-1.5 font-medium text-ink-muted">Repo</th>
+                    <th className="label px-3 py-1.5 font-medium text-ink-muted">Rigs</th>
+                    <th className="label px-3 py-1.5 text-right font-medium text-ink-muted">Cap</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {list.map((project) => (
+                    <tr key={project.key} className="border-b border-rule last:border-0">
+                      <td className="px-3 py-[var(--density-row-pad-y)] font-mono text-[0.6875rem] text-ink">
+                        {project.key}
+                      </td>
+                      <td className="px-3 py-[var(--density-row-pad-y)] text-ink">{project.name}</td>
+                      <td className="px-3 py-[var(--density-row-pad-y)]">
+                        <Badge tone={project.forge === "github" ? "quiet" : "tint"} mono>
+                          {project.forge}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-[var(--density-row-pad-y)] font-mono text-[0.6875rem] text-ink">
+                        {project.repo}
+                      </td>
+                      <td className="px-3 py-[var(--density-row-pad-y)]">
+                        <span className="flex flex-wrap items-center gap-1">
+                          {project.rigs.map((rig) => (
+                            <Badge key={rig} tone="quiet" mono>
+                              {rig}
+                            </Badge>
+                          ))}
+                        </span>
+                      </td>
+                      <td className="num px-3 py-[var(--density-row-pad-y)] text-right text-ink">
+                        {project.concurrency_cap}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
       </div>
 
-      {isLoading ? (
-        <LoadingRows rows={5} />
-      ) : error ? (
-        <ErrorState
-          title="Failed to load projects"
-          error={error}
-          onRetry={() => refetch()}
-        />
-      ) : !projectsResponse?.projects?.length ? (
-        <EmptyState
-          title="No projects registered"
-          body="The project registry is empty. Add your first project to start dispatching work."
-          action={
-            <Button onClick={() => setDialogOpen(true)} className="gap-2">
-              <Plus className="h-4 w-4" />
-              Add first project
-            </Button>
-          }
-        />
-      ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full" role="table">
-            <thead>
-              <tr className="border-b border-rule-strong bg-muted/50">
-                <th className="px-4 py-3 text-left font-medium">Key</th>
-                <th className="px-4 py-3 text-left font-medium">Name</th>
-                <th className="px-4 py-3 text-left font-medium">Forge</th>
-                <th className="px-4 py-3 text-left font-medium">Repo</th>
-                <th className="px-4 py-3 text-left font-medium">Rigs</th>
-                <th className="px-4 py-3 text-right font-medium">Cap</th>
-              </tr>
-            </thead>
-            <tbody>
-              {projectsResponse?.projects?.map((project) => (
-                <tr key={project.key} className="border-b border-rule">
-                  <td className="px-4 py-3 font-mono">{project.key}</td>
-                  <td className="px-4 py-3">{project.name}</td>
-                  <td className="px-4 py-3">
-                    <Badge tone={project.forge === "github" ? "quiet" : "tint"}>
-                      {project.forge}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3 font-mono text-sm">{project.repo}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-1">
-                      {project.rigs.map((rig) => (
-                        <Badge key={rig} tone="quiet" className="text-xs">
-                          {rig}
-                        </Badge>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right font-mono">{project.concurrency_cap}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) closeDialog();
+        }}
+      >
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>New project</DialogTitle>
+            <DialogTitle>{created ? "Project created" : "New project"}</DialogTitle>
+            <DialogDescription>
+              {created
+                ? "The project is written and on the board. Below is what the service could not check yet."
+                : "Every field here is a field in config.yaml. The service validates the same rules and names the field it refuses."}
+            </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4 p-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="key">Key *</Label>
-                <input
-                  id="key"
-                  type="text"
-                  value={formData.key}
-                  onChange={(e) => handleFieldChange("key", e.target.value)}
-                  placeholder="my-project"
-                  disabled={submitting}
-                  className="flex h-8 w-full rounded-chip border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  aria-invalid={!!fieldErrors.key}
-                />
-                {fieldErrors.key && <p className="text-sm text-destructive">{fieldErrors.key}</p>}
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="name">Name *</Label>
-                <input
-                  id="name"
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => handleFieldChange("name", e.target.value)}
-                  placeholder="My Project"
-                  disabled={submitting}
-                  className="flex h-8 w-full rounded-chip border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  aria-invalid={!!fieldErrors.name}
-                />
-                {fieldErrors.name && <p className="text-sm text-destructive">{fieldErrors.name}</p>}
-              </div>
-            </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="forge">Forge *</Label>
-                <select
-                  id="forge"
-                  value={formData.forge}
-                  onChange={(e) => handleFieldChange("forge", e.target.value as "github" | "gitlab")}
-                  disabled={submitting}
-                  className="flex h-8 w-full rounded-chip border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  aria-invalid={!!fieldErrors.forge}
-                >
-                  <option value="github">GitHub</option>
-                  <option value="gitlab">GitLab</option>
-                </select>
-                {fieldErrors.forge && <p className="text-sm text-destructive">{fieldErrors.forge}</p>}
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="repo">Repo *</Label>
-                <input
-                  id="repo"
-                  type="text"
-                  value={formData.repo}
-                  onChange={(e) => handleFieldChange("repo", e.target.value)}
-                  placeholder="owner/name"
-                  disabled={submitting}
-                  className="flex h-8 w-full rounded-chip border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  aria-invalid={!!fieldErrors.repo}
-                />
-                {fieldErrors.repo && <p className="text-sm text-destructive">{fieldErrors.repo}</p>}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="default_branch">Default branch</Label>
-                <input
-                  id="default_branch"
-                  type="text"
-                  value={formData.default_branch}
-                  onChange={(e) => handleFieldChange("default_branch", e.target.value)}
-                  disabled={submitting}
-                  className="flex h-8 w-full rounded-chip border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="concurrency_cap">Concurrency cap *</Label>
-                <input
-                  id="concurrency_cap"
-                  type="number"
-                  min="1"
-                  value={formData.concurrency_cap}
-                  onChange={(e) => handleFieldChange("concurrency_cap", parseInt(e.target.value) || 0)}
-                  disabled={submitting}
-                  className="flex h-8 w-full rounded-chip border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  aria-invalid={!!fieldErrors.concurrency_cap}
-                />
-                {fieldErrors.concurrency_cap && <p className="text-sm text-destructive">{fieldErrors.concurrency_cap}</p>}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="rigs">Rigs (comma-separated) *</Label>
-                <input
-                  id="rigs"
-                  type="text"
-                  value={formData.rigs.join(", ")}
-                  onChange={(e) => handleFieldChange("rigs", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))}
-                  placeholder="fleet-console, ghost"
-                  disabled={submitting}
-                  className="flex h-8 w-full rounded-chip border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                  aria-invalid={!!fieldErrors.rigs}
-                />
-                {fieldErrors.rigs && <p className="text-sm text-destructive">{fieldErrors.rigs}</p>}
-                <p className="text-xs text-muted-foreground">Comma-separated list of rig names</p>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="rig_template">Rig template</Label>
-                <input
-                  id="rig_template"
-                  type="text"
-                  value={formData.rig_template}
-                  onChange={(e) => handleFieldChange("rig_template", e.target.value)}
-                  disabled={submitting}
-                  className="flex h-8 w-full rounded-chip border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="paths.main">paths.main *</Label>
-              <input
-                id="paths.main"
-                type="text"
-                value={formData.paths.main}
-                onChange={(e) => handleFieldChange("paths.main", e.target.value)}
-                placeholder="~/src/my-project"
-                disabled={submitting}
-                className="flex h-8 w-full rounded-chip border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                aria-invalid={!!fieldErrors["paths.main"]}
-              />
-              {fieldErrors["paths.main"] && <p className="text-sm text-destructive">{fieldErrors["paths.main"]}</p>}
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="paths.worktrees">paths.worktrees</Label>
-              <input
-                id="paths.worktrees"
-                type="text"
-                value={formData.paths.worktrees}
-                onChange={(e) => handleFieldChange("paths.worktrees", e.target.value)}
-                placeholder="~/src/worktrees"
-                disabled={submitting}
-                className="flex h-8 w-full rounded-chip border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="gate_cmd">Gate command</Label>
-                <input
-                  id="gate_cmd"
-                  type="text"
-                  value={formData.gate_cmd}
-                  onChange={(e) => handleFieldChange("gate_cmd", e.target.value)}
-                  placeholder="scripts/gate.sh"
-                  disabled={submitting}
-                  className="flex h-8 w-full rounded-chip border border-input bg-background px-3 py-1.5 text-sm placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                />
-              </div>
-              <div className="space-y-1.5 flex items-end">
-                <Label htmlFor="onhold">On hold</Label>
-                <input
-                  id="onhold"
-                  type="checkbox"
-                  checked={formData.onhold}
-                  onChange={(e) => handleFieldChange("onhold", e.target.checked)}
-                  disabled={submitting}
-                  className="peer h-4 w-4 shrink-0 rounded-chip border border-input"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-4 border-t">
-              <button
-                type="button"
-                onClick={() => setDialogOpen(false)}
-                disabled={submitting}
-                className="inline-flex items-center justify-center gap-2 rounded-chip border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          {created ? (
+            <div className="flex flex-col gap-2">
+              <p className="text-body text-ink">
+                <span className="font-mono text-[0.6875rem] text-ink-muted">{created.project.key}</span>{" "}
+                {created.project.name}
+              </p>
+              <ul
+                className="flex flex-col gap-1 border border-rule bg-ground px-2 py-1.5 text-[0.6875rem] text-ink-muted"
+                aria-live="polite"
               >
-                Cancel
-              </button>
-              <button type="submit" disabled={submitting} className="inline-flex items-center justify-center gap-2 rounded-chip bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50">
-                {submitting && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                Create project
-              </button>
+                {created.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
             </div>
-          </form>
+          ) : (
+            <form
+              className="flex flex-col gap-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submit();
+              }}
+            >
+              <div className="grid gap-3 sm:grid-cols-2">
+                <TextInput
+                  label="Key"
+                  value={draft.key}
+                  onChange={(event) => change("key", event.target.value)}
+                  error={errors.key}
+                  hint="Lowercase, hyphenated — the name the other surfaces use."
+                  autoComplete="off"
+                />
+                <TextInput
+                  label="Name"
+                  value={draft.name}
+                  onChange={(event) => change("name", event.target.value)}
+                  error={errors.name}
+                  autoComplete="off"
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <SelectInput
+                  label="Forge"
+                  value={draft.forge}
+                  onChange={(event) => change("forge", event.target.value)}
+                  error={errors.forge}
+                  options={FORGES}
+                />
+                <TextInput
+                  label="Repo"
+                  value={draft.repo}
+                  onChange={(event) => change("repo", event.target.value)}
+                  error={errors.repo}
+                  hint="owner/name, as the forge spells it."
+                  autoComplete="off"
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <TextInput
+                  label="Default branch"
+                  value={draft.default_branch}
+                  onChange={(event) => change("default_branch", event.target.value)}
+                  error={errors.default_branch}
+                  autoComplete="off"
+                />
+                <TextInput
+                  label="Concurrency cap"
+                  type="number"
+                  min={0}
+                  value={draft.concurrency_cap}
+                  onChange={(event) => change("concurrency_cap", event.target.value)}
+                  error={errors.concurrency_cap}
+                  hint="How many items may build at once."
+                />
+              </div>
+              <TextInput
+                label="Rigs"
+                value={draft.rigs}
+                onChange={(event) => change("rigs", event.target.value)}
+                error={errors.rigs}
+                hint="Comma-separated in dispatch order, for example “fleet-console, ghost”."
+                autoComplete="off"
+              />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <TextInput
+                  label="paths.main"
+                  value={draft.paths_main}
+                  onChange={(event) => change("paths_main", event.target.value)}
+                  error={errors["paths.main"]}
+                  hint="The checkout. A path that does not exist yet is accepted, with a warning."
+                  autoComplete="off"
+                />
+                <TextInput
+                  label="paths.worktrees"
+                  value={draft.paths_worktrees}
+                  onChange={(event) => change("paths_worktrees", event.target.value)}
+                  error={errors["paths.worktrees"]}
+                  hint="Where per-item worktrees are cut."
+                  autoComplete="off"
+                />
+              </div>
+              {formError ? (
+                <p
+                  role="alert"
+                  className="border border-rule bg-ground px-2 py-1.5 text-[0.6875rem] font-semibold text-attention"
+                >
+                  {formError}
+                </p>
+              ) : null}
+            </form>
+          )}
+
+          <DialogFooter>
+            {created ? (
+              <Button variant="primary" onClick={closeDialog}>
+                Done
+              </Button>
+            ) : (
+              <>
+                <Button variant="quiet" onClick={closeDialog} disabled={busy}>
+                  Cancel
+                </Button>
+                <Button variant="primary" onClick={submit} busy={busy}>
+                  Create project
+                </Button>
+              </>
+            )}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
-        {toast && (
-          <div className={`flex items-center gap-2 rounded-lg border bg-background p-4 shadow-lg ${toast.variant === "destructive" ? "border-destructive" : "border-border"}`}>
-            <div className="flex-1">
-              <p className="font-medium">{toast.title}</p>
-              <p className="text-sm text-muted-foreground">{toast.description}</p>
-            </div>
-            <button onClick={() => setToast(null)} className="text-muted-foreground hover:text-foreground">×</button>
-          </div>
-        )}
-      </div>
     </div>
   );
-
 }

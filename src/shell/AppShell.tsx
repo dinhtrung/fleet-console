@@ -26,12 +26,12 @@ interface NavItem {
 const NAV: { group: string; items: NavItem[] }[] = [
   {
     group: "Board",
-  items: [
-    { to: "/", label: "Board", permission: "dashboard.read" },
-    { to: "/decisions", label: "Decisions", permission: "dashboard.read" },
-    { to: "/seats", label: "Seats", permission: "dashboard.read" },
-    { to: "/projects", label: "Projects", permission: "dashboard.read" },
-  ],
+    items: [
+      { to: "/", label: "Board", permission: "dashboard.read" },
+      { to: "/decisions", label: "Decisions", permission: "dashboard.read" },
+      { to: "/seats", label: "Seats", permission: "dashboard.read" },
+      { to: "/projects", label: "Projects", permission: "dashboard.read" },
+    ],
   },
 ];
 
