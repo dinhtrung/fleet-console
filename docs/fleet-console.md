@@ -54,8 +54,10 @@ Two outcomes are worth knowing because they stall a merge rather than being sile
   outlives its sha. That is stricter than an accept and it is deliberate: in a multi-attempt thread
   the reviewer's objection may still stand.
 
-Both unblock the same way: post a verdict whose sha is the current head. Nothing is written to the
-store for a refusal, so the next tick retries and the note stays until it is answered.
+Both unblock the same way: post a verdict naming the **full** head sha — the whole 40-hex commit id,
+not an abbreviation. An abbreviated sha is refused like any other unattributable verdict, and one
+that is long enough to parse but is not the head is skipped. Nothing is written to the store for a
+refusal, so the next tick retries and the note stays until it is answered.
 
 ## What it refuses to be
 
