@@ -225,7 +225,22 @@ func (r *Runner) clone(ctx context.Context, in Input) Result {
 // hand-edited spec is left alone until the operator asks for a reapply.
 func (r *Runner) applyRig(ctx context.Context, in Input) Result {
 	result := Result{Step: StepApplyRig, Command: "rig specs sync"}
-	spec, rendered, err := rig.RenderRig(in.Project)
+	// CulturePath is the file the rig copies into its spec dir, so a caller that
+	// supplied one under `Culture` has said everything the renderer needs.
+	project := in.Project
+	if strings.TrimSpace(project.CulturePath) == "" {
+		project.CulturePath = strings.TrimSpace(in.Culture)
+	}
+	// Nothing here may invent a culture file — the culture editor's rule is that
+	// a missing one is explained, not created. So when there is none, name the
+	// field the operator has to set instead of passing on the renderer's "culture
+	// file is required", which gives them nothing to act on.
+	if strings.TrimSpace(project.CulturePath) == "" {
+		result.State = StateFailed
+		result.Output = "no culture file: set culture_file on the project, or create CULTURE.md under its rig's spec directory; the app never invents one"
+		return result
+	}
+	spec, rendered, err := rig.RenderRig(project)
 	if err != nil {
 		result.State = StateFailed
 		result.Output = err.Error()

@@ -425,14 +425,14 @@ func validateCultureFile(project *Project, dir, home string) error {
 		return nil
 	}
 	if !filepath.IsAbs(value) && !strings.HasPrefix(value, "~/") && value != "~" {
-		return fmt.Errorf("config: project %q: culture_file %s must be absolute or start with ~/", project.Key, value)
+		return cultureFieldError(project.Key, fmt.Sprintf("culture_file %s must be absolute or start with ~/", value))
 	}
 	resolved := resolve(dir, value, home)
 	if !strings.EqualFold(filepath.Ext(resolved), ".md") {
-		return fmt.Errorf("config: project %q: culture_file %s must be a markdown file", project.Key, resolved)
+		return cultureFieldError(project.Key, fmt.Sprintf("culture_file %s must be a markdown file", resolved))
 	}
 	if info, err := os.Stat(resolved); err == nil && info.IsDir() {
-		return fmt.Errorf("config: project %q: culture_file %s is a directory", project.Key, resolved)
+		return cultureFieldError(project.Key, fmt.Sprintf("culture_file %s is a directory", resolved))
 	}
 	project.CultureFile = resolved
 	return nil
@@ -558,6 +558,16 @@ func ValidateProject(p *Project, dir, home string) error {
 		return err
 	}
 	return nil
+}
+
+// cultureFieldError is a per-field refusal: the board's 422 puts it on the
+// culture_file input, and Error() keeps the loader's one-sentence voice with the
+// project named, so config.Load prints what it always printed.
+func cultureFieldError(key, message string) error {
+	return &ValidationError{Errors: []FieldError{{
+		Field:   "culture_file",
+		Message: fmt.Sprintf("config: project %q: %s", key, message),
+	}}}
 }
 
 // ProjectWarnings names what a valid definition is missing but may not be
