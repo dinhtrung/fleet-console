@@ -492,11 +492,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 				}
 				fmt.Fprintf(stderr, "act: %s dispatches=%d verdicts=%d merges=%d skipped=%d\n",
 					project.Key, len(report.Dispatches), len(report.Verdicts), len(report.Merges), len(report.Skipped))
-					// A skip is the only place a dispatch failure is visible: name each one, because
-					// "skipped=2" over one project tells the operator nothing about which write failed.
-					for _, why := range report.Skipped {
-						fmt.Fprintf(stderr, "act-skip: %s: %s\n", project.Key, why)
-					}
+				// A skip is the only place a dispatch failure is visible: name each one, because
+				// "skipped=2" over one project tells the operator nothing about which write failed.
+				for _, why := range report.Skipped {
+					fmt.Fprintf(stderr, "act-skip: %s: %s\n", project.Key, why)
+				}
 			}
 		},
 	)
