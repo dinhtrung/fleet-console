@@ -36,6 +36,29 @@ A merge happens only when four facts are true, re-read at the moment of the merg
 
 Anything unknown refuses and names the missing fact. The reviewer keeps the judgement; the app keeps the button.
 
+### Reading a verdict
+
+A verdict is a note whose **first line** starts with the token and a sha: `ACCEPT <sha>`,
+`REJECT <sha>`, and either may carry a reason after the sha — `ACCEPT <sha> (PR #78, #66)`.
+Prose that merely mentions a token is not a verdict, and a note is never scanned beyond its first
+line.
+
+Two outcomes are worth knowing because they stall a merge rather than being silently absorbed:
+
+- **A verdict that cannot be tied to the head blocks.** `REJECT` with a truncated, absent or
+  mistyped sha refuses the merge and names the note in the tick log, rather than falling through
+  to an earlier `ACCEPT`. Before this, a reviewer's withdrawal was dropped whenever the sha did not
+  parse and an older accept merged the change.
+- **A rejection naming another sha blocks too.** An `ACCEPT` for a superseded head is skipped — it
+  says nothing about the current commit — but a `REJECT` for one is treated as a statement that
+  outlives its sha. That is stricter than an accept and it is deliberate: in a multi-attempt thread
+  the reviewer's objection may still stand.
+
+Both unblock the same way: post a verdict naming the **full** head sha — the whole 40-hex commit id,
+not an abbreviation. An abbreviated sha is refused like any other unattributable verdict, and one
+that is long enough to parse but is not the head is skipped. Nothing is written to the store for a
+refusal, so the next tick retries and the note stays until it is answered.
+
 ## What it refuses to be
 
 - **No model in the dispatch path.** Ordering is a contract, not a judgement call.
