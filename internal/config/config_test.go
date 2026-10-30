@@ -64,7 +64,7 @@ func TestPrecedenceFlagThenEnvThenFileThenDefault(t *testing.T) {
 func TestUnknownKeyNamesIt(t *testing.T) {
 	dir := t.TempDir()
 	path := writeConfig(t, dir, "listen: 127.0.0.1:8787\nnope: true\n")
-	_, err := Load(Options{FlagPath: path, Home: dir, Cwd: dir})
+	_, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
 	if err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Fatalf("error = %v, want the unknown key named", err)
 	}
@@ -73,7 +73,7 @@ func TestUnknownKeyNamesIt(t *testing.T) {
 func TestMalformedYAMLNamesLine(t *testing.T) {
 	dir := t.TempDir()
 	path := writeConfig(t, dir, "listen: [unclosed\n")
-	_, err := Load(Options{FlagPath: path, Home: dir, Cwd: dir})
+	_, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "line") {
 		t.Fatalf("error = %v, want a line number", err)
 	}
@@ -86,14 +86,14 @@ func TestTokenFileMode(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := writeConfig(t, dir, "token_file: token\n")
-	_, err := Load(Options{FlagPath: path, Home: dir, Cwd: dir})
+	_, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
 	if err == nil || !strings.Contains(err.Error(), "0600") || !strings.Contains(err.Error(), tokenPath) {
 		t.Fatalf("error = %v, want the file and 0600", err)
 	}
 	if err := os.Chmod(tokenPath, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	eff, err := Load(Options{FlagPath: path, Home: dir, Cwd: dir})
+	eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestEnvTokenWinsOverFile(t *testing.T) {
 func TestInlineTokenWarnsAndPrintRedacts(t *testing.T) {
 	dir := t.TempDir()
 	path := writeConfig(t, dir, "token: super-secret\nlisten: 127.0.0.1:9000\n")
-	eff, err := Load(Options{FlagPath: path, Home: dir, Cwd: dir})
+	eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestProjectValidation(t *testing.T) {
 	}
 	for name, body := range cases {
 		path := writeConfig(t, dir, body)
-		if _, err := Load(Options{FlagPath: path, Home: dir, Cwd: dir}); err == nil {
+		if _, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir}); err == nil {
 			t.Fatalf("%s: want an error", name)
 		}
 		os.Remove(path)
@@ -159,7 +159,7 @@ func TestProjectValidation(t *testing.T) {
 func TestMissingMainPathWarns(t *testing.T) {
 	dir := t.TempDir()
 	path := writeConfig(t, dir, "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rig: a\n    paths:\n      main: ./does-not-exist\n")
-	eff, err := Load(Options{FlagPath: path, Home: dir, Cwd: dir})
+	eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestRepoURLWarning(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeConfig(t, dir, tc.body)
-			eff, err := Load(Options{FlagPath: path, Home: dir, Cwd: dir})
+			eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
 			if err != nil {
 				t.Fatalf("load: %v", err)
 			}
@@ -239,7 +239,7 @@ func TestLookupOrder(t *testing.T) {
 func TestTickIntervalFromFileAndEnv(t *testing.T) {
 	dir := t.TempDir()
 	path := writeConfig(t, dir, "tick_interval: 10m\n")
-	eff, err := Load(Options{FlagPath: path, Home: dir, Cwd: dir})
+	eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
 	if err != nil || eff.TickInterval != 10*time.Minute || eff.Sources["tick_interval"] != "file" {
 		t.Fatalf("tick = %s (%s), %v", eff.TickInterval, eff.Sources["tick_interval"], err)
 	}
