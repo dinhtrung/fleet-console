@@ -35,16 +35,16 @@
 
 ## 4. Culture screen (`src/`)
 
-- [ ] 4.1 `src/lib/fleet.ts`: `getCulture(key)` and `putCulture(key, content, baseSHA)`, with `409` surfaced as a
+- [x] 4.1 `src/lib/fleet.ts`: `getCulture(key)` and `putCulture(key, content, baseSHA)`, with `409` surfaced as a
       typed conflict carrying the current sha and mtime (the same shape `createProject` uses for `422`).
-- [ ] 4.2 `src/screens/CultureScreen.tsx`: header (`rig`, `derived|config`, path, short sha, size, mtime), rendered
+- [x] 4.2 `src/screens/CultureScreen.tsx`: header (`rig`, `derived|config`, path, short sha, size, mtime), rendered
       markdown, **Edit**.
-- [ ] 4.3 Edit mode: monospace textarea, byte counter against 256 KiB, Save/Cancel, dirty indicator, confirm before
+- [x] 4.3 Edit mode: monospace textarea, byte counter against 256 KiB, Save/Cancel, dirty indicator, confirm before
       leaving with unsaved changes.
-- [ ] 4.4 `409` banner: current sha + mtime, `Load latest`, `Overwrite` (resend with the current sha).
-- [ ] 4.5 Success: new sha, backup name, and the sentence about running seats + no restart button.
-- [ ] 4.6 `not_configured`/`exists: false` state: expected path, the `culture_file` key, copy button, no editor.
-- [ ] 4.7 Router and `AppShell` nav entry for `/culture`, beside Board / Decisions / Seats.
+- [x] 4.4 `409` banner: current sha + mtime, `Load latest`, `Overwrite` (resend with the current sha).
+- [x] 4.5 Success: new sha, backup name, and the sentence about running seats + no restart button.
+- [x] 4.6 `not_configured`/`exists: false` state: expected path, the `culture_file` key, copy button, no editor.
+- [x] 4.7 Router and `AppShell` nav entry for `/culture`, beside Board / Decisions / Seats.
 
 ## 5. Gates
 
