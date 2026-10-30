@@ -39,6 +39,7 @@ type Project struct {
 	Name           string            `yaml:"name"`
 	Forge          string            `yaml:"forge"`
 	Repo           string            `yaml:"repo"`
+	RepoURL        string            `yaml:"repo_url"`
 	DefaultBranch  string            `yaml:"default_branch"`
 	Rig            string            `yaml:"rig,omitempty"`
 	Rigs           []string          `yaml:"rigs"`
@@ -280,6 +281,13 @@ func Load(opts Options) (*Effective, error) {
 	}
 	for _, project := range file.Projects {
 		eff.Warnings = append(eff.Warnings, ProjectWarnings(project)...)
+		// repo_url is a slug in the file, not a URL: a self-hosted GitLab cannot
+		// be derived from it, so say so once at load rather than guess.
+		if project.Forge == "gitlab" && project.RepoURL == "" {
+			eff.Warnings = append(eff.Warnings, fmt.Sprintf(
+				"project %q: repo_url is not set; deriving https://gitlab.com/%s — set repo_url for a self-hosted GitLab",
+				project.Key, project.Repo))
+		}
 	}
 	eff.Projects = file.Projects
 	if len(file.Projects) > 0 {
@@ -464,6 +472,7 @@ func ValidateProject(p *Project, dir, home string) error {
 	p.Key = strings.TrimSpace(p.Key)
 	p.Forge = strings.ToLower(strings.TrimSpace(p.Forge))
 	p.Repo = strings.TrimSpace(p.Repo)
+	p.RepoURL = strings.TrimSpace(p.RepoURL)
 	p.Name = strings.TrimSpace(p.Name)
 	p.DefaultBranch = strings.TrimSpace(p.DefaultBranch)
 
