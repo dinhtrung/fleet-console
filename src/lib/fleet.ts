@@ -249,8 +249,12 @@ export const getSeatTail = (session: string, lines = 24) =>
 export const getEvents = () => request<{ events: EventRow[] }>("/api/events?limit=50");
 
 export function shortTime(value?: string): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (isNaN(date.getTime())) return value;
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (!value) return "—";
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return value;
+  const seconds = Math.max(0, Math.round((Date.now() - at.getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+  return `${Math.round(seconds / 86400)}d ago`;
 }

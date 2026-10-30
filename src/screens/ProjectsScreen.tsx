@@ -65,6 +65,21 @@ type Draft = {
   paths_worktrees: string;
 };
 
+/** The error key each draft field owns. Only the two path fields differ, but they must be spelled
+ *  out: deriving it by rewriting an underscore would have `concurrency_cap` clear
+ *  `concurrency.cap`. */
+const ERROR_KEY: Record<keyof Draft, string> = {
+  key: "key",
+  name: "name",
+  forge: "forge",
+  repo: "repo",
+  default_branch: "default_branch",
+  rigs: "rigs",
+  concurrency_cap: "concurrency_cap",
+  paths_main: "paths.main",
+  paths_worktrees: "paths.worktrees",
+};
+
 const BLANK: Draft = {
   key: "",
   name: "",
@@ -163,7 +178,7 @@ export function ProjectsScreen() {
 
   const change = (field: keyof Draft, value: string) => {
     setDraft((current) => ({ ...current, [field]: value }));
-    const errorKey = field.replace("_", ".");
+    const errorKey = ERROR_KEY[field];
     setErrors((current) => {
       if (!current[errorKey]) return current;
       const next = { ...current };
