@@ -46,7 +46,11 @@ type Project struct {
 	GateCmd        string            `yaml:"gate_cmd"`
 	Labels         map[string]string `yaml:"labels"`
 	OnHold         *bool             `yaml:"onhold"`
-	Paths          struct {
+	// CultureFile is where this project's rig culture lives. Unset means the
+	// board derives it from the first rig; the loader resolves ~ here so the
+	// running service never has to guess at a home directory.
+	CultureFile string `yaml:"culture_file"`
+	Paths       struct {
 		Main      string `yaml:"main"`
 		Worktrees string `yaml:"worktrees"`
 	} `yaml:"paths"`
@@ -328,6 +332,9 @@ func Load(opts Options) (*Effective, error) {
 					fmt.Sprintf("project %q: paths.main %s does not exist yet", project.Key, project.Paths.Main))
 			}
 		}
+		if err := validateCultureFile(&project, dir, home); err != nil {
+			return nil, err
+		}
 		if project.DefaultBranch == "" {
 			project.DefaultBranch = "main"
 		}
@@ -447,4 +454,28 @@ func (e *Effective) Print() ([]byte, error) {
 		out.Token = "<redacted>"
 	}
 	return yaml.Marshal(out)
+}
+
+// validateCultureFile resolves a project's culture_file against the config's
+// directory and home, and refuses a value the board could not edit: it must name
+// a markdown file, not a directory, absolute or ~-rooted. An unset key is the
+// normal case — the board derives the path from the first rig — and a path that
+// does not exist yet is accepted, because creating it is the editor's job.
+func validateCultureFile(project *Project, dir, home string) error {
+	value := strings.TrimSpace(project.CultureFile)
+	if value == "" {
+		return nil
+	}
+	if !filepath.IsAbs(value) && !strings.HasPrefix(value, "~/") && value != "~" {
+		return fmt.Errorf("config: project %q: culture_file %s must be absolute or start with ~/", project.Key, value)
+	}
+	resolved := resolve(dir, value, home)
+	if !strings.EqualFold(filepath.Ext(resolved), ".md") {
+		return fmt.Errorf("config: project %q: culture_file %s must be a markdown file", project.Key, resolved)
+	}
+	if info, err := os.Stat(resolved); err == nil && info.IsDir() {
+		return fmt.Errorf("config: project %q: culture_file %s is a directory", project.Key, resolved)
+	}
+	project.CultureFile = resolved
+	return nil
 }

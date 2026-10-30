@@ -300,3 +300,67 @@ func TestProjectTimeoutDefaultsFileAndPrint(t *testing.T) {
 		t.Fatal("load accepted ceiling below base")
 	}
 }
+
+// TestCultureFile: an optional per-project override of where the rig culture
+// lives. Absolute or ~-rooted, markdown, never a directory; a relative path or a
+// directory is refused at load so the board never opens something it cannot edit.
+func TestCultureFile(t *testing.T) {
+	home := t.TempDir()
+	dir := t.TempDir()
+
+	accepted := map[string]string{
+		"absolute":  filepath.Join(dir, "rules", "CULTURE.md"),
+		"home":      "~/specs/rigs/fleet-console/CULTURE.md",
+		"not there": filepath.Join(dir, "not-yet", "CULTURE.md"),
+	}
+	for name, value := range accepted {
+		t.Run("accepted/"+name, func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    culture_file: "+value+"\n")
+			eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: home, Cwd: dir})
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			want := value
+			if strings.HasPrefix(value, "~/") {
+				want = filepath.Join(home, value[2:])
+			}
+			if eff.Projects[0].CultureFile != want {
+				t.Fatalf("culture_file = %q, want %q resolved", eff.Projects[0].CultureFile, want)
+			}
+		})
+	}
+
+	asDirectory := filepath.Join(dir, "a-directory.md")
+	if err := os.MkdirAll(asDirectory, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	refused := map[string]string{
+		"relative":  "CULTURE.md",
+		"not md":    filepath.Join(dir, "CULTURE.txt"),
+		"no suffix": filepath.Join(dir, "CULTURE"),
+		"directory": asDirectory,
+		// Quoted, because YAML reads an unquoted ~ as null — the same bytes as
+		// "not set", which is why the case has to say what it means.
+		"bare tilde": `"~"`,
+	}
+	for name, value := range refused {
+		t.Run("refused/"+name, func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    culture_file: "+value+"\n")
+			if _, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: home, Cwd: dir}); err == nil {
+				t.Fatalf("load accepted culture_file %q", value)
+			} else if !strings.Contains(err.Error(), "culture_file") {
+				t.Fatalf("error = %v, want it to name culture_file", err)
+			}
+		})
+	}
+
+	// Unset is the normal case and must stay silent.
+	path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n")
+	eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: home, Cwd: dir})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if eff.Projects[0].CultureFile != "" {
+		t.Fatalf("culture_file = %q, want empty", eff.Projects[0].CultureFile)
+	}
+}
