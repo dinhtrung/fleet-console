@@ -320,7 +320,11 @@ type Project struct {
 	GateCmd        string            `yaml:"gate_cmd"`
 	Labels         map[string]string `yaml:"labels"`
 	OnHold         *bool             `yaml:"onhold"`
-	Paths          struct {
+	// CultureFile is where this project's rig culture lives. Omitted when empty:
+	// config.Load derives it from the first rig, and a written `culture_file: ""`
+	// would be a different (invalid) statement than "unset".
+	CultureFile string `yaml:"culture_file,omitempty"`
+	Paths       struct {
 		Main      string `yaml:"main"`
 		Worktrees string `yaml:"worktrees"`
 	} `yaml:"paths"`

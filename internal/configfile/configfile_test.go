@@ -445,3 +445,62 @@ func countLines(s, substr string) int {
 	}
 	return count
 }
+
+// TestUpsertProjectWritesCultureFile: the board can create a project that names
+// its culture file. Without this the field is silently dropped on the way to the
+// file, and a board-created project can never render a rig (#110).
+func TestUpsertProjectWritesCultureFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	culture := filepath.Join(dir, "CULTURE.md")
+
+	p := Project{
+		Key: "proj", Name: "Project", Forge: "github", Repo: "owner/repo",
+		DefaultBranch: "main", Rigs: []string{"rig-1"}, RigTemplate: "default",
+		ConcurrencyCap: 2, CultureFile: culture,
+	}
+	if _, err := UpsertProject(path, p, nil); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(data), "culture_file: "+culture) {
+		t.Fatalf("file does not carry the culture file:\n%s", data)
+	}
+
+	// And the loader reads it back, which is the half that makes apply_rig work.
+	eff, err := config.Load(config.Options{FlagPath: path, Env: func(string) string { return "" }, Home: dir, Cwd: dir})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if eff.Projects[0].CultureFile != culture {
+		t.Fatalf("culture_file = %q, want %q", eff.Projects[0].CultureFile, culture)
+	}
+}
+
+// TestUpsertProjectOmitsEmptyCultureFile: a project that names none must not gain
+// `culture_file: ""` — that is a different statement from "unset", and the
+// loader would refuse it ("must be a markdown file").
+func TestUpsertProjectOmitsEmptyCultureFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	p := Project{
+		Key: "proj", Name: "Project", Forge: "github", Repo: "owner/repo",
+		DefaultBranch: "main", Rigs: []string{"rig-1"}, RigTemplate: "default", ConcurrencyCap: 2,
+	}
+	if _, err := UpsertProject(path, p, nil); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.Contains(string(data), "culture_file") {
+		t.Fatalf("an unset culture_file was written:\n%s", data)
+	}
+	if _, err := config.Load(config.Options{FlagPath: path, Env: func(string) string { return "" }, Home: dir, Cwd: dir}); err != nil {
+		t.Fatalf("the written file does not load: %v", err)
+	}
+}

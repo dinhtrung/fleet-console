@@ -80,6 +80,21 @@ func (h *projectsHarness) bytes(t *testing.T) []byte {
 	return data
 }
 
+func (h *projectsHarness) get(t *testing.T, path string) (*http.Response, []byte) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set(fiber.HeaderAuthorization, "Bearer "+testToken)
+	resp, err := h.app.Test(req)
+	if err != nil {
+		t.Fatalf("get %s: %v", path, err)
+	}
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return resp, out
+}
+
 func (h *projectsHarness) post(t *testing.T, body string) (*http.Response, []byte) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/projects", bytes.NewBufferString(body))
@@ -413,4 +428,82 @@ func TestCreateProjectTypedRefusals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCreateProjectCarriesCultureFile: the board can create a project that names
+// its culture file, and GET reads it back. Without this the field is dropped on
+// the way in and apply_rig can never succeed for a board-created project (#110).
+func TestCreateProjectCarriesCultureFile(t *testing.T) {
+	h := newProjectsHarness(t, nil)
+	culture := filepath.Join(filepath.Dir(h.path), "specs", "rigs", "rig-a", "CULTURE.md")
+	body := `{"key":"with-culture","name":"With culture","forge":"github","repo":"org/wc",
+	  "rigs":["rig-a2"],"concurrency_cap":1,"culture_file":` + quoteJSON(culture) + `}`
+
+	resp, out := h.post(t, body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (%s)", resp.StatusCode, out)
+	}
+	var created CreateProjectResponse
+	if err := json.Unmarshal(out, &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.Project.CultureFile != culture {
+		t.Fatalf("created culture_file = %q, want %q", created.Project.CultureFile, culture)
+	}
+
+	// The file on disk carries it, and the loader reads it back — the two halves
+	// that make it reachable at all.
+	written, err := os.ReadFile(h.path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(written), "culture_file: "+culture) {
+		t.Fatalf("config does not carry culture_file:\n%s", written)
+	}
+
+	// GET /api/projects reports it too, so the board shows what it stored.
+	listResp, listBody := h.get(t, "/api/projects")
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d (%s)", listResp.StatusCode, listBody)
+	}
+	var listed ProjectsListResponse
+	if err := json.Unmarshal(listBody, &listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	var found bool
+	for _, project := range listed.Projects {
+		if project.Key == "with-culture" {
+			found = true
+			if project.CultureFile != culture {
+				t.Fatalf("listed culture_file = %q, want %q", project.CultureFile, culture)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the created project is not in GET /api/projects")
+	}
+}
+
+// TestCreateProjectRefusesBadCultureFile: the same rule the loader enforces, so a
+// project the board accepts is one the next boot accepts.
+func TestCreateProjectRefusesBadCultureFile(t *testing.T) {
+	h := newProjectsHarness(t, nil)
+	body := `{"key":"bad-culture","name":"Bad","forge":"github","repo":"org/bc",
+	  "rigs":["rig-a3"],"concurrency_cap":1,"culture_file":"CULTURE.md"}`
+	resp, out := h.post(t, body)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 for a relative culture_file (%s)", resp.StatusCode, out)
+	}
+	var answer ErrorResponse
+	if err := json.Unmarshal(out, &answer); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !strings.Contains(answer.Errors["culture_file"], "absolute") {
+		t.Fatalf("errors = %v, want a culture_file message", answer.Errors)
+	}
+}
+
+func quoteJSON(s string) string {
+	encoded, _ := json.Marshal(s)
+	return string(encoded)
 }

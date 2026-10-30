@@ -309,3 +309,61 @@ func TestAuditCarriesCommandAndLastLine(t *testing.T) {
 		t.Fatalf("clone audit = %q, want the command and its last line", cloneDetail)
 	}
 }
+
+// TestApplyRigNamesTheMissingCultureFile: a project created from the board has no
+// culture file, and the step must say which field to set rather than passing on
+// the renderer's "culture file is required" with nothing to act on (#110).
+func TestApplyRigNamesTheMissingCultureFile(t *testing.T) {
+	var calls []string
+	runner, _ := newRunner(t, &fakeRig{}, &calls)
+	in := baseInput(t, t.TempDir(), filepath.Join(t.TempDir(), "co"))
+	in.Culture = ""
+	in.Project.CulturePath = ""
+
+	results, err := runner.Run(context.Background(), in, []string{StepApplyRig})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(results) != 1 || results[0].State != StateFailed {
+		t.Fatalf("results = %+v, want one failed apply_rig", results)
+	}
+	got := results[0].Output
+	for _, want := range []string{"culture_file", "CULTURE.md", "never invents one"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output = %q, want it to name %q", got, want)
+		}
+	}
+	// Nothing may be written when the step refuses: a spec dir with a rig.yaml
+	// and no culture is the state the renderer exists to prevent.
+	if _, err := os.Stat(filepath.Join(in.Home, ".openrig", "specs", "rigs", "rig-a")); !os.IsNotExist(err) {
+		t.Fatal("the refused step wrote a spec directory")
+	}
+}
+
+// TestApplyRigDerivesFromSuppliedCulture: when the caller hands the chain a
+// culture file but the project row does not name its path, the step uses it
+// rather than failing — the file is what the renderer needs.
+func TestApplyRigDerivesFromSuppliedCulture(t *testing.T) {
+	var calls []string
+	runner, _ := newRunner(t, &fakeRig{}, &calls)
+	in := baseInput(t, t.TempDir(), filepath.Join(t.TempDir(), "co"))
+	name := in.Project.CulturePath
+	in.Project.CulturePath = "" // only Input.Culture is set by baseInput's file
+	in.Culture = name
+
+	results, err := runner.Run(context.Background(), in, []string{StepApplyRig})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if results[0].State != StateDone {
+		t.Fatalf("state = %s (%s), want done", results[0].State, results[0].Output)
+	}
+	// The rendered spec's culture is the copy beside it, and the copy exists.
+	written, err := os.ReadFile(filepath.Join(in.Home, ".openrig", "specs", "rigs", "rig-a", "CULTURE.md"))
+	if err != nil {
+		t.Fatalf("no culture copied into the spec dir: %v", err)
+	}
+	if string(written) != "# rules\n" {
+		t.Fatalf("copied culture = %q", written)
+	}
+}

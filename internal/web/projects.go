@@ -29,7 +29,12 @@ type ProjectRequest struct {
 	GateCmd        string            `json:"gate_cmd"`
 	Labels         map[string]string `json:"labels"`
 	OnHold         *bool             `json:"onhold"`
-	Paths          struct {
+	// CultureFile is where the rig culture lives. Without it a board-created
+	// project can never run `apply_rig`: internal/rig refuses to render a rig
+	// with no culture file, and nothing derives one (design: "a missing culture
+	// file is explained, not created").
+	CultureFile string `json:"culture_file"`
+	Paths       struct {
 		Main      string `json:"main"`
 		Worktrees string `json:"worktrees"`
 	} `json:"paths"`
@@ -48,6 +53,7 @@ type ProjectResponse struct {
 	GateCmd        string            `json:"gate_cmd"`
 	Labels         map[string]string `json:"labels"`
 	OnHold         *bool             `json:"onhold"`
+	CultureFile    string            `json:"culture_file"`
 	Paths          struct {
 		Main      string `json:"main"`
 		Worktrees string `json:"worktrees"`
@@ -120,6 +126,7 @@ func createProject(st *store.Store, configPath string, write func(string, config
 			GateCmd:        req.GateCmd,
 			Labels:         req.Labels,
 			OnHold:         req.OnHold,
+			CultureFile:    req.CultureFile,
 		}
 		project.Paths.Main = req.Paths.Main
 		project.Paths.Worktrees = req.Paths.Worktrees
@@ -149,6 +156,7 @@ func createProject(st *store.Store, configPath string, write func(string, config
 			GateCmd:        project.GateCmd,
 			Labels:         project.Labels,
 			OnHold:         project.OnHold,
+			CultureFile:    project.CultureFile,
 		}
 		written.Paths.Main = project.Paths.Main
 		written.Paths.Worktrees = project.Paths.Worktrees
@@ -279,6 +287,7 @@ func projectResponse(project config.Project, source string) ProjectResponse {
 		GateCmd:        project.GateCmd,
 		Labels:         project.Labels,
 		OnHold:         project.OnHold,
+		CultureFile:    project.CultureFile,
 		Source:         source,
 	}
 	out.Paths.Main = project.Paths.Main
