@@ -2,12 +2,12 @@
 
 ## 1. The rule (`internal/act/rollup.go`)
 
-- [ ] 1.1 `func Rollup(parent *int, items []forge.Item) (Decision, error)` — pure, no forge, no store: returns
+- [x] 1.1 `func Rollup(parent *int, items []forge.Item) (Decision, error)` — pure, no forge, no store: returns
       `Close` with the child count, or `Skip` with the reason (`no parent`, `parent not an epic`,
       `N sub-issues still open (#a, #b)`, `no sub-issues in the snapshot`, `epic already closed`).
-- [ ] 1.2 Children are the items whose `Parent` equals the parent number; both open and closed are counted so the
+- [x] 1.2 Children are the items whose `Parent` equals the parent number; both open and closed are counted so the
       "no sub-issues" case cannot be confused with "all closed".
-- [ ] 1.3 Table-driven tests: all closed / one open / none in snapshot / parent not epic / no parent / parent closed.
+- [x] 1.3 Table-driven tests: all closed / one open / none in snapshot / parent not epic / no parent / parent closed.
 
 ## 2. The write (`internal/act/tick.go`, after `Finalize`)
 
