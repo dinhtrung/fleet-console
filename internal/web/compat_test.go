@@ -24,7 +24,7 @@ func blockedCompat(context.Context) rig.Report {
 // TestCompatReportsBlocked: a failed probe is `blocked`, not a report that
 // merely logs and lets the caller guess.
 func TestCompatReportsBlocked(t *testing.T) {
-	app, err := New(Config{Token: "test-token",  Compat: blockedCompat, ConfigPath: "/tmp/fake-config.yaml"})
+	app, err := New(Config{Token: "test-token", Compat: blockedCompat, ConfigPath: "/tmp/fake-config.yaml"})
 	if err != nil {
 		t.Fatalf("app: %v", err)
 	}

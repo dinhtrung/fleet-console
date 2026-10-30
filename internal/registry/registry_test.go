@@ -1,4 +1,4 @@
-package main
+package registry
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"github.com/dinhtrung/fleet-console/internal/store"
 )
 
-func registryStore(t *testing.T) *store.Store {
+func testStore(t *testing.T) *store.Store {
 	t.Helper()
 	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "fleet.db"))
 	if err != nil {
@@ -22,7 +22,7 @@ func registryStore(t *testing.T) *store.Store {
 	return st
 }
 
-func registryProjects() []config.Project {
+func testProjects() []config.Project {
 	return []config.Project{
 		{Key: "a", Name: "A", Forge: "github", Repo: "o/a", Rig: "a", ConcurrencyCap: 1},
 		{Key: "b", Name: "B", Forge: "github", Repo: "o/b", Rig: "b", ConcurrencyCap: 1},
@@ -40,9 +40,9 @@ func projectByKey(t *testing.T, st *store.Store, key string) *store.ProjectRow {
 
 func TestApplyDisablesAbsentAndReenables(t *testing.T) {
 	ctx := context.Background()
-	st := registryStore(t)
-	projects := registryProjects()
-	if _, err := applyProjects(ctx, st, projects, false, true); err != nil {
+	st := testStore(t)
+	projects := testProjects()
+	if _, err := Apply(ctx, st, projects, false, true); err != nil {
 		t.Fatalf("first apply: %v", err)
 	}
 	before := projectByKey(t, st, "b")
@@ -53,7 +53,7 @@ func TestApplyDisablesAbsentAndReenables(t *testing.T) {
 		t.Fatalf("onhold: %v", err)
 	}
 
-	applied, err := applyProjects(ctx, st, projects[:1], false, true)
+	applied, err := Apply(ctx, st, projects[:1], false, true)
 	if err != nil {
 		t.Fatalf("apply after removal: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestApplyDisablesAbsentAndReenables(t *testing.T) {
 		t.Fatalf("b = %+v, want the same id %d and onhold kept", disabled, before.ID)
 	}
 
-	applied, err = applyProjects(ctx, st, projects, false, true)
+	applied, err = Apply(ctx, st, projects, false, true)
 	if err != nil {
 		t.Fatalf("re-add apply: %v", err)
 	}
@@ -83,9 +83,9 @@ func TestApplyDisablesAbsentAndReenables(t *testing.T) {
 
 func TestPruneRefusesLiveDispatchThenDeletes(t *testing.T) {
 	ctx := context.Background()
-	st := registryStore(t)
-	projects := registryProjects()
-	if _, err := applyProjects(ctx, st, projects, false, true); err != nil {
+	st := testStore(t)
+	projects := testProjects()
+	if _, err := Apply(ctx, st, projects, false, true); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
 	b := projectByKey(t, st, "b")
@@ -102,7 +102,7 @@ func TestPruneRefusesLiveDispatchThenDeletes(t *testing.T) {
 		t.Fatalf("items: %v", err)
 	}
 
-	_, err = pruneProjects(ctx, st, projects[:1])
+	_, err = Prune(ctx, st, projects[:1])
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprint(dispatchID)) {
 		t.Fatalf("prune error = %v, want it to name dispatch %d", err, dispatchID)
 	}
@@ -113,7 +113,7 @@ func TestPruneRefusesLiveDispatchThenDeletes(t *testing.T) {
 	if err := st.EndDispatch(ctx, dispatchID, "merged"); err != nil {
 		t.Fatalf("end dispatch: %v", err)
 	}
-	pruned, err := pruneProjects(ctx, st, projects[:1])
+	pruned, err := Prune(ctx, st, projects[:1])
 	if err != nil {
 		t.Fatalf("prune: %v", err)
 	}
@@ -132,5 +132,45 @@ func TestPruneRefusesLiveDispatchThenDeletes(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Fatalf("items = %+v, want b's items deleted with the project", items)
+	}
+}
+
+// TestApplyOneIsIdempotent: the board's create path runs ApplyOne, and the
+// next --apply-config must find nothing to change.
+func TestApplyOneIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	st := testStore(t)
+	project := config.Project{
+		Key: "new-proj", Name: "New", Forge: "github", Repo: "o/new",
+		Rigs: []string{"rig-a"}, ConcurrencyCap: 2, DefaultBranch: "main",
+		Labels: map[string]string{"status::ongoing": "in flight"},
+	}
+	project.Paths.Main = "/srv/new"
+	project.Paths.Worktrees = "/srv/wt"
+
+	first, err := ApplyOne(ctx, st, project, false)
+	if err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	if first != store.UpsertCreated {
+		t.Fatalf("first = %q, want created", first)
+	}
+	second, err := ApplyOne(ctx, st, project, false)
+	if err != nil {
+		t.Fatalf("second apply: %v", err)
+	}
+	if second != store.UpsertUnchanged {
+		t.Fatalf("second = %q, want unchanged", second)
+	}
+	row := projectByKey(t, st, "new-proj")
+	if row == nil || row.LabelsJSON != `{"status::ongoing":"in flight"}` {
+		t.Fatalf("row = %+v, want the posted labels stored", row)
+	}
+	if row.ConcurrencyCap != 2 || len(row.Rigs) != 1 || row.Rigs[0] != "rig-a" {
+		t.Fatalf("row = %+v, want cap 2 and rig rig-a", row)
+	}
+	path, err := st.RepoPath(ctx, row.ID)
+	if err != nil || path != "/srv/new" {
+		t.Fatalf("repo path = %q (%v), want /srv/new", path, err)
 	}
 }

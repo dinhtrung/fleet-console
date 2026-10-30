@@ -1,11 +1,15 @@
 package configfile
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 
+	"github.com/dinhtrung/fleet-console/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -13,138 +17,281 @@ import (
 type Outcome string
 
 const (
-	OutcomeCreated  Outcome = "Created"
+	OutcomeCreated   Outcome = "Created"
 	OutcomeUnchanged Outcome = "Unchanged"
 )
 
 // UpsertProject writes a project to the config file at path.
-// expectedHash is the sha256 of the file content the caller read; if provided
-// and the file on disk differs, the write is refused. The write is atomic:
-// temp file in the same dir, fsync, original mode, rename.
+//
+// expectedHash is the sha256 of the file content the caller read; when it no
+// longer matches the file on disk the write is refused rather than applied over
+// someone's hand edit. The write is atomic: temp file in the same dir, fsync,
+// original mode, rename.
+//
+// The new entry is spliced into the original bytes at the end of the projects
+// sequence, so every byte the operator wrote — header comments, blank lines,
+// each existing entry's own spacing — survives untouched. The merged document
+// is then validated as a whole with the loader's own rules, before anything is
+// written: a write that would leave the fleet unable to start never reaches the
+// disk. That failure is a *config.ValidationError and the file is untouched.
 func UpsertProject(path string, in Project, expectedHash *[32]byte) (Outcome, error) {
-	// Read the current file content
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			data = []byte("")
-		} else {
+		if !os.IsNotExist(err) {
 			return "", fmt.Errorf("configfile: read %s: %w", path, err)
 		}
+		data = nil
 	}
-
-	// If expectedHash provided, verify file hasn't changed since the caller read it
 	if expectedHash != nil {
-		nowHash := sha256.Sum256(data)
-		if nowHash != *expectedHash {
+		if now := sha256.Sum256(data); now != *expectedHash {
 			return "", fmt.Errorf("config.yaml changed on disk; reload and retry")
 		}
 	}
 
-
-
-	var root yaml.Node
-	if len(data) > 0 {
-		if err := yaml.Unmarshal(data, &root); err != nil {
-			return "", fmt.Errorf("configfile: unmarshal %s: %w", path, err)
-		}
-		// Unmarshal returns a document node; get the mapping inside
-		if root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
-			root = *root.Content[0]
-		}
-	} else {
-		root = yaml.Node{Kind: yaml.MappingNode}
-	}
-
-	// Find or create the projects sequence
-	var projectsNode *yaml.Node
-	for i := 0; i < len(root.Content); i += 2 {
-		if root.Content[i].Value == "projects" {
-			projectsNode = root.Content[i+1]
-			break
-		}
-	}
-
-	if projectsNode == nil {
-		// Create projects: [] sequence
-		projectsNode = &yaml.Node{Kind: yaml.SequenceNode}
-		root.Content = append(root.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Value: "projects"},
-			projectsNode)
-	} else if projectsNode.Kind != yaml.SequenceNode {
-		return "", fmt.Errorf("configfile: projects is not a sequence")
-	}
-
-	// Check for existing key
-	for _, item := range projectsNode.Content {
-		if item.Kind == yaml.MappingNode {
-			for j := 0; j < len(item.Content); j += 2 {
-				if item.Content[j].Value == "key" && item.Content[j+1].Value == in.Key {
-					// Build a node from in to compare byte-for-byte
-					newNode, err := projectToNode(in)
-					if err != nil {
-						return "", err
-					}
-					if nodesEqual(item, newNode) {
-						return OutcomeUnchanged, nil
-					}
-					return "", fmt.Errorf("duplicate project key %q", in.Key)
-				}
-			}
-		}
-	}
-
-	// Append the new project node
-	newNode, err := projectToNode(in)
+	out, outcome, err := splice(data, in)
 	if err != nil {
 		return "", err
 	}
-	projectsNode.Content = append(projectsNode.Content, newNode)
 
-	// Marshal the whole document
-	out, err := yaml.Marshal(&root)
+	dir := filepath.Dir(path)
+	home, _ := os.UserHomeDir()
+	if err := config.ValidateContent(out, dir, home); err != nil {
+		return "", err
+	}
+	if outcome == OutcomeUnchanged {
+		return outcome, nil
+	}
+	if err := writeAtomic(path, out); err != nil {
+		return "", err
+	}
+	return OutcomeCreated, nil
+}
+
+// splice returns the file bytes with in appended to the projects sequence, or
+// OutcomeUnchanged when the file already holds that project verbatim.
+func splice(data []byte, in Project) ([]byte, Outcome, error) {
+	entry, err := encodeEntry(in)
 	if err != nil {
-		return "", fmt.Errorf("configfile: marshal: %w", err)
+		return nil, "", err
+	}
+	item := indentEntry(entry, "  ")
+	if len(bytes.TrimSpace(data)) == 0 {
+		return []byte("projects:\n" + item), OutcomeCreated, nil
 	}
 
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return nil, "", fmt.Errorf("configfile: unmarshal: %w", err)
+	}
+	if document.Kind != yaml.DocumentNode || len(document.Content) == 0 {
+		return nil, "", fmt.Errorf("configfile: the file is not a mapping")
+	}
+	root := document.Content[0]
 
+	projectsKey, sequence := findProjects(root)
+	if projectsKey == nil {
+		return appendMapping(data, "projects:\n"+item), OutcomeCreated, nil
+	}
+	if sequence.Kind != yaml.SequenceNode {
+		return nil, "", fmt.Errorf("configfile: projects is not a sequence")
+	}
+	if len(sequence.Content) == 0 {
+		return replaceEmptySequence(data, projectsKey, entry)
+	}
 
-	// Atomic write: temp file in same dir, fsync, original mode, rename
+	for _, item := range sequence.Content {
+		var existing Project
+		if err := item.Decode(&existing); err != nil {
+			return nil, "", fmt.Errorf("configfile: decode existing project: %w", err)
+		}
+		if existing.Key != in.Key {
+			continue
+		}
+		if reflect.DeepEqual(existing, in) {
+			return data, OutcomeUnchanged, nil
+		}
+		return nil, "", fmt.Errorf("duplicate project key %q", in.Key)
+	}
+
+	indent := itemIndent(data, sequence)
+	body := indentEntry(entry, indent)
+	insertAt := sequenceEnd(data, sequence)
+	return spliceAt(data, insertAt, body), OutcomeCreated, nil
+}
+
+// findProjects returns the `projects` key node and its value node, or nil.
+func findProjects(root *yaml.Node) (*yaml.Node, *yaml.Node) {
+	for index := 0; index+1 < len(root.Content); index += 2 {
+		if root.Content[index].Value == "projects" {
+			return root.Content[index], root.Content[index+1]
+		}
+	}
+	return nil, nil
+}
+
+// itemIndent is the whitespace before the sequence's first dash, taken from the
+// operator's own line rather than from a node column, which points at the item
+// content (after the dash) and would shift every later entry by two spaces.
+func itemIndent(data []byte, sequence *yaml.Node) string {
+	start := lineOffset(data, sequence.Content[0].Line)
+	line := string(data[start:lineEnd(data, start)])
+	trimmed := strings.TrimLeft(line, " \t")
+	if dash := strings.Index(trimmed, "-"); dash >= 0 {
+		return line[:len(line)-len(trimmed)]
+	}
+	return ""
+}
+
+// replaceEmptySequence turns `projects: []` (or a bare `projects:`) into a
+// block sequence holding the one entry, leaving the rest of the line alone.
+func replaceEmptySequence(data []byte, key *yaml.Node, entry string) ([]byte, Outcome, error) {
+	offset := lineOffset(data, key.Line)
+	end := lineEnd(data, offset)
+	line := string(data[offset:end])
+	colon := strings.Index(line, ":")
+	if colon < 0 {
+		return nil, "", fmt.Errorf("configfile: projects key has no colon")
+	}
+	rest := line[colon+1:]
+	value := strings.TrimSpace(rest)
+	if value != "" && value != "[]" && value != "null" && value != "~" {
+		return nil, "", fmt.Errorf("configfile: projects is not an empty sequence")
+	}
+	indent := strings.Repeat(" ", key.Column-1+2)
+	head := string(data[:offset+colon+1])
+	remainder := string(data[end:])
+	remainder = strings.TrimPrefix(remainder, "\n")
+	replaced := head + "\n" + indentEntry(entry, indent)
+	return []byte(replaced + remainder), OutcomeCreated, nil
+}
+
+// sequenceEnd is the byte offset just past the last line of the sequence: the
+// start of the next root-level line, or the end of the file.
+func sequenceEnd(data []byte, sequence *yaml.Node) int {
+	last := sequence.Content[len(sequence.Content)-1]
+	start := lineOffset(data, last.Line)
+	offset := lineEnd(data, start)
+	for offset < len(data) {
+		next := offset + 1
+		end := lineEnd(data, next)
+		line := strings.TrimRight(string(data[next:end]), " \t")
+		if line != "" && line[0] != '#' && line[0] != ' ' && line[0] != '\t' && line[0] != '\n' {
+			return next
+		}
+		offset = end
+	}
+	return len(data)
+}
+
+// spliceAt inserts body at offset, keeping the file's final newline honest.
+func spliceAt(data []byte, offset int, body string) []byte {
+	var out bytes.Buffer
+	out.Write(data[:offset])
+	if len(data) > 0 && data[offset-1] != '\n' {
+		out.WriteByte('\n')
+	}
+	out.WriteString(body)
+	out.Write(data[offset:])
+	return out.Bytes()
+}
+
+// appendMapping adds a whole top-level key after the existing content.
+func appendMapping(data []byte, addition string) []byte {
+	var out bytes.Buffer
+	out.Write(data)
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		out.WriteByte('\n')
+	}
+	out.WriteString("\n")
+	out.WriteString(addition)
+	return out.Bytes()
+}
+
+// encodeEntry marshals one project as a block mapping.
+func encodeEntry(in Project) (string, error) {
+	encoded, err := yaml.Marshal(in)
+	if err != nil {
+		return "", fmt.Errorf("configfile: marshal project: %w", err)
+	}
+	return string(encoded), nil
+}
+
+// indentEntry turns a marshalled mapping into a sequence entry at indent.
+func indentEntry(entry, indent string) string {
+	lines := strings.Split(strings.TrimRight(entry, "\n"), "\n")
+	var out strings.Builder
+	for index, line := range lines {
+		if index == 0 {
+			out.WriteString(indent + "- " + line + "\n")
+			continue
+		}
+		if line == "" {
+			out.WriteString("\n")
+			continue
+		}
+		out.WriteString(indent + "  " + line + "\n")
+	}
+	return out.String()
+}
+
+func lineOffset(data []byte, line int) int {
+	if line <= 1 {
+		return 0
+	}
+	offset := 0
+	for current := 1; current < line && offset < len(data); current++ {
+		index := bytes.IndexByte(data[offset:], '\n')
+		if index < 0 {
+			return len(data)
+		}
+		offset += index + 1
+	}
+	return offset
+}
+
+func lineEnd(data []byte, offset int) int {
+	if offset >= len(data) {
+		return len(data)
+	}
+	index := bytes.IndexByte(data[offset:], '\n')
+	if index < 0 {
+		return len(data)
+	}
+	return offset + index
+}
+
+// writeAtomic writes data through a temp file in the target's directory.
+func writeAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, "config.*.yaml.tmp")
 	if err != nil {
-		return "", fmt.Errorf("configfile: create temp: %w", err)
+		return fmt.Errorf("configfile: create temp: %w", err)
 	}
 	tmpPath := tmp.Name()
-	// Ensure cleanup on error
-	defer func() {
-		os.Remove(tmpPath)
-	}()
+	defer os.Remove(tmpPath)
 
-	if _, err := tmp.Write(out); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return "", fmt.Errorf("configfile: write temp: %w", err)
+		return fmt.Errorf("configfile: write temp: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return "", fmt.Errorf("configfile: fsync temp: %w", err)
+		return fmt.Errorf("configfile: fsync temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return "", fmt.Errorf("configfile: close temp: %w", err)
+		return fmt.Errorf("configfile: close temp: %w", err)
 	}
-
-	// Preserve original mode if file existed
 	mode := os.FileMode(0o644)
-	if fi, err := os.Stat(path); err == nil {
-		mode = fi.Mode()
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode()
 	}
 	if err := os.Chmod(tmpPath, mode); err != nil {
-		return "", fmt.Errorf("configfile: chmod temp: %w", err)
+		return fmt.Errorf("configfile: chmod temp: %w", err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		return "", fmt.Errorf("configfile: rename: %w", err)
+		return fmt.Errorf("configfile: rename: %w", err)
 	}
-
-	return OutcomeCreated, nil
+	return nil
 }
 
 // Project is the subset of config.Project that the file stores.
@@ -164,35 +311,4 @@ type Project struct {
 		Main      string `yaml:"main"`
 		Worktrees string `yaml:"worktrees"`
 	} `yaml:"paths"`
-}
-
-// projectToNode converts a Project to a yaml.Node (mapping) with proper ordering.
-func projectToNode(p Project) (*yaml.Node, error) {
-	// Marshal to intermediate to get a node with correct tags
-	data, err := yaml.Marshal(p)
-	if err != nil {
-		return nil, err
-	}
-	var node yaml.Node
-	if err := yaml.Unmarshal(data, &node); err != nil {
-		return nil, err
-	}
-	// The unmarshaled node is a document node; we need the mapping inside
-	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
-		return node.Content[0], nil
-	}
-	return &node, nil
-}
-
-// nodesEqual checks if two mapping nodes have the same keys and values in order.
-func nodesEqual(a, b *yaml.Node) bool {
-	if a.Kind != b.Kind || len(a.Content) != len(b.Content) {
-		return false
-	}
-	for i := 0; i < len(a.Content); i++ {
-		if a.Content[i].Value != b.Content[i].Value {
-			return false
-		}
-	}
-	return true
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/dinhtrung/fleet-console/internal/configfile"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/dinhtrung/fleet-console/internal/webui"
@@ -22,6 +23,10 @@ type Config struct {
 	Compat     func(ctx context.Context) rig.Report
 	Store      *store.Store
 	Rig        *rig.Adapter
+	// WriteProject is the config writer, defaulting to configfile.UpsertProject.
+	// A test installs a wrapper here to hand-edit the file between the request's
+	// read and its write, which is the stale-read case.
+	WriteProject func(path string, in configfile.Project, expected *[32]byte) (configfile.Outcome, error)
 }
 
 // New builds the HTTP app. /api/health is open; every other /api route needs
@@ -30,9 +35,8 @@ func New(cfg Config) (*fiber.App, error) {
 	if cfg.Token == "" {
 		return nil, errors.New("web: bearer token is empty")
 	}
-	if cfg.ConfigPath == "" {
-		return nil, errors.New("web: config path is required")
-	}
+	// ConfigPath is optional: a box with no config file still serves its board,
+	// and only the write route needs a file to write to. It answers 500 there.
 	compat := cfg.Compat
 	if compat == nil {
 		compat = func(context.Context) rig.Report {
@@ -41,8 +45,8 @@ func New(cfg Config) (*fiber.App, error) {
 	}
 
 	app := fiber.New(fiber.Config{
-		AppName:     "fleet-console",
-		ReadTimeout: 15 * time.Second,
+		AppName:      "fleet-console",
+		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 10 * time.Minute,
 		IdleTimeout:  60 * time.Second,
 	})

@@ -2,9 +2,13 @@ package configfile
 
 import (
 	"crypto/sha256"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/dinhtrung/fleet-console/internal/config"
 )
 
 func TestUpsertProjectCreatesFile(t *testing.T) {
@@ -126,13 +130,17 @@ projects:
 		t.Fatalf("read: %v", err)
 	}
 	result := string(data)
-	if !containsAll(result, []string{"existing-1", "Existing One", "existing-2", "Existing Two"}) {
-		t.Fatalf("original projects not preserved:\n%s", result)
+	// The promise is byte-level: everything the operator wrote survives, and the
+	// new entry is the only addition.
+	if !strings.HasPrefix(result, original) {
+		t.Fatalf("the original bytes were rewritten:\n--- want prefix ---\n%s\n--- got ---\n%s", original, result)
 	}
-
-	// New project must be present
-	if !containsAll(result, []string{"new-proj", "New Project", "rig-c"}) {
-		t.Fatalf("new project not found:\n%s", result)
+	added := strings.TrimPrefix(result, original)
+	if !containsAll(added, []string{"new-proj", "New Project", "rig-c"}) {
+		t.Fatalf("the addition is not the new project:\n%s", added)
+	}
+	if !strings.HasPrefix(added, "  - key: new-proj") {
+		t.Fatalf("the new entry does not use the file's own indentation: %q", added)
 	}
 
 	// Header comment preserved
@@ -323,6 +331,95 @@ projects: []
 		if e.Name() != "config.yaml" {
 			t.Fatalf("temp file left behind: %s", e.Name())
 		}
+	}
+}
+
+// TestUpsertProjectRefusesRigCollisionBeforeWriting: the whole-file check runs
+// before the rename, so a project that steals another project's rig is refused
+// with the file exactly as the operator left it.
+func TestUpsertProjectRefusesRigCollisionBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	original := `projects:
+  - key: existing-1
+    forge: github
+    repo: org/one
+    rigs: [rig-a]
+`
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var err error
+	if _, err = UpsertProject(path, Project{
+		Key: "new-proj", Forge: "github", Repo: "org/new", Rigs: []string{"rig-a"},
+	}, nil); err == nil {
+		t.Fatal("want the rig collision refused")
+	}
+	var invalid *config.ValidationError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("error = %T %v, want *config.ValidationError", err, err)
+	}
+	if message := invalid.Fields()["rigs"]; !strings.Contains(message, `rig "rig-a" is assigned to both`) {
+		t.Fatalf("message = %q, want it to name the rig and both projects", message)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read: %v", readErr)
+	}
+	if string(data) != original {
+		t.Fatalf("the refused write changed the file:\n%s", data)
+	}
+}
+
+// TestUpsertProjectCreatesMissingSequence: a config with no projects key gains
+// one, and the rest of the file is untouched.
+func TestUpsertProjectCreatesMissingSequence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	original := "# header\nlisten: 127.0.0.1:8787\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	outcome, err := UpsertProject(path, Project{
+		Key: "proj", Forge: "github", Repo: "o/r", Rigs: []string{"rig-1"},
+	}, nil)
+	if err != nil || outcome != OutcomeCreated {
+		t.Fatalf("upsert = %q, %v; want Created", outcome, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.HasPrefix(string(data), original) {
+		t.Fatalf("the existing bytes were rewritten:\n%s", data)
+	}
+	if !containsAll(string(data), []string{"projects:", "- key: proj"}) {
+		t.Fatalf("the projects key was not created:\n%s", data)
+	}
+}
+
+// TestUpsertProjectFillsEmptySequence covers `projects: []`, the shape the
+// installer writes on a box with no projects yet.
+func TestUpsertProjectFillsEmptySequence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("listen: 127.0.0.1:8787\nprojects: []\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := UpsertProject(path, Project{
+		Key: "proj", Forge: "github", Repo: "o/r", Rigs: []string{"rig-1"},
+	}, nil); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.HasPrefix(string(data), "listen: 127.0.0.1:8787\n") {
+		t.Fatalf("the listen line was rewritten:\n%s", data)
+	}
+	if strings.Contains(string(data), "[]") || !strings.Contains(string(data), "- key: proj") {
+		t.Fatalf("the empty sequence was not filled:\n%s", data)
 	}
 }
 

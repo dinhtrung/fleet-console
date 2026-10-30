@@ -44,7 +44,7 @@ func TestBoardReportsStaleWithLastSyncAndCachedItems(t *testing.T) {
 		t.Fatalf("status: %v", err)
 	}
 
-	app, err := New(Config{Token: "test-token",  Store: st, ConfigPath: "/tmp/fake-config.yaml"})
+	app, err := New(Config{Token: "test-token", Store: st, ConfigPath: "/tmp/fake-config.yaml"})
 	if err != nil {
 		t.Fatalf("app: %v", err)
 	}
