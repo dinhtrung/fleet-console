@@ -142,6 +142,7 @@ func Build(read mirror.TickResult, rows []store.DispatchRow, project store.Proje
 		Total:     len(seats),
 	}
 	work := dispatchWork(rows, project, items)
+	working := 0
 	for _, seat := range seats {
 		line := SeatLine{
 			Session:      seat.Session,
@@ -149,47 +150,45 @@ func Build(read mirror.TickResult, rows []store.DispatchRow, project store.Proje
 			Lifecycle:    seat.Lifecycle,
 			LastActivity: seat.LastActivity,
 		}
-		if entry, ok := workFor(seat, work); ok {
-			line.Item = entry.item
-			line.Title = entry.title
-			line.Branch = entry.branch
-			line.Since = entry.since
-			line.Age = ageString(read.At.Sub(entry.since))
-			rigBlock.Busy++
-		} else if entry, ok := queueWorkFor(seat, projectRead.Rows, items); ok {
-			line.Item = entry.item
-			line.Title = entry.title
-			line.Branch = entry.branch
-			line.Since = entry.since
-			line.Age = ageString(read.At.Sub(entry.since))
-			rigBlock.Busy++
-		} else if isReviewer(line) && rosterErr == "" {
-			if cr := openDraft(projectRead.CRs); cr != nil {
+		// design §2a: the per-seat order is fixed. A dead seat explains itself
+		// first, whatever work the tables still name it for.
+		switch {
+		case rosterErr != "":
+			// A failed read has no states to classify; the rig line carries it.
+		case !running(seat.Lifecycle):
+			line.IdleWhy = "idle — seat " + lifecycleName(seat.Lifecycle)
+		default:
+			entry, held := workFor(seat, work)
+			if !held {
+				entry, held = queueWorkFor(seat, projectRead.Rows, items)
+			}
+			if held {
+				line.Item, line.Title, line.Branch, line.Since = entry.item, entry.title, entry.branch, entry.since
+				line.Age = ageString(read.At.Sub(entry.since))
+				working++
+				break
+			}
+			if isReviewer(seat) {
+				cr := openDraft(projectRead.CRs)
+				if cr == nil {
+					line.IdleWhy = "idle — nothing to review"
+					break
+				}
 				line.Item = cr.ClosesItem
 				line.Title = itemTitle(items, cr.ClosesItem)
 				line.Branch = branchFor(projectRead.Branches, cr.ClosesItem)
-				rigBlock.Busy++
-			} else {
-				line.IdleWhy = "idle — nothing to review"
+				working++
+				break
 			}
-		}
-		rigBlock.Seats = append(rigBlock.Seats, line)
-	}
-	if rosterErr == "" {
-		for index := range rigBlock.Seats {
-			line := &rigBlock.Seats[index]
-			if line.IdleWhy != "" || line.Item != 0 {
-				continue
-			}
-			if !running(line.Lifecycle) {
-				line.IdleWhy = "idle — seat " + lifecycleName(line.Lifecycle)
-			} else if len(snapshot.Pending) > 0 {
+			if len(snapshot.Pending) > 0 {
 				line.IdleWhy = "idle — waiting for a dispatch"
 			} else {
 				line.IdleWhy = "idle — nothing pending"
 			}
 		}
+		rigBlock.Seats = append(rigBlock.Seats, line)
 	}
+	rigBlock.Busy = working
 
 	snapshot.Rig = rigBlock
 	snapshot.Counts = Counts{
@@ -612,7 +611,9 @@ func openDraft(crs []forge.ChangeRequest) *forge.ChangeRequest {
 	return found
 }
 
-func isReviewer(seat SeatLine) bool {
+// isReviewer is a seat whose name says it reviews. The roster carries no role
+// field, so the name is the only signal there is.
+func isReviewer(seat rig.Seat) bool {
 	label := strings.ToLower(seat.LogicalID + " " + seat.Session)
 	return strings.Contains(label, "review")
 }
@@ -652,14 +653,15 @@ func idleReason(project ProjectBlock, block RigBlock, projectRead mirror.Project
 	if block.RosterErr != "" {
 		return "idle — rig roster unavailable: " + block.RosterErr
 	}
-	if reason := firstSkipReason(roster.Plan); reason != "" {
-		return "idle — nothing dispatchable: " + reason
+	// Rule 8 quotes the plan's own skip, never a reason invented here.
+	if text, ok := firstSkipText(roster.Plan); ok {
+		return "idle — nothing dispatchable: " + text
 	}
-	if roster.Plan != nil {
+	if busyFleet(roster.Plan) {
 		// Every skip is no_free_builder: that is a busy fleet, not an idle one.
 		return ""
 	}
-	return "idle — nothing dispatchable: the plan recorded no skip"
+	return "idle — nothing dispatchable: the plan named no skip"
 }
 
 type decisionRow struct {
@@ -745,17 +747,38 @@ func lifecycles(seats []SeatLine) string {
 	return strings.Join(values, ", ")
 }
 
-func firstSkipReason(plan *decide.Plan) string {
+// firstSkipText is the plan's own skip, rendered as the plan recorded it:
+// `#70 parent_onhold: parent #64 carries onhold`. no_free_builder is not a
+// candidate — it describes a busy fleet. ok is false when no skip is left.
+func firstSkipText(plan *decide.Plan) (string, bool) {
 	if plan == nil {
-		return ""
+		return "", false
 	}
 	for _, skip := range plan.Skips {
 		if skip.Reason == decide.ReasonNoFreeBuilder {
 			continue
 		}
-		return string(skip.Reason)
+		text := fmt.Sprintf("#%d %s", skip.Number, skip.Reason)
+		if detail := strings.TrimSpace(skip.Detail); detail != "" {
+			text += ": " + detail
+		}
+		return text, true
 	}
-	return ""
+	return "", false
+}
+
+// busyFleet is true when the plan skipped work only because every builder was
+// taken: the rig is working, so it must not render as idle.
+func busyFleet(plan *decide.Plan) bool {
+	if plan == nil || len(plan.Skips) == 0 {
+		return false
+	}
+	for _, skip := range plan.Skips {
+		if skip.Reason != decide.ReasonNoFreeBuilder {
+			return false
+		}
+	}
+	return true
 }
 
 func parseTime(raw string) (time.Time, bool) {

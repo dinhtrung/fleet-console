@@ -208,9 +208,17 @@ func TestBucketCapAndEmptyBuckets(t *testing.T) {
 }
 
 func TestLengthCap(t *testing.T) {
+	base := buildBase()
+	idle := base.Rig
+	idle.Idle = true
+	idle.Busy = 0
+	idle.IdleWhy = "idle — nothing dispatchable: #1 blocked: #2"
+	for _, seat := range idle.Seats {
+		seat.IdleWhy = "idle — waiting for a dispatch"
+	}
 	snapshot := Snapshot{
-		Project:  buildBase().Project,
-		Rig:      buildBase().Rig,
+		Project:  base.Project,
+		Rig:      idle,
 		InFlight: items(200),
 		Pending:  items(200),
 		Counts:   Counts{InFlight: 200, Pending: 200},
@@ -219,7 +227,10 @@ func TestLengthCap(t *testing.T) {
 	if got := utf8.RuneCountInString(body); got > maxBody {
 		t.Fatalf("body = %d characters, want <= %d", got, maxBody)
 	}
-	for _, want := range []string{"PROJECT", "key: fleet-console", "RIG fleet-console", "busy 2/3"} {
+	for _, want := range []string{
+		"PROJECT", "key: fleet-console", "worktrees /home/dinhtrung/develop",
+		"RIG fleet-console · idle", "why: idle — nothing dispatchable: #1 blocked: #2",
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("truncation lost %q\n%s", want, body)
 		}
@@ -341,7 +352,14 @@ func TestIdleReasons(t *testing.T) {
 			mutate: func(_ *mirror.TickResult, _ *store.ProjectRow, _ *config.Effective, roster *Roster, _ *[]store.DispatchRow) {
 				roster.Plan = &decide.Plan{Skips: []decide.Skip{{Number: 70, Reason: decide.ReasonBlocked, Detail: "#69"}}}
 			},
-			want: "idle — nothing dispatchable: blocked",
+			want: "idle — nothing dispatchable: #70 blocked: #69",
+		},
+		{
+			name: "8 plan skip text keeps the plan's detail",
+			mutate: func(_ *mirror.TickResult, _ *store.ProjectRow, _ *config.Effective, roster *Roster, _ *[]store.DispatchRow) {
+				roster.Plan = &decide.Plan{Skips: []decide.Skip{{Number: 71, Reason: decide.ReasonParentOnHold, Detail: "parent #64 carries onhold"}}}
+			},
+			want: "idle — nothing dispatchable: #71 parent_onhold: parent #64 carries onhold",
 		},
 	}
 	for _, tc := range cases {
@@ -400,6 +418,14 @@ func TestIdleSeatReasons(t *testing.T) {
 			name: "lifecycle not running",
 			seats: func() []rig.Seat {
 				return []rig.Seat{{Session: "dev-build-1@rig", LogicalID: "dev.build-1", Rig: "rig", Lifecycle: "down"}}
+			},
+			items:  []forge.Item{{Number: 70, Kind: forge.KindTask, State: forge.StateOpen, Title: "work"}},
+			reason: "idle — seat down",
+		},
+		{
+			name: "dead reviewer names the lifecycle, not the review",
+			seats: func() []rig.Seat {
+				return []rig.Seat{{Session: "dev-review@rig", LogicalID: "dev.review", Rig: "rig", Lifecycle: "down"}}
 			},
 			items:  []forge.Item{{Number: 70, Kind: forge.KindTask, State: forge.StateOpen, Title: "work"}},
 			reason: "idle — seat down",
