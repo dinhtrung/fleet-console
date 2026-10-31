@@ -11,22 +11,22 @@
 
 ## 2. The write (`internal/act/tick.go`, after `Finalize`)
 
-- [ ] 2.1 Call `Rollup` once per merged item, using the same `in.Items` snapshot the plan used; no extra forge read.
-- [ ] 2.2 On `Close`: `Forge.Comment(parent, …)` naming the item, the pull request and "every sub-issue is closed",
+- [x] 2.1 Call `Rollup` once per merged item, using the same `in.Items` snapshot the plan used; no extra forge read.
+- [x] 2.2 On `Close`: `Forge.Comment(parent, …)` naming the item, the pull request and "every sub-issue is closed",
       then `Forge.CloseItem(parent)`, then one event `epic.closed` (`#<epic>`, `N sub-issues`).
-- [ ] 2.3 On `Skip`: append `#<epic> rollup: <reason>` to `report.Skipped`, so the journal names the reason instead of
+- [x] 2.3 On `Skip`: append `#<epic> rollup: <reason>` to `report.Skipped`, so the journal names the reason instead of
       the step disappearing.
-- [ ] 2.4 On a forge error in comment/close: also `report.Skipped`, and never touch the merge result — the merge is
+- [x] 2.4 On a forge error in comment/close: also `report.Skipped`, and never touch the merge result — the merge is
       the fact, the rollup is a courtesy.
-- [ ] 2.5 One close per tick per epic even when two merged items share the parent (a map of epics already closed).
+- [x] 2.5 One close per tick per epic even when two merged items share the parent (a map of epics already closed).
 
 ## 3. Proof
 
-- [ ] 3.1 Tick-level test with `forge.Fake`: merge closes the last child of a two-child epic → fake records
+- [x] 3.1 Tick-level test with `forge.Fake`: merge closes the last child of a two-child epic → fake records
       `comment(epic)` then `close(epic)` and the report carries the `epic.closed` event.
-- [ ] 3.2 Same fixture with one child open → no writes to the epic, skip line present.
-- [ ] 3.3 Same fixture with the epic absent from `in.Items` → no writes (snapshot guard).
-- [ ] 3.4 `CGO_ENABLED=0 go build ./... && go test ./...` green; the tests quote the fake's call log as evidence in
+- [x] 3.2 Same fixture with one child open → no writes to the epic, skip line present.
+- [x] 3.3 Same fixture with the epic absent from `in.Items` → no writes (snapshot guard).
+- [x] 3.4 `CGO_ENABLED=0 go build ./... && go test ./...` green; the tests quote the fake's call log as evidence in
       the pull request.
 
 ## 4. After it lands

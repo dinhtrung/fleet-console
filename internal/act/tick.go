@@ -55,7 +55,9 @@ type TickReport struct {
 	Verdicts   []CapturedVerdict
 	Merges     []*MergeResult
 	Decisions  []string
-	Skipped    []string
+	// Epics lists the epics this tick closed by rollup, once each.
+	Epics   []EpicRollup
+	Skipped []string
 }
 
 var tickIssueNumber = regexp.MustCompile(`#(\d+)\b`)
@@ -99,6 +101,7 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			latest[dispatch.ItemNumber] = dispatch
 		}
 	}
+	rolled := make(map[int]bool)
 	for _, request := range in.CRs {
 		if request.Merged {
 			continue
@@ -135,6 +138,10 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			continue
 		}
 		report.Merges = append(report.Merges, merged)
+		// The rollup runs after the merge and against the same snapshot the plan
+		// used: no extra forge read. `rolled` is shared across the loop so two
+		// merged siblings produce one close.
+		actions.rollupAfterMerge(ctx, in, &report, rolled, item, merged)
 		// The merge landed; a gap means part of its audit trail did not. It is
 		// reported on the same channel as a skip so the tick log names it, but it
 		// is not a skip: `merged` above is already recorded.
