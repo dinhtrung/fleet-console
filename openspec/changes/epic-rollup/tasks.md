@@ -31,4 +31,9 @@
 
 ## 4. After it lands
 
-- [ ] 4.1 Close epics #64 and #68 by hand once (they predate the feature) with a comment saying the rollup exists now.
+- [x] 4.1 Close epics #64 and #68 by hand once (they predate the feature) with a comment saying the rollup exists now.
+      Done 2026-10-30T20:12Z, before this change landed, and verified 2026-11-01: both are `CLOSED`, and each closing
+      comment says why the app did not do it and that the rollup fixes it — #68 names "the rollup that fixes that is
+      specified in `openspec/changes/epic-rollup` and tracked by epic #104 (issues #105, #106, #107)"; #64 says
+      "Epic #104 (`openspec/changes/epic-rollup`) makes the app do it from now on". `gh issue view 64 68 --json
+      state,closedAt` → `CLOSED 2026-10-30T20:12:45Z` and `CLOSED 2026-10-30T20:12:42Z`.
