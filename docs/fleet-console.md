@@ -59,6 +59,27 @@ not an abbreviation. An abbreviated sha is refused like any other unattributable
 that is long enough to parse but is not the head is skipped. Nothing is written to the store for a
 refusal, so the next tick retries and the note stays until it is answered.
 
+### Closing the epic
+
+After a merge, the tick asks one more question: was that item the last open sub-issue of its parent
+epic? If it was, the app comments on the epic naming what landed, closes it, and records one
+`epic.closed` event with the child count. Two merged items that share a parent produce **one** close,
+not two — the tick tracks the epics it has already closed.
+
+The rule is deliberately conservative in three places:
+
+- **A short read never closes an epic.** Children are counted whether open or closed, so "the
+  snapshot held none" cannot be mistaken for "all closed". A forge read that returned the epic but
+  not its sub-issues leaves the epic open and journals `no sub-issues in the snapshot`.
+- **A parent that is not an epic records nothing.** Most merged items have no parent at all, and a
+  journal line per merge would bury the rollups that matter. Three epic-shaped skips *are* recorded,
+  because each is a real answer: still open, no sub-issues in the snapshot, already closed.
+- **A failed comment or close is a skip line, never a failed merge.** The merge is the fact; the
+  rollup is a courtesy. The epic stays open and the next tick retries.
+
+The epic being closed is a consequence of the merge, not a condition of it: a rollup that cannot
+run never un-merges anything.
+
 ## What it refuses to be
 
 - **No model in the dispatch path.** Ordering is a contract, not a judgement call.
