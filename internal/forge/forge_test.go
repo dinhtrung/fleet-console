@@ -385,11 +385,14 @@ func TestWritesAreExactlyTheFour(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Every verb carries -R: the service runs in $HOME, where `gh` resolves a
+	// repository from the working directory and a verb without it fails with
+	// "not a git repository" (the #112 failure). `gh api` is exempt.
 	ghCalls := []string{
-		"gh issue edit 5 --add-label status::ongoing",
-		"gh issue edit 5 --remove-label status::ongoing",
-		"gh issue comment 5 --body hello",
-		"gh issue close 5",
+		"gh issue edit 5 --add-label status::ongoing -R dinhtrung/fleet-console",
+		"gh issue edit 5 --remove-label status::ongoing -R dinhtrung/fleet-console",
+		"gh issue comment 5 --body hello -R dinhtrung/fleet-console",
+		"gh issue close 5 -R dinhtrung/fleet-console",
 		"gh pr ready 14 -R dinhtrung/fleet-console",
 		"gh pr merge 14 --squash --match-head-commit abc123 -R dinhtrung/fleet-console",
 	}

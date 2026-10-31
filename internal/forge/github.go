@@ -399,24 +399,29 @@ func (g *GitHub) CRNotes(ctx context.Context, number int) ([]Comment, error) {
 }
 
 // SetMarker adds or removes the in-flight marker label.
+//
+// -R is not optional on any `gh` verb: the service runs in $HOME, where the CLI
+// resolves a repository from the working directory and dies with
+// "failed to run git: ... not a git repository". `gh api` carries the slug in its
+// path and needs none of this.
 func (g *GitHub) SetMarker(ctx context.Context, number int, present bool) error {
 	flag := "--remove-label"
 	if present {
 		flag = "--add-label"
 	}
-	_, err := g.cli.run(ctx, "issue", "edit", fmt.Sprint(number), flag, MarkerLabel)
+	_, err := g.cli.run(ctx, "issue", "edit", fmt.Sprint(number), flag, MarkerLabel, "-R", g.slug)
 	return err
 }
 
 // Comment posts one comment on an item.
 func (g *GitHub) Comment(ctx context.Context, number int, body string) error {
-	_, err := g.cli.run(ctx, "issue", "comment", fmt.Sprint(number), "--body", body)
+	_, err := g.cli.run(ctx, "issue", "comment", fmt.Sprint(number), "--body", body, "-R", g.slug)
 	return err
 }
 
 // CloseItem closes an issue.
 func (g *GitHub) CloseItem(ctx context.Context, number int) error {
-	_, err := g.cli.run(ctx, "issue", "close", fmt.Sprint(number))
+	_, err := g.cli.run(ctx, "issue", "close", fmt.Sprint(number), "-R", g.slug)
 	return err
 }
 
