@@ -620,3 +620,107 @@ func TestItemReadDeadlineReportsProgress(t *testing.T) {
 	}
 	t.Logf("deadline error: %v", err)
 }
+
+// TestGitHubSubIssuesKeepsClosedChildrenAndDefaultsUnknownToOpen covers the two
+// things the sweep's evidence depends on. Items drops closed children from the
+// open list, so SubIssues must keep them; and a child whose state the payload
+// omits must NOT read as closed, because closed is the direction that closes an
+// epic over work nobody looked at. The fixture carries both: the real sub-issues
+// payload has closed children, and a child with no state at all is folded in by
+// the runner below.
+func TestGitHubSubIssuesKeepsClosedChildrenAndDefaultsUnknownToOpen(t *testing.T) {
+	runner := githubFixtures()
+	runner.exact["gh api repos/dinhtrung/fleet-console/issues/1/sub_issues"] = "github/issue-1-sub-issues.json"
+	adapter := NewGitHub("dinhtrung/fleet-console", runner, &Budget{Max: 100})
+
+	children, err := adapter.SubIssues(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("SubIssues: %v", err)
+	}
+	if len(children) != 10 {
+		t.Fatalf("children = %d, want the fixture's 10 (closed ones included)", len(children))
+	}
+	for _, child := range children {
+		if child.Parent == nil || *child.Parent != 1 {
+			t.Fatalf("child #%d parent = %v, want 1 so the sweep can count it", child.Number, child.Parent)
+		}
+	}
+	var closed, open int
+	for _, child := range children {
+		switch child.State {
+		case StateClosed:
+			closed++
+		case StateOpen:
+			open++
+		default:
+			t.Fatalf("child #%d state = %q, want open or closed", child.Number, child.State)
+		}
+	}
+	if closed == 0 {
+		t.Fatalf("no closed children came back; the fixture has three, so Items' dropping must be undone")
+	}
+	if open == 0 {
+		t.Fatalf("no open children came back")
+	}
+}
+
+// TestGitHubSubIssuesTreatsAnAbsentStateAsOpen is the guard against the permissive
+// default: an absent state must leave the epic open, never close it.
+func TestGitHubSubIssuesTreatsAnAbsentStateAsOpen(t *testing.T) {
+	runner := githubFixtures()
+	// A payload whose children carry no state field at all.
+	runner.fallback = append([]fallbackFile{{contains: "/sub_issues", file: "github/sub-issues-no-state.json"}}, runner.fallback...)
+	runner.exact = map[string]string{}
+	adapter := NewGitHub("dinhtrung/fleet-console", runner, &Budget{Max: 100})
+
+	children, err := adapter.SubIssues(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("SubIssues: %v", err)
+	}
+	if len(children) != 2 {
+		t.Fatalf("children = %d, want 2", len(children))
+	}
+	for _, child := range children {
+		if child.State != StateOpen {
+			t.Fatalf("child #%d state = %q, want open for an absent payload state", child.Number, child.State)
+		}
+	}
+}
+
+// TestGitLabSubIssuesKeepsClosedChildrenAndDefaultsUnknownToOpen is the same pair
+// for GitLab. Its only hierarchy fixture has no state on any child, so before this
+// test the adapter's decode was proven by nothing and its zero value fell through
+// to "closed" — the direction that closes an epic over unreported work.
+func TestGitLabSubIssuesKeepsClosedChildrenAndDefaultsUnknownToOpen(t *testing.T) {
+	runner := &fixtureRunner{root: "testdata", fallback: []fallbackFile{
+		{contains: "graphql", file: "gitlab/sub-issues.json"},
+	}}
+	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", runner, &Budget{Max: 100})
+
+	children, err := adapter.SubIssues(context.Background(), 101)
+	if err != nil {
+		t.Fatalf("SubIssues: %v", err)
+	}
+	if len(children) != 3 {
+		t.Fatalf("children = %d, want 3", len(children))
+	}
+	byNumber := map[int]Item{}
+	for _, child := range children {
+		byNumber[child.Number] = child
+	}
+	if byNumber[91].State != StateClosed {
+		t.Fatalf("#91 state = %q, want closed (payload says CLOSED)", byNumber[91].State)
+	}
+	if byNumber[90].State != StateOpen {
+		t.Fatalf("#90 state = %q, want open (payload says OPENED)", byNumber[90].State)
+	}
+	// #89 carries no state in the payload: it must read as open, not closed.
+	if byNumber[89].State != StateOpen {
+		t.Fatalf("#89 state = %q, want open for an absent payload state", byNumber[89].State)
+	}
+	for _, child := range children {
+		if child.Parent == nil || *child.Parent != 101 {
+			t.Fatalf("child #%d parent = %v, want 101", child.Number, child.Parent)
+		}
+	}
+}

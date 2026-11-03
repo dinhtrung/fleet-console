@@ -68,6 +68,20 @@ event detail, so an operator reading the epic or the audit log tells a sweep clo
 - **THEN** the event kind is `epic.closed` with detail `sweep: 3 sub-issues`
 - **AND** the comment on #84 opens by naming the sweep as the cause
 
+### Requirement: A retried sweep close posts one comment, not one per tick
+The sweep SHALL post at most one comment on an epic it is closing, however many ticks the close is retried across. The
+comment precedes the close because a failed comment must leave the epic open for a retry; the retry SHALL therefore
+recognise the comment already on the epic rather than posting another, so a close that stays broken does not grow the
+comment count without bound.
+#### Scenario: The close fails for several ticks
+- **WHEN** the sweep decides to close #84 and the close answers an error on each of three consecutive ticks
+- **THEN** #84 carries exactly one sweep comment after the third tick
+- **AND** no `epic.closed` event has been recorded, and #84 is still open
+#### Scenario: The close recovers after a failure
+- **WHEN** the close that had been failing succeeds on a later tick
+- **THEN** #84 is closed and carries exactly one sweep comment
+- **AND** exactly one `epic.closed` event with detail `sweep: <N> sub-issues` is recorded
+
 ### Requirement: A failing sweep write does not fail the tick and is retried
 A failed comment or close SHALL become a skip line naming the error and the tick SHALL still succeed; the epic stays
 open, so the next tick's sweep sees the same conditions and tries again without a dedupe record.
