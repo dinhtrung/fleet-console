@@ -23,12 +23,19 @@ const (
 // Children is the number of items whose Parent is the epic, counted whether they
 // are open or closed — so "the snapshot held no children" can never be mistaken
 // for "every child is closed". Open lists the ones still open, in number order.
+//
+// Quiet marks a skip that is the ordinary state of an unfinished epic rather than
+// a considered decline: the sweep meets every open epic on every tick, so a skip
+// line for one still gathering children would fill the journal with the reason
+// nothing happened. Rollup leaves it false — a merge that cannot close its parent
+// is news — and Sweep sets it for the cases it meets routinely.
 type Decision struct {
 	Kind     DecisionKind
 	Epic     int
 	Children int
 	Open     []int
 	Reason   string // the skip reason, printed verbatim in the tick's skip list
+	Quiet    bool   // skip without a skip line in the journal
 }
 
 // ShouldClose reports whether the caller must close the epic.
