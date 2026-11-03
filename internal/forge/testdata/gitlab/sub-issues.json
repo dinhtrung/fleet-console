@@ -1,0 +1,1 @@
+{"data":{"project":{"workItems":{"nodes":[{"iid":"101","state":"OPEN","workItemType":{"name":"Epic"},"widgets":[{"type":"HIERARCHY","parent":null,"children":{"nodes":[{"iid":"91","state":"CLOSED"},{"iid":"90","state":"OPENED"},{"iid":"89"}]}}]}]}}}}

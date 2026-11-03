@@ -56,9 +56,25 @@ func (a *Actions) sweepEpics(ctx context.Context, in TickInput, report *TickRepo
 			}
 			continue
 		}
-		if err := a.Forge.Comment(ctx, decision.Epic, sweepComment(decision)); err != nil {
-			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d sweep: comment: %v", decision.Epic, err))
+		// Post the comment once per epic, not once per tick. The comment goes first
+		// because the spec makes a failed comment leave the epic open for a retry,
+		// exactly like a failed close; but that retry would otherwise post another
+		// comment every tick the close keeps failing, unbounded. Reading the epic's
+		// notes and skipping a sweep comment that is already there bounds it to one
+		// while keeping the ordering the spec requires. The read is spent only for an
+		// epic the sweep has decided to close, so it is not a per-open-epic cost.
+		commented, err := a.sweepCommented(ctx, decision.Epic)
+		if err != nil {
+			// A read that failed cannot be read as "no comment": posting on a failed
+			// read is how the accumulation starts. Leave the epic open and retry.
+			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d sweep: read notes: %v", decision.Epic, err))
 			continue
+		}
+		if !commented {
+			if err := a.Forge.Comment(ctx, decision.Epic, sweepComment(decision)); err != nil {
+				report.Skipped = append(report.Skipped, fmt.Sprintf("#%d sweep: comment: %v", decision.Epic, err))
+				continue
+			}
 		}
 		if err := a.Forge.CloseItem(ctx, decision.Epic); err != nil {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d sweep: close: %v", decision.Epic, err))
@@ -83,8 +99,30 @@ func (a *Actions) sweepEpics(ctx context.Context, in TickInput, report *TickRepo
 // records, not one recomputed here.
 func sweepComment(decision Decision) string {
 	return fmt.Sprintf(
-		"Sweep: all %d sub-issues of this epic are closed. Closing it — no merge finished this epic; "+
+		"%s all %d sub-issues of this epic are closed. Closing it — no merge finished this epic; "+
 			"the tick's epic sweep found every sub-issue closed and closed it.",
-		decision.Children,
+		sweepCommentPrefix, decision.Children,
 	)
+}
+
+// sweepCommentPrefix is the marker both a posted sweep comment and the dedupe
+// check agree on. A single constant keeps the comment's opening and the test for
+// it from drifting apart.
+const sweepCommentPrefix = "Sweep:"
+
+// sweepCommented reports whether the epic already carries a sweep comment, so a
+// close retried across ticks does not post one per tick. Rollup comments start
+// with "#<item> merged" and never carry this prefix, so the check distinguishes a
+// sweep comment from a merge comment without a second field on the forge.
+func (a *Actions) sweepCommented(ctx context.Context, epic int) (bool, error) {
+	notes, err := a.Forge.Notes(ctx, epic)
+	if err != nil {
+		return false, err
+	}
+	for _, note := range notes {
+		if strings.HasPrefix(note.Body, sweepCommentPrefix) {
+			return true, nil
+		}
+	}
+	return false, nil
 }

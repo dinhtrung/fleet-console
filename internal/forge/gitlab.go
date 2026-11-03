@@ -250,9 +250,13 @@ func (g *GitLab) SubIssues(ctx context.Context, number int) ([]Item, error) {
 				continue
 			}
 			for _, child := range widget.Children.Nodes {
-				state := "open"
-				if !strings.EqualFold(child.State, "opened") {
-					state = "closed"
+				// Only "opened" is open and only "closed" is closed. An absent or
+				// unrecognised state must not read as closed: closing an epic over a
+				// child whose state nobody reported is the failure this read exists to
+				// avoid. Unknown reads as open, which leaves the epic open.
+				state := StateOpen
+				if strings.EqualFold(child.State, "closed") {
+					state = StateClosed
 				}
 				items = append(items, Item{
 					Number: atoi(child.IID), Kind: KindTask, State: state, Parent: &parent,

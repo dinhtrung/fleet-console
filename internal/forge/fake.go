@@ -1,6 +1,9 @@
 package forge
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // Fake is the in-memory Forge the decide-loop tests run against. It records every
 // write so a test can assert the loop's intents without a forge.
@@ -36,6 +39,16 @@ type Fake struct {
 	SubIssuesValue map[int][]Item
 	SubIssuesErr   error
 	SubIssuesAsked []int
+	// posted holds the comments this fake wrote, so Notes returns them the way a
+	// real forge would. It is unexported: a test asserts through Writes or through
+	// a caller's behaviour, not by reaching for this.
+	posted []postedNote
+}
+
+// postedNote is one comment the fake wrote, keyed by the item it landed on.
+type postedNote struct {
+	Number int
+	Body   string
 }
 
 // Write is one recorded mutation.
@@ -87,7 +100,13 @@ func (f *Fake) Notes(_ context.Context, number int) ([]Comment, error) {
 	if f.ReadErr != nil {
 		return nil, f.ReadErr
 	}
-	return append([]Comment(nil), f.NotesValue...), nil
+	notes := append([]Comment(nil), f.NotesValue...)
+	for _, note := range f.posted {
+		if note.Number == number {
+			notes = append(notes, Comment{ID: fmt.Sprint(len(notes)), Body: note.Body})
+		}
+	}
+	return notes, nil
 }
 
 // CRNotes returns the same configured notes, recording the number it was asked
@@ -148,12 +167,16 @@ func (f *Fake) SetMarker(_ context.Context, number int, present bool) error {
 	return nil
 }
 
-// Comment records a comment write.
+// Comment records a comment write and folds it into the item's notes, so a
+// caller that reads the item back sees what it posted — the same round trip a
+// real forge gives. Without this a de-duplicating caller could not be tested: the
+// write would be recorded but never readable.
 func (f *Fake) Comment(_ context.Context, number int, body string) error {
 	if f.WriteErr != nil {
 		return f.WriteErr
 	}
 	f.Writes = append(f.Writes, Write{Op: "comment", Number: number, Value: body})
+	f.posted = append(f.posted, postedNote{Number: number, Body: body})
 	return nil
 }
 

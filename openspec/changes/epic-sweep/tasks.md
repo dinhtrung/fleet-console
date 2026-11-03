@@ -52,3 +52,19 @@ decision); task 3 is #124 (the write).
       an empty read closing nothing; a comment error leaving the epic open with a skip line; two completed epics
       producing two closes and two events. Extend the existing tick tests.
       Verified: `go test ./internal/act -run TestSweep` (eight tick tests, extending `rollupFixture`).
+
+## 4. Review fixes (#128 verdict at c532366)
+
+- [x] 4.1 `TestSweepReadErrorLeavesTheEpicOpen` asserts the skip line names the read error, so a failed read can no
+      longer masquerade as the zero-children guard. Verified: mutating the read branch to `children = nil` fails it
+      with `skipped = [#64 sweep: no sub-issues in the read], want a #64 sweep line naming the read error`.
+- [x] 4.2 Both adapters treat an absent or unrecognised child state as **open**, never closed; a new GitLab fixture
+      (`testdata/gitlab/sub-issues.json`) and a GitHub fixture (`testdata/github/sub-issues-no-state.json`) drive the
+      absent-state case, and `TestGitLabSubIssuesKeepsClosedChildrenAndDefaultsUnknownToOpen` plus
+      `TestGitHubSubIssuesTreatsAnAbsentStateAsOpen` prove it. Verified: reverting either adapter to its permissive
+      default fails the matching test (`#89 state = "closed", want open`; `child #21 state = "", want open`).
+- [x] 4.3 A retried close posts one comment, not one per tick: the sweep reads the epic's notes and skips a comment it
+      has already left. Verified: `go test ./internal/act -run TestSweepDoesNotAccumulateCommentsWhileTheCloseKeepsFailing`
+      (three failing ticks → one comment); removing the check fails it (`comments on #64 = 2, want exactly 1`).
+- [x] 4.4 The delta gained the comment-bound requirement above. Verified: `openspec validate epic-sweep --strict`.
+

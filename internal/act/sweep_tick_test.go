@@ -377,14 +377,25 @@ func TestSweepReadErrorLeavesTheEpicOpen(t *testing.T) {
 	if ops := epicWrites(f.fake, 64); len(ops) != 0 {
 		t.Fatalf("wrote to #64 on a failed read: %v", ops)
 	}
+	// The line must name the error, not just the epic. Asserting only the `#64 sweep:`
+	// prefix would let a `children = nil` fall-through pass: both branches print a
+	// line, but one says "the read did not come back" and the other blames the
+	// zero-children guard, "the read came back short". That is the opposite
+	// diagnosis, and it is the confusion sweep_tick.go's own comment warns against.
 	var found bool
 	for _, line := range report.Skipped {
-		if strings.Contains(line, "#64 sweep:") {
+		if strings.Contains(line, "#64 sweep:") && strings.Contains(line, "forge read is stale") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("skipped = %v, want a #64 sweep read line", report.Skipped)
+		t.Fatalf("skipped = %v, want a #64 sweep line naming the read error %q", report.Skipped, "forge read is stale")
+	}
+	// And the zero-children wording must not appear for a failed read.
+	for _, line := range report.Skipped {
+		if strings.Contains(line, "no sub-issues in the read") {
+			t.Fatalf("a failed read was reported as the zero-children guard: %q", line)
+		}
 	}
 }
 
@@ -424,7 +435,9 @@ func TestSweepCloseErrorLeavesTheEpicOpen(t *testing.T) {
 		t.Fatalf("an epic.closed event was recorded for a close that never happened")
 	}
 
-	// Next tick, the close succeeds and the epic closes.
+	// Next tick, the close succeeds and the epic closes. The comment is NOT posted
+	// again: the first tick's comment is on the epic, so the retry skips it and the
+	// epic carries exactly one sweep comment no matter how long the close was broken.
 	f.fake.CloseErr = nil
 	retry, err := RunTick(context.Background(), f.in)
 	if err != nil {
@@ -433,7 +446,57 @@ func TestSweepCloseErrorLeavesTheEpicOpen(t *testing.T) {
 	if len(retry.Epics) != 1 || retry.Epics[0].Epic != 64 {
 		t.Fatalf("retry closed nothing: report.Epics = %+v, skipped = %v", retry.Epics, retry.Skipped)
 	}
-	if ops := epicWrites(f.fake, 64); len(ops) != 3 || ops[2] != "close" {
-		t.Fatalf("writes to #64 after retry = %v, want the retry's comment then close", ops)
+	if ops := epicWrites(f.fake, 64); len(ops) != 2 || ops[0] != "comment" || ops[1] != "close" {
+		t.Fatalf("writes to #64 after retry = %v, want [comment close]: the retry must not post a second comment", ops)
+	}
+}
+
+// TestSweepDoesNotAccumulateCommentsWhileTheCloseKeepsFailing is finding 3 from
+// the #128 review. The comment posts before the close, so a close that keeps
+// failing would otherwise post one comment per tick, growing without bound. Three
+// failing ticks must leave exactly one comment; the third tick's success adds the
+// close and nothing else.
+func TestSweepDoesNotAccumulateCommentsWhileTheCloseKeepsFailing(t *testing.T) {
+	f := newSweepFixture(t, []int{64}, map[int][]forge.Item{
+		64: {childOf(64, 62, forge.StateClosed), childOf(64, 63, forge.StateClosed)},
+	})
+	f.fake.CloseErr = errors.New("close refused")
+
+	comments := func() int {
+		count := 0
+		for _, write := range f.fake.Writes {
+			if write.Number == 64 && write.Op == "comment" {
+				count++
+			}
+		}
+		return count
+	}
+
+	for tick := 1; tick <= 3; tick++ {
+		if _, err := RunTick(context.Background(), f.in); err != nil {
+			t.Fatalf("tick %d: %v", tick, err)
+		}
+		if got := comments(); got != 1 {
+			t.Fatalf("after %d failing close ticks, comments on #64 = %d, want exactly 1", tick, got)
+		}
+	}
+	if len(epicEvents(t, f.st, 64)) != 0 {
+		t.Fatalf("an epic.closed event was recorded while the close was failing")
+	}
+
+	// The close recovers: the epic closes and still carries one comment.
+	f.fake.CloseErr = nil
+	report, err := RunTick(context.Background(), f.in)
+	if err != nil {
+		t.Fatalf("recovery tick: %v", err)
+	}
+	if len(report.Epics) != 1 || report.Epics[0].Epic != 64 {
+		t.Fatalf("recovery tick closed nothing: %+v", report.Epics)
+	}
+	if got := comments(); got != 1 {
+		t.Fatalf("comments on #64 = %d after recovery, want exactly 1", got)
+	}
+	if len(epicEvents(t, f.st, 64)) != 1 {
+		t.Fatalf("epic.closed events for #64 = %d, want 1", len(epicEvents(t, f.st, 64)))
 	}
 }

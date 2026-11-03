@@ -200,8 +200,17 @@ func (g *GitHub) SubIssues(ctx context.Context, number int) ([]Item, error) {
 	parent := number
 	items := make([]Item, 0, len(children))
 	for _, child := range children {
+		// An absent or unrecognised state is not evidence of a close. GitHub's REST
+		// payload always carries the field, but a partial payload or a future state
+		// name must not read as "closed": closing an epic over a child whose state
+		// nobody reported is the failure this whole read exists to avoid. An unknown
+		// state reads as open, which leaves the epic open and costs nothing.
+		state := strings.ToLower(child.State)
+		if state != StateOpen && state != StateClosed {
+			state = StateOpen
+		}
 		items = append(items, Item{
-			Number: child.Number, Kind: KindTask, State: strings.ToLower(child.State),
+			Number: child.Number, Kind: KindTask, State: state,
 			Parent: &parent,
 		})
 	}
