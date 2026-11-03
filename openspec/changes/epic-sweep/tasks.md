@@ -68,3 +68,11 @@ decision); task 3 is #124 (the write).
       (three failing ticks → one comment); removing the check fails it (`comments on #64 = 2, want exactly 1`).
 - [x] 4.4 The delta gained the comment-bound requirement above. Verified: `openspec validate epic-sweep --strict`.
 
+- [x] 4.5 The notes-read failure arm has its own test: `TestSweepNotesReadErrorLeavesTheEpicOpen` drives three ticks
+      against a fake whose `SubIssues` succeeds and whose `Notes` fails while the close also fails, asserting no
+      comment and no close reach the epic and the skip line names the read error; both then recover and exactly one
+      comment, one close and one event land. The fake is a local `notesFailingFake` wrapper, because `forge.Fake.ReadErr`
+      fails the sub-issue read first and never reaches the notes arm. Verified: replacing the `err != nil` arm with
+      `commented, _ := a.sweepCommented(...)` fails only this test (`tick 1: comments on #64 = 1 on a failed notes
+      read, want 0`) and leaves the rest of the package green — the "suite stays green" gap the review measured. The
+      delta gained the matching requirement. No production code changed.
