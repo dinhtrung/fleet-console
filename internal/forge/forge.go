@@ -192,6 +192,13 @@ type Forge interface {
 	// CRNotes reads a change request's conversation, keyed by the change
 	// request's own number. This is where verdicts are posted.
 	CRNotes(ctx context.Context, number int) ([]Comment, error)
+	// SubIssues reads one epic's children, open and closed both. Items reads the
+	// open list only, so a closed child is absent from its result and "no
+	// sub-issues" cannot be told from "all sub-issues closed" there. The epic
+	// sweep needs the closed ones as evidence, and this is the read that has
+	// them. It returns the epic's own row as the parent of each child, so the
+	// caller can count with the same rule the snapshot uses.
+	SubIssues(ctx context.Context, number int) ([]Item, error)
 	SetMarker(ctx context.Context, number int, present bool) error
 	Comment(ctx context.Context, number int, body string) error
 	CloseItem(ctx context.Context, number int) error

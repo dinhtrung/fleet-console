@@ -27,6 +27,15 @@ type Fake struct {
 	// where a test proves the gate read the right conversation.
 	NotesAsked   []int
 	CRNotesAsked []int
+	// SubIssuesValue is the read SubIssues answers with, keyed by epic number. An
+	// epic with no entry reads as no children, which is the empty-read case the
+	// sweep must not close over. SubIssuesErr fails the read for every epic and
+	// proves the failure path leaves the epic open; SubIssuesAsked records the
+	// epics the tick read, so a test can assert the read count is bounded to one
+	// per open epic per tick.
+	SubIssuesValue map[int][]Item
+	SubIssuesErr   error
+	SubIssuesAsked []int
 }
 
 // Write is one recorded mutation.
@@ -90,6 +99,20 @@ func (f *Fake) CRNotes(_ context.Context, number int) ([]Comment, error) {
 		return nil, f.ReadErr
 	}
 	return append([]Comment(nil), f.NotesValue...), nil
+}
+
+// SubIssues returns the configured read for one epic, recording the number it
+// was asked about. It answers with the same slice it was given, so a caller that
+// mutates the result cannot corrupt a later read — the sweep only counts.
+func (f *Fake) SubIssues(_ context.Context, number int) ([]Item, error) {
+	f.SubIssuesAsked = append(f.SubIssuesAsked, number)
+	if f.SubIssuesErr != nil {
+		return nil, f.SubIssuesErr
+	}
+	if f.ReadErr != nil {
+		return nil, f.ReadErr
+	}
+	return append([]Item(nil), f.SubIssuesValue[number]...), nil
 }
 
 // SetMarker records a marker write.

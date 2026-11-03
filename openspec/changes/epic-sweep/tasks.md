@@ -26,16 +26,29 @@ decision); task 3 is #124 (the write).
 
 ## 3. The write (`internal/act/tick.go`) — #124
 
-- [ ] 3.1 After the merge loop, for each open epic in the tick's snapshot, read its sub-issues (open and closed)
+- [x] 3.1 After the merge loop, for each open epic in the tick's snapshot, read its sub-issues (open and closed)
       through the forge and pass the read to `Sweep`. The tick's open-only snapshot is not the evidence.
-- [ ] 3.2 On close: comment naming the sweep as the cause, `CloseItem`, then one `epic.closed` event with detail
+      Verified: `go test ./internal/act -run TestSweepBoundsOneReadPerOpenEpicPerTick`.
+
+- [x] 3.2 On close: comment naming the sweep as the cause, `CloseItem`, then one `epic.closed` event with detail
       `sweep: <N> sub-issues`.
-- [ ] 3.3 Idempotent within a tick and across ticks: one close per epic per tick, no comment and no event for an
+      Verified: `go test ./internal/act -run TestSweepClosesACompletedEpicOnATickThatMergedNothing`.
+
+- [x] 3.3 Idempotent within a tick and across ticks: one close per epic per tick, no comment and no event for an
       epic already closed.
-- [ ] 3.4 A failing read, comment or close appends `#<epic> sweep: <error>` to `report.Skipped`; the tick still
+      Verified: `go test ./internal/act -run 'TestSweepSkipsAnEpicTheRollupAlreadyClosed|TestSweepLeavesAnEpicWhoseReadIsEmpty'`.
+
+- [x] 3.4 A failing read, comment or close appends `#<epic> sweep: <error>` to `report.Skipped`; the tick still
       succeeds and the next tick retries.
-- [ ] 3.5 The forge reads are bounded to one sub-issue read per open epic per tick and the count is visible in the
+      Verified: `go test ./internal/act -run 'TestSweepCommentError|TestSweepCloseError|TestSweepReadError'`.
+
+- [x] 3.5 The forge reads are bounded to one sub-issue read per open epic per tick and the count is visible in the
       tick report where a counter already exists.
-- [ ] 3.6 Tick tests with `forge.Fake`: zero merges closing one completed epic and leaving an incomplete one alone;
+      No request counter existed on `TickReport`; `SweepReads` was added as one, because the
+      design asks for the sweep's share to stay visible.
+      Verified: `go test ./internal/act -run TestSweepBoundsOneReadPerOpenEpicPerTick`.
+
+- [x] 3.6 Tick tests with `forge.Fake`: zero merges closing one completed epic and leaving an incomplete one alone;
       an empty read closing nothing; a comment error leaving the epic open with a skip line; two completed epics
       producing two closes and two events. Extend the existing tick tests.
+      Verified: `go test ./internal/act -run TestSweep` (eight tick tests, extending `rollupFixture`).

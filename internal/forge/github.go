@@ -182,6 +182,32 @@ type ghChild struct {
 	State  string `json:"state"`
 }
 
+// SubIssues reads one epic's children, open and closed both. Items calls
+// subIssues for every open epic already, but keeps a child only when the child is
+// itself in the open list (github.go:120), so the closed children — the whole
+// point of the sweep's evidence — are dropped there. This is the same request,
+// exposed with the states kept.
+//
+// The children come back as Item rows whose Parent is the epic, so a caller
+// counts them with the rule the snapshot uses: an item whose Parent is not this
+// epic is not its child. A child's own Kind stays task; the hierarchy is carried
+// by Parent, not by Kind.
+func (g *GitHub) SubIssues(ctx context.Context, number int) ([]Item, error) {
+	children, err := g.subIssues(ctx, number)
+	if err != nil {
+		return nil, err
+	}
+	parent := number
+	items := make([]Item, 0, len(children))
+	for _, child := range children {
+		items = append(items, Item{
+			Number: child.Number, Kind: KindTask, State: strings.ToLower(child.State),
+			Parent: &parent,
+		})
+	}
+	return items, nil
+}
+
 func (g *GitHub) subIssues(ctx context.Context, number int) ([]ghChild, error) {
 	path := fmt.Sprintf("repos/%s/issues/%d/sub_issues", g.slug, number)
 	raw, err := g.cli.api(ctx, path)

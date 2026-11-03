@@ -174,7 +174,8 @@ type glWorkItemNode struct {
 		} `json:"parent"`
 		Children *struct {
 			Nodes []struct {
-				IID string `json:"iid"`
+				IID   string `json:"iid"`
+				State string `json:"state"`
 			} `json:"nodes"`
 		} `json:"children"`
 	} `json:"widgets"`
@@ -198,7 +199,7 @@ func (g *GitLab) workItems(ctx context.Context, numbers []int) (struct {
 			widgets { type
 				... on WorkItemWidgetHierarchy {
 					parent { iid }
-					children(first: 100) { nodes { iid } }
+					children(first: 100) { nodes { iid state } }
 				}
 			}
 		}
@@ -227,6 +228,39 @@ func (g *GitLab) workItems(ctx context.Context, numbers []int) (struct {
 	}
 	out.Nodes = response.Data.Project.WorkItems.Nodes
 	return out, nil
+}
+
+// SubIssues reads one epic's children, open and closed both. Items reads the
+// hierarchy through workItems and keeps a child only when the child is itself in
+// the open list, so closed children are dropped there — the sweep needs them.
+//
+// This asks the same GraphQL hierarchy for one epic's children and keeps their
+// states. GitLab's REST issue list has no parent field, so the hierarchy is the
+// only relation there is.
+func (g *GitLab) SubIssues(ctx context.Context, number int) ([]Item, error) {
+	nodes, err := g.workItems(ctx, []int{number})
+	if err != nil {
+		return nil, err
+	}
+	parent := number
+	items := []Item{}
+	for _, node := range nodes.Nodes {
+		for _, widget := range node.Widgets {
+			if widget.Type != "HIERARCHY" || widget.Children == nil {
+				continue
+			}
+			for _, child := range widget.Children.Nodes {
+				state := "open"
+				if !strings.EqualFold(child.State, "opened") {
+					state = "closed"
+				}
+				items = append(items, Item{
+					Number: atoi(child.IID), Kind: KindTask, State: state, Parent: &parent,
+				})
+			}
+		}
+	}
+	return items, nil
 }
 
 func (g *GitLab) related(ctx context.Context, number int) ([]Link, error) {

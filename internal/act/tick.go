@@ -55,9 +55,13 @@ type TickReport struct {
 	Verdicts   []CapturedVerdict
 	Merges     []*MergeResult
 	Decisions  []string
-	// Epics lists the epics this tick closed by rollup, once each.
-	Epics   []EpicRollup
-	Skipped []string
+	// Epics lists the epics this tick closed by rollup or by the sweep, once each.
+	Epics []EpicRollup
+	// SweepReads is the number of forge sub-issue reads the sweep spent this tick:
+	// one per open epic, which is the bound the design asks to keep visible. It is
+	// separate from the forge's own budget so a reader can tell the sweep's share.
+	SweepReads int
+	Skipped    []string
 }
 
 var tickIssueNumber = regexp.MustCompile(`#(\d+)\b`)
@@ -149,6 +153,13 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d merged, audit gap: %s", item, why))
 		}
 	}
+	// The epic sweep runs after the merge loop and on every applied tick, merge or
+	// not: an epic whose last child closed by hand, as a duplicate, or in an
+	// earlier tick whose close never landed has no merge to hang its rollup on.
+	// It shares `rolled` with the merge loop, so an epic the rollup just closed is
+	// not closed twice.
+	actions.sweepEpics(ctx, in, &report, rolled)
+
 	for _, intent := range in.Plan.Intents {
 		if intent.Kind != decide.IntentRaiseDecision {
 			continue
