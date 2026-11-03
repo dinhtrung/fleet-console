@@ -500,3 +500,102 @@ func TestSweepDoesNotAccumulateCommentsWhileTheCloseKeepsFailing(t *testing.T) {
 		t.Fatalf("epic.closed events for #64 = %d, want 1", len(epicEvents(t, f.st, 64)))
 	}
 }
+
+// notesFailingFake fails only the Notes read. forge.Fake.ReadErr fails Items and
+// SubIssues too, so a tick built on ReadErr never reaches the sweep's notes read —
+// it stops at the sub-issue read first. Overriding one method is what puts the
+// failure at the arm sweep_tick.go:67 guards, with the sub-issue read succeeding.
+type notesFailingFake struct {
+	*forge.Fake
+	err error
+}
+
+func (f *notesFailingFake) Notes(ctx context.Context, number int) ([]forge.Comment, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.Fake.Notes(ctx, number)
+}
+
+// TestSweepNotesReadErrorLeavesTheEpicOpen covers the one branch of the sweep's
+// comment dedupe no test reached: the notes read failing. The branch is
+// load-bearing. Reading "the notes read failed" as "no sweep comment yet" posts
+// another comment on every tick the close stays broken — the 1-2-3 regrowth the
+// comment bound exists to prevent — and the suite stayed green without this test.
+//
+// The close is broken for the whole failure window so a swallowed error would show
+// up as a second and third comment rather than as an early close. The epic must
+// stay open, unwritten and uncommented; when both recover, exactly one comment and
+// one close land.
+func TestSweepNotesReadErrorLeavesTheEpicOpen(t *testing.T) {
+	f := newSweepFixture(t, []int{64}, map[int][]forge.Item{
+		64: {childOf(64, 62, forge.StateClosed), childOf(64, 63, forge.StateClosed)},
+	})
+	notesErr := errors.New("notes read refused")
+	closeErr := errors.New("close refused")
+	fake := &notesFailingFake{Fake: f.fake, err: notesErr}
+	f.fake.CloseErr = closeErr
+	f.in.Forge = fake
+
+	comments := func() int {
+		count := 0
+		for _, write := range f.fake.Writes {
+			if write.Number == 64 && write.Op == "comment" {
+				count++
+			}
+		}
+		return count
+	}
+
+	for tick := 1; tick <= 3; tick++ {
+		report, err := RunTick(context.Background(), f.in)
+		if err != nil {
+			t.Fatalf("tick %d failed on a failed notes read, want success: %v", tick, err)
+		}
+		if len(report.Epics) != 0 {
+			t.Fatalf("tick %d: report.Epics = %+v, want none when the notes read failed", tick, report.Epics)
+		}
+		// The write count is asserted before the wording: the swallowed error writes a
+		// comment and blames the close, so "nothing was written" is the diagnosis that
+		// names what actually went wrong.
+		if got := comments(); got != 0 {
+			t.Fatalf("tick %d: comments on #64 = %d on a failed notes read, want 0", tick, got)
+		}
+		if ops := epicWrites(f.fake, 64); len(ops) != 0 {
+			t.Fatalf("tick %d: writes to #64 = %v on a failed notes read, want none", tick, ops)
+		}
+		var found bool
+		for _, line := range report.Skipped {
+			if strings.Contains(line, "#64 sweep: read notes:") && strings.Contains(line, "notes read refused") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("tick %d: skipped = %v, want a #64 sweep read notes line naming the error %q", tick, report.Skipped, "notes read refused")
+		}
+	}
+	if len(epicEvents(t, f.st, 64)) != 0 {
+		t.Fatalf("an epic.closed event was recorded while the notes read was failing")
+	}
+
+	// Both recover: one comment, one close, one event. The dedupe starts clean
+	// because the failed read never posted a comment to find.
+	fake.err = nil
+	f.fake.CloseErr = nil
+	report, err := RunTick(context.Background(), f.in)
+	if err != nil {
+		t.Fatalf("recovery tick: %v", err)
+	}
+	if len(report.Epics) != 1 || report.Epics[0].Epic != 64 {
+		t.Fatalf("recovery tick closed nothing: %+v, skipped = %v", report.Epics, report.Skipped)
+	}
+	if got := comments(); got != 1 {
+		t.Fatalf("comments on #64 = %d after recovery, want exactly 1", got)
+	}
+	if ops := epicWrites(f.fake, 64); len(ops) != 2 || ops[0] != "comment" || ops[1] != "close" {
+		t.Fatalf("recovery writes to #64 = %v, want [comment close]", ops)
+	}
+	if len(epicEvents(t, f.st, 64)) != 1 {
+		t.Fatalf("epic.closed events for #64 = %d, want 1", len(epicEvents(t, f.st, 64)))
+	}
+}

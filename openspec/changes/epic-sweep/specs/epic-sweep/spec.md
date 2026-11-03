@@ -82,6 +82,19 @@ comment count without bound.
 - **THEN** #84 is closed and carries exactly one sweep comment
 - **AND** exactly one `epic.closed` event with detail `sweep: <N> sub-issues` is recorded
 
+### Requirement: A failed read of the epic's notes leaves the epic open
+The dedupe read that decides whether an epic already carries a sweep comment SHALL treat a failed read as a failure,
+never as "no comment yet". A failed notes read SHALL become a skip line naming the error and the tick SHALL still
+succeed; the epic stays open and no comment or close is written, so the next tick reads the notes afresh and the
+comment count does not grow while the failure lasts.
+#### Scenario: The notes read errors while the close is also failing
+- **WHEN** the sweep decides to close #84 and the notes read answers an error on three consecutive ticks
+- **THEN** each tick's skip list contains `#84 sweep: read notes: <error>` and the tick reports success
+- **AND** #84 carries no sweep comment and no `epic.closed` event has been recorded, because the read never returned
+#### Scenario: The notes read recovers after failing
+- **WHEN** the notes read succeeds on a later tick with the same closed children
+- **THEN** #84 is closed carrying exactly one sweep comment and exactly one `epic.closed` event
+
 ### Requirement: A failing sweep write does not fail the tick and is retried
 A failed comment or close SHALL become a skip line naming the error and the tick SHALL still succeed; the epic stays
 open, so the next tick's sweep sees the same conditions and tries again without a dedupe record.
