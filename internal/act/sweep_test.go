@@ -1,6 +1,7 @@
 package act
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/dinhtrung/fleet-console/internal/forge"
@@ -13,8 +14,9 @@ func epicRow(number int, state string) forge.Item {
 }
 
 // TestSweep is the table the issue names: all children closed → close; two of
-// three closed → skip naming the open one; zero children → the guard; an epic
-// already closed → silent skip; a non-epic row → skip. Each case asserts the
+// three closed → skip naming the open one; zero children → the guard, in both
+// its arms (an empty read, and a read holding only another epic's children); an
+// epic already closed → silent skip; a non-epic row → skip. Each case asserts the
 // reason verbatim, because the tick prints it, and Quiet, because the sweep must
 // not journal an unfinished epic on every tick.
 func TestSweep(t *testing.T) {
@@ -57,6 +59,14 @@ func TestSweep(t *testing.T) {
 		{
 			name:      "zero children is the guard",
 			candidate: epicRow(84, forge.StateOpen),
+			wantKind:  RollupSkip,
+			wantEpic:  84,
+			reason:    "no sub-issues in the read",
+		},
+		{
+			name:      "a read holding only another epic's children is the guard",
+			candidate: epicRow(84, forge.StateOpen),
+			items:     []forge.Item{child(90, 91, forge.StateOpen)},
 			wantKind:  RollupSkip,
 			wantEpic:  84,
 			reason:    "no sub-issues in the read",
@@ -155,7 +165,10 @@ func TestSweepIsPure(t *testing.T) {
 	first := Sweep(epicRow(84, forge.StateOpen), items)
 	second := Sweep(epicRow(84, forge.StateOpen), items)
 
-	if first.Kind != second.Kind || first.Reason != second.Reason {
+	// The scenario promises the same kind, reason, child count, open list and quiet
+	// flag. DeepEqual covers all five in one assertion; comparing fields by hand is
+	// how a regression that changes only Children, Open or Quiet slips through.
+	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("two calls differ: %+v vs %+v", first, second)
 	}
 	for index := range items {
