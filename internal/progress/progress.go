@@ -93,8 +93,22 @@ type Epic struct {
 }
 
 // Counts is the true size of each bucket, independent of the rendered caps.
+// OpenDecisions is the count of queue rows waiting on a human, the same rows
+// idleReason quotes, so the quiet predicate and the idle line cannot disagree.
 type Counts struct {
-	InFlight, Pending, OnHold, Epics int
+	InFlight, Pending, OnHold, Epics, OpenDecisions int
+}
+
+// Quiet reports whether the board holds nothing the operator has to see: no
+// open epic, nothing in flight, pending or on hold, and no decision waiting.
+// It reads Counts only — never the truncated slices, never the rendered text —
+// so a list cut for rendering can never make a busy board look quiet.
+func (s Snapshot) Quiet() bool {
+	return s.Counts.Epics == 0 &&
+		s.Counts.InFlight == 0 &&
+		s.Counts.Pending == 0 &&
+		s.Counts.OnHold == 0 &&
+		s.Counts.OpenDecisions == 0
 }
 
 // Roster is the rig read plus the two tick facts the idle rules quote but the
@@ -192,10 +206,11 @@ func Build(read mirror.TickResult, rows []store.DispatchRow, project store.Proje
 
 	snapshot.Rig = rigBlock
 	snapshot.Counts = Counts{
-		InFlight: len(snapshot.InFlight),
-		Pending:  len(snapshot.Pending),
-		OnHold:   len(snapshot.OnHold),
-		Epics:    len(snapshot.Epics),
+		InFlight:      len(snapshot.InFlight),
+		Pending:       len(snapshot.Pending),
+		OnHold:        len(snapshot.OnHold),
+		Epics:         len(snapshot.Epics),
+		OpenDecisions: len(openDecisions(projectRead.Rows)),
 	}
 	if snapshot.Rig.Idle = len(snapshot.InFlight) == 0 && snapshot.Rig.Busy == 0; snapshot.Rig.Idle {
 		if why := idleReason(snapshot.Project, snapshot.Rig, projectRead, roster); why != "" {

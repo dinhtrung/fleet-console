@@ -502,3 +502,151 @@ func TestRepoURLRules(t *testing.T) {
 		})
 	}
 }
+
+// quietRead is a board with nothing on it: every issue closed, no epic open,
+// nothing in flight, pending or on hold, and no decision waiting.
+func quietRead() mirror.TickResult {
+	return mirror.TickResult{
+		At: fixedNow,
+		Projects: map[string]mirror.ProjectResult{
+			"fleet-console": {
+				Items: []forge.Item{
+					{Number: 64, Kind: forge.KindEpic, State: forge.StateClosed, Title: "done epic"},
+					{Number: 65, Kind: forge.KindTask, State: forge.StateClosed, Title: "done task", Parent: intPtr(64)},
+				},
+				Seats: testSeats(),
+			},
+		},
+	}
+}
+
+func buildQuiet() Snapshot {
+	return Build(quietRead(), nil, testProject(), testConfig(), Roster{Plan: &decide.Plan{}})
+}
+
+// TestQuietWhenEverythingIsZero is the base case: an empty board is quiet.
+func TestQuietWhenEverythingIsZero(t *testing.T) {
+	snapshot := buildQuiet()
+	if !snapshot.Quiet() {
+		t.Fatalf("Quiet() = false on an empty board; counts = %+v", snapshot.Counts)
+	}
+	if snapshot.Counts != (Counts{}) {
+		t.Fatalf("counts = %+v, want all zero", snapshot.Counts)
+	}
+}
+
+// TestNotQuietForEachNonZeroCount is five separate cases, not one row with all
+// five set: a predicate that forgets one bucket must fail on that bucket alone.
+func TestNotQuietForEachNonZeroCount(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*mirror.TickResult, *[]store.DispatchRow)
+	}{
+		{
+			name: "one open epic",
+			mutate: func(read *mirror.TickResult, _ *[]store.DispatchRow) {
+				// openEpics counts an epic only when it has an open child
+				// (progress.go:484). The child here is itself an epic: openBuckets
+				// skips epics, so this leaves Pending, OnHold and InFlight at zero
+				// and makes the Epics term alone decide the predicate.
+				projectRead := read.Projects["fleet-console"]
+				projectRead.Items = append(projectRead.Items, forge.Item{
+					Number: 70, Kind: forge.KindEpic, State: forge.StateOpen, Title: "open epic",
+				}, forge.Item{
+					Number: 74, Kind: forge.KindEpic, State: forge.StateOpen,
+					Title: "nested open epic", Parent: intPtr(70),
+				})
+				read.Projects["fleet-console"] = projectRead
+			},
+		},
+		{
+			name: "one in flight",
+			mutate: func(read *mirror.TickResult, rows *[]store.DispatchRow) {
+				projectRead := read.Projects["fleet-console"]
+				projectRead.Items = append(projectRead.Items, forge.Item{
+					Number: 71, Kind: forge.KindTask, State: forge.StateOpen, Title: "in flight",
+				})
+				read.Projects["fleet-console"] = projectRead
+				*rows = []store.DispatchRow{{
+					ID: 1, ProjectID: 1, ItemNumber: 71, Seat: "dev-build-1@fleet-console",
+					Branch: "feature/71", CreatedAt: "2026-10-30T11:33:00Z", State: "active",
+				}}
+			},
+		},
+		{
+			name: "one pending",
+			mutate: func(read *mirror.TickResult, _ *[]store.DispatchRow) {
+				projectRead := read.Projects["fleet-console"]
+				projectRead.Items = append(projectRead.Items, forge.Item{
+					Number: 72, Kind: forge.KindTask, State: forge.StateOpen, Title: "pending work",
+				})
+				read.Projects["fleet-console"] = projectRead
+			},
+		},
+		{
+			name: "one on hold",
+			mutate: func(read *mirror.TickResult, _ *[]store.DispatchRow) {
+				projectRead := read.Projects["fleet-console"]
+				projectRead.Items = append(projectRead.Items, forge.Item{
+					Number: 73, Kind: forge.KindTask, State: forge.StateOpen, Title: "held work",
+					Labels: []string{"onhold"},
+				})
+				read.Projects["fleet-console"] = projectRead
+			},
+		},
+		{
+			name: "one open decision",
+			mutate: func(read *mirror.TickResult, _ *[]store.DispatchRow) {
+				projectRead := read.Projects["fleet-console"]
+				projectRead.Rows = []rig.QueueRow{{
+					ID: "qitem-1", State: "pending", Destination: "human@kernel",
+					Summary: "#63 accept the parked change request?", Body: "fleet-console #63: no verdict",
+				}}
+				read.Projects["fleet-console"] = projectRead
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			read := quietRead()
+			var rows []store.DispatchRow
+			tc.mutate(&read, &rows)
+			snapshot := Build(read, rows, testProject(), testConfig(), Roster{Plan: &decide.Plan{}})
+			if snapshot.Quiet() {
+				t.Fatalf("Quiet() = true with %s; counts = %+v", tc.name, snapshot.Counts)
+			}
+		})
+	}
+}
+
+// TestNotQuietWhenAListIsTruncated pins the reason Quiet reads Counts and not
+// the slices. Truncation happens in Render (entryLimit, render.go:15), not in
+// Build: the snapshot keeps the full slice and the count agrees with it. The
+// message prints only five pending lines; the board still has forty.
+func TestNotQuietWhenAListIsTruncated(t *testing.T) {
+	read := quietRead()
+	projectRead := read.Projects["fleet-console"]
+	for i := range 40 {
+		projectRead.Items = append(projectRead.Items, forge.Item{
+			Number: 100 + i, Kind: forge.KindTask, State: forge.StateOpen,
+			Title: "pending work", Labels: []string{"status::ongoing"},
+		})
+	}
+	read.Projects["fleet-console"] = projectRead
+
+	snapshot := Build(read, nil, testProject(), testConfig(), Roster{Plan: &decide.Plan{}})
+	if snapshot.Counts.Pending != 40 {
+		t.Fatalf("Counts.Pending = %d, want 40", snapshot.Counts.Pending)
+	}
+	body := Render(snapshot, fixedNow)
+	// The pending bucket prints entryLimit lines and then "+35 more".
+	if printed := strings.Count(body, "  #1"); printed != 5 {
+		t.Fatalf("pending lines printed = %d, want 5 (entryLimit)", printed)
+	}
+	if !strings.Contains(body, "+35 more") {
+		t.Fatalf("body has no truncation marker; the case would not prove anything:\n%s", body)
+	}
+	if snapshot.Quiet() {
+		t.Fatal("Quiet() = true although the count is 40 and only the rendered list is truncated")
+	}
+}
