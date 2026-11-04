@@ -684,28 +684,18 @@ type decisionRow struct {
 	body    string
 }
 
-// openDecisions lists the rows waiting on a person. It answers the same
-// question as the board's /api/decisions, from the same row fields, so the
-// quiet predicate can never disagree with what the operator is being asked.
+// openDecisions lists the rows waiting on a person. It asks rig.WaitsOnHuman —
+// the same rule the board's /api/decisions and the mirror's row filter use — so
+// the count and the notice cannot disagree with what the operator is asked.
 //
-// The shape matters: a decision waiting on a person is usually a `blocked` row
-// whose destination is an agent seat and whose blocker is a human seat — the
-// human is who answers, not who filed it. Counting only rows addressed to a
-// human destination missed every one of those (issue #143).
+// Counting only rows whose destination is human missed the usual decision shape
+// (a blocked row on an agent seat with a human blocker); counting only that
+// shape missed a pending row addressed to a person. Both are real; one rule
+// covers all of them (issue #143).
 func openDecisions(rows []rig.QueueRow) []decisionRow {
 	var out []decisionRow
 	for _, row := range rows {
-		state := strings.ToLower(strings.TrimSpace(row.State))
-		if state != "pending" && state != "blocked" {
-			continue
-		}
-		// A pending row addressed to a person is an obligation the moment it
-		// exists; a blocked row also counts when the person is its blocker,
-		// whatever its destination.
-		switch {
-		case state == "pending" && rig.HumanDecision(row.Destination):
-		case state == "blocked" && rig.HumanDecision(row.BlockedOn):
-		default:
+		if !rig.WaitsOnHuman(row.State, row.Destination, row.BlockedOn) {
 			continue
 		}
 		out = append(out, decisionRow{summary: row.Summary, body: row.Body})

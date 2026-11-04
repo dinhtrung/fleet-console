@@ -658,13 +658,20 @@ func TestNotQuietWhenAListIsTruncated(t *testing.T) {
 // handing Build a hand-made row that skipped both. That shortcut is what let
 // the original test pass while production stayed broken.
 //
-// The shape is the one this box actually produces: a `blocked` row whose
-// destination is an agent seat and whose blocker is `operator-human@kernel`.
-// Counted by destination alone it is invisible, and the board served two such
-// decisions while the snapshot read quiet.
+// It covers all three shapes a decision takes on this box, because the first
+// fix for #143 covered only the first and the review caught the other two:
+//
+//  1. `blocked` whose destination is an agent seat and whose blocker is a
+//     person — the shape production produced while the board read quiet;
+//  2. `pending` whose destination is a person — what internal/act/adopt.go
+//     creates for an ambiguous dispatch;
+//  3. `blocked` whose destination is a person, with no blocker.
+//
+// Every row's destination rig is another rig, so filterRows must keep each one:
+// a person's obligation does not belong to the project's rig.
 func TestProductionShapedDecisionRowsAreNotQuiet(t *testing.T) {
-	// Exactly the fields `rig queue list -A -a --json` emits for a parked row,
-	// including the required pickup block.
+	// Exactly the fields `rig queue list -A -a --json` emits, including the
+	// required pickup block.
 	const wire = `[
 	  {"pickup":{"state":"parked","evidence":"awaits a person"},
 	   "qitemId":"qitem-20261104014517-6e808968eec861e8",
@@ -677,24 +684,39 @@ func TestProductionShapedDecisionRowsAreNotQuiet(t *testing.T) {
 	   "tsCreated":"2026-11-04T01:27:16.000Z","sourceSession":"hermes-orchestrator",
 	   "destinationSession":"advisor-lead@kernel","state":"blocked","priority":"routine",
 	   "blockedOn":"operator-human@kernel",
-	   "summary":"Release gate","body":"do not tag android-v1.2.0"}
+	   "summary":"Release gate","body":"do not tag android-v1.2.0"},
+	  {"pickup":{"state":"unclaimed"},
+	   "qitemId":"qitem-20261104012613-e9f2a970",
+	   "tsCreated":"2026-11-04T01:26:13.000Z","sourceSession":"hermes-orchestrator",
+	   "destinationSession":"human@kernel","state":"pending","priority":"routine",
+	   "blockedOn":"",
+	   "summary":"ambiguous dispatch: #12 has 2 queue rows","body":"pick one row"},
+	  {"pickup":{"state":"parked","evidence":"awaits a person"},
+	   "qitemId":"qitem-20261104013000-b7c1de44",
+	   "tsCreated":"2026-11-04T01:30:00.000Z","sourceSession":"hermes-orchestrator",
+	   "destinationSession":"human@kernel","state":"blocked","priority":"routine",
+	   "blockedOn":"",
+	   "summary":"confirm the release tag","body":"blocked, addressed to the operator"}
 	]`
+
+	const wantDecisions = 4
 
 	rows, err := rig.ParseQueueList([]byte(wire), nil)
 	if err != nil {
 		t.Fatalf("ParseQueueList: %v", err)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("decoded rows = %d, want 2", len(rows))
+	if len(rows) != wantDecisions {
+		t.Fatalf("decoded rows = %d, want %d", len(rows), wantDecisions)
 	}
+	// Every row must satisfy the shared rule, and the decode must have carried
+	// the fields the rule reads (blockedOn arrives as `blockedOn` on the wire).
 	for _, row := range rows {
-		if !rig.HumanDecision(row.BlockedOn) {
-			t.Fatalf("row %s: BlockedOn = %q, not decoded as a human blocker", row.ID, row.BlockedOn)
+		if !rig.WaitsOnHuman(row.State, row.Destination, row.BlockedOn) {
+			t.Fatalf("row %s (state=%q dest=%q blockedOn=%q) not a human obligation",
+				row.ID, row.State, row.Destination, row.BlockedOn)
 		}
 	}
 
-	// The rows are addressed to another rig, so the mirror's filter must keep
-	// them: a person's obligation does not belong to the project's rig.
 	runner := queueRunner(func(_ context.Context, args ...string) ([]byte, error) {
 		switch {
 		case len(args) > 0 && args[0] == "queue":
@@ -729,16 +751,16 @@ func TestProductionShapedDecisionRowsAreNotQuiet(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 	kept := read.Projects["fleet-console"].Rows
-	if len(kept) != 2 {
-		t.Fatalf("filterRows kept %d rows, want 2: an @kernel decision row was dropped", len(kept))
+	if len(kept) != wantDecisions {
+		t.Fatalf("filterRows kept %d rows, want %d: a decision row was dropped", len(kept), wantDecisions)
 	}
 
 	snapshot := Build(read, nil, testProject(), testConfig(), Roster{Plan: &decide.Plan{}})
-	if snapshot.Counts.OpenDecisions != 2 {
-		t.Fatalf("Counts.OpenDecisions = %d, want 2", snapshot.Counts.OpenDecisions)
+	if snapshot.Counts.OpenDecisions != wantDecisions {
+		t.Fatalf("Counts.OpenDecisions = %d, want %d", snapshot.Counts.OpenDecisions, wantDecisions)
 	}
 	if snapshot.Quiet() {
-		t.Fatalf("Quiet() = true with 2 decisions waiting; counts = %+v", snapshot.Counts)
+		t.Fatalf("Quiet() = true with %d decisions waiting; counts = %+v", wantDecisions, snapshot.Counts)
 	}
 }
 

@@ -306,7 +306,7 @@ func filterRows(rows []rig.QueueRow, rigs []string) []rig.QueueRow {
 			out = append(out, row)
 			continue
 		}
-		if rig.HumanDecision(row.BlockedOn) {
+		if rig.WaitsOnHuman(row.State, row.Destination, row.BlockedOn) {
 			out = append(out, row)
 		}
 	}
