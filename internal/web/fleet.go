@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/gofiber/fiber/v3"
@@ -23,6 +24,10 @@ type Fleet struct {
 	Hub    *Hub
 	Now    func() time.Time
 	Compat func(ctx context.Context) rig.Report
+	// ForgeFor resolves a project's forge for the one write path the board
+	// owns: a human approve/reject posts a note on the change request. Every
+	// other write stays in the act loop.
+	ForgeFor func(ctx context.Context, project store.ProjectRow) (forge.Forge, error)
 }
 
 type boardItem struct {

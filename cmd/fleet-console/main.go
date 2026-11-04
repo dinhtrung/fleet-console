@@ -581,6 +581,18 @@ func run(args []string, stdout, stderr io.Writer) error {
 		Compat:     func(context.Context) rig.Report { return compatLive.current() },
 		Store:      db,
 		Rig:        rig.NewAdapter(rigRunner),
+		// A board verdict is one comment write, then the act tick merges on the
+		// facts. Budget 50 is a per-call ceiling, not a tick's 1500.
+		ForgeFor: func(_ context.Context, project store.ProjectRow) (forge.Forge, error) {
+			switch forge.Kind(project.ForgeKind) {
+			case forge.KindGitHub:
+				return forge.NewGitHub(project.ForgeProject, forgeRunner, &forge.Budget{Max: 50}), nil
+			case forge.KindGitLab:
+				return forge.NewGitLab(project.ForgeProject, forgeRunner, &forge.Budget{Max: 50}), nil
+			default:
+				return nil, fmt.Errorf("verdict: project %s has unknown forge %q", project.Key, project.ForgeKind)
+			}
+		},
 		// The setup chain runs `mkdir`, `git clone` and the rig CLI. Only an allowlisted
 		// step builds a command, and no step builds a login: the operator's credential
 		// never passes through here.
