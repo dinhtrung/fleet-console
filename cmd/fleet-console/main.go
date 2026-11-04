@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -412,12 +413,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	// The compat check runs at boot, as runtime-compat requires. A failure is
 	// visible at /api/compat and in the log; the API still serves.
-	report := probe.Run(ctx)
-	if !report.OK {
-		fmt.Fprintf(stderr, "fleet-console: compat: %s\n", report.Error)
-	} else {
-		fmt.Fprintf(stderr, "fleet-console: compat: rig %s at or above floor %s\n", report.Version, report.Floor)
-	}
+	//
+	// The gate must not be frozen to this one read. On a cold boot the rig daemon
+	// can be up to a minute behind the board (the seat launcher starts it, not
+	// systemd), and a transient "Daemon not running" is indistinguishable from a
+	// permanent incompatibility. Every consumer reads compat through the live
+	// state below, and the act loop re-probes on each tick while the gate is
+	// closed, so the loop opens the moment the daemon answers.
+	compatLive := newCompatState(probe, stderr)
+	report := compatLive.current()
 
 	// One Telegram client for both kinds of message (design.md §6). Missing
 	// credentials print one line and leave every trigger a no-op; they are a
@@ -469,6 +473,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 		sources,
 		eff.TickInterval, jitter,
 		func(read mirror.TickResult) {
+			// While the gate is closed, re-probe: a boot-time refusal is often just
+			// the daemon not being up yet, and compat must not be the one read that
+			// stays frozen for the life of the process. current() logs the reopen
+			// exactly once; a genuinely incompatible rig keeps the gate closed.
+			if gateErr != nil {
+				gate = act.NewGate(compatLive.current())
+				gateErr = gate.Check()
+			}
 			if apply && gateErr == nil {
 				if err := adoptPendingDispatches(ctx, db, rig.NewAdapter(rigRunner), stderr); err != nil {
 					fmt.Fprintf(stderr, "adopt: %v\n", err)
@@ -566,7 +578,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	app, err := web.New(web.Config{
 		Token:      token,
 		ConfigPath: eff.ConfigPath,
-		Compat:     func(context.Context) rig.Report { return report },
+		Compat:     func(context.Context) rig.Report { return compatLive.current() },
 		Store:      db,
 		Rig:        rig.NewAdapter(rigRunner),
 		// The setup chain runs `mkdir`, `git clone` and the rig CLI. Only an allowlisted
@@ -597,6 +609,59 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case err := <-listenErr:
 		return err
 	}
+}
+
+// compatState owns the current compat report. The probe is re-run while the act
+// loop is blocked, and every reader — the tick's gate and the board's
+// /api/compat — goes through current(), so neither shows a boot-time failure
+// after the rig has answered. The reopen is logged once per transition, so the
+// journal records recovery without a line per tick.
+type compatState struct {
+	probe *rig.Probe
+	logf  func(format string, args ...any)
+
+	mu      sync.Mutex
+	report  rig.Report
+	blocked bool
+}
+
+// newCompatState runs the first probe and reports it, matching the boot line the
+// service has always printed.
+func newCompatState(probe *rig.Probe, stderr io.Writer) *compatState {
+	status := &compatState{probe: probe}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	status.logf = func(format string, args ...any) {
+		fmt.Fprintf(stderr, "fleet-console: "+format+"\n", args...)
+	}
+	report := probe.Run(context.Background())
+	status.report = report
+	status.blocked = report.Blocked()
+	if !report.OK {
+		status.logf("compat: %s", report.Error)
+	} else {
+		status.logf("compat: rig %s at or above floor %s", report.Version, report.Floor)
+	}
+	return status
+}
+
+// current returns the live report, re-probing first while the gate is closed so
+// a transient boot failure clears without a restart. The exchange rate is one
+// probe per call while blocked — at most one per tick from the act loop, plus
+// one per board read — and zero once the gate is open.
+func (s *compatState) current() rig.Report {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.blocked {
+		report := s.probe.Run(context.Background())
+		if !report.Blocked() {
+			s.blocked = false
+			s.logf("compat: rig %s at or above floor %s; act loop open", report.Version, report.Floor)
+		}
+		s.report = report
+	}
+	return s.report
 }
 
 // adoptPendingDispatches resolves two-phase dispatches for every project. It is
