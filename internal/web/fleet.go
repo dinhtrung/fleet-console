@@ -156,6 +156,47 @@ func (f *Fleet) forgeHeads(ctx context.Context, projectID int64) (map[int]string
 	return heads, nil
 }
 
+// forgeChange returns the newest open change request that closes this item, read
+// from the mirror's forge snapshot. The item drawer used to take the pull request
+// from a pr: label, and nothing writes that label on an item the act loop did not
+// dispatch - so a hand-built or adopted pull request left the drawer saying "no
+// change request" while the pull request was open, with no way to judge it.
+func (f *Fleet) forgeChange(ctx context.Context, projectID int64, number int) *changeRequest {
+	raw, _, err := f.Store.GetSnapshot(ctx, projectID, "forge")
+	if err != nil || len(raw) == 0 {
+		return nil
+	}
+	var snapshot struct {
+		CRs []struct {
+			Number     int  `json:"number"`
+			ClosesItem int  `json:"closes_item"`
+			Merged     bool `json:"merged"`
+			Checks     []struct {
+				Name       string `json:"name"`
+				Conclusion string `json:"conclusion"`
+			} `json:"checks"`
+		} `json:"change_requests"`
+	}
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return nil
+	}
+	var best *changeRequest
+	for _, cr := range snapshot.CRs {
+		if cr.Merged || cr.ClosesItem != number {
+			continue
+		}
+		if best != nil && cr.Number <= best.Number {
+			continue
+		}
+		judged := changeRequest{Number: cr.Number}
+		for _, check := range cr.Checks {
+			judged.Checks = append(judged.Checks, checkOut{Name: check.Name, Conclusion: check.Conclusion})
+		}
+		best = &judged
+	}
+	return best
+}
+
 // Board assembles projects, counts and one reason per task from stored facts.
 func (f *Fleet) Board(c fiber.Ctx) error {
 	ctx := c.Context()
@@ -407,6 +448,26 @@ func (f *Fleet) Item(c fiber.Ctx) error {
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
+		// The snapshot is the authority: every mirror tick rewrites it, while the
+		// pr: label is a write the act loop only makes after it dispatched the item
+		// itself - so an adopted pull request has no label and used to read as "no
+		// change request" with nothing to judge.
+		if judged := f.forgeChange(ctx, p.ID, number); judged != nil {
+			detail.Change = judged
+		} else if pr := labelValue(labels, "pr:"); pr != "" {
+			if n, err := strconv.Atoi(pr); err == nil {
+				cr := changeRequest{Number: n}
+				for _, l := range labels {
+					if strings.HasPrefix(l, "check:") {
+						parts := strings.SplitN(strings.TrimPrefix(l, "check:"), "=", 2)
+						if len(parts) == 2 {
+							cr.Checks = append(cr.Checks, checkOut{Name: parts[0], Conclusion: parts[1]})
+						}
+					}
+				}
+				detail.Change = &cr
+			}
+		}
 		if len(dispatches) > 0 {
 			d := dispatches[0]
 			detail.Dispatch = &d
@@ -414,20 +475,6 @@ func (f *Fleet) Item(c fiber.Ctx) error {
 			if d.BriefPath != "" {
 				if data, err := readCapped(d.BriefPath, 8192); err == nil {
 					detail.Brief = data
-				}
-			}
-			if pr := labelValue(labels, "pr:"); pr != "" {
-				if n, err := strconv.Atoi(pr); err == nil {
-					cr := changeRequest{Number: n}
-					for _, l := range labels {
-						if strings.HasPrefix(l, "check:") {
-							parts := strings.SplitN(strings.TrimPrefix(l, "check:"), "=", 2)
-							if len(parts) == 2 {
-								cr.Checks = append(cr.Checks, checkOut{Name: parts[0], Conclusion: parts[1]})
-							}
-						}
-					}
-					detail.Change = &cr
 				}
 			}
 			verdicts, err := f.Store.Verdicts(ctx, d.ID)
