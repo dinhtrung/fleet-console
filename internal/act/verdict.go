@@ -112,8 +112,9 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 // storeVerdict records the decision once. A tick re-reads the same notes, so the
 // same verdict must not be added twice.
 func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, noteID, sha, decision string) (*CapturedVerdict, error) {
-	// A verdict with no dispatch belongs to the item: adoption's case. Reading it
-	// back by dispatch would find nothing and store the same note every tick.
+	// A verdict with no dispatch belongs to the item of one project: adoption's
+	// case. Reading it back unscoped would find another project's row for the same
+	// item number and mistake it for this one.
 	existing, err := a.verdictsFor(ctx, dispatchID, item)
 	if err != nil {
 		return nil, err
@@ -124,8 +125,8 @@ func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, 
 		}
 	}
 	verdictID, err := a.Store.AddVerdict(ctx, store.NewVerdict{
-		DispatchID: dispatchID, ItemNumber: item, SHA: sha, Decision: decision,
-		Source: "note " + noteID, At: a.now(),
+		DispatchID: dispatchID, ProjectID: a.ProjectID, ItemNumber: item,
+		SHA: sha, Decision: decision, Source: "note " + noteID, At: a.now(),
 	})
 	if err != nil {
 		return nil, err
@@ -144,7 +145,7 @@ func (a *Actions) verdictsFor(ctx context.Context, dispatchID int64, item int) (
 	if dispatchID != 0 {
 		return a.Store.Verdicts(ctx, dispatchID)
 	}
-	return a.Store.VerdictsForItem(ctx, item)
+	return a.Store.VerdictsForItem(ctx, a.ProjectID, item)
 }
 
 // CaptureFromForge reads the change request's notes and stores the verdict.

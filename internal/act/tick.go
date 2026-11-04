@@ -84,7 +84,10 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	if in.Store == nil || in.Forge == nil || in.Rig == nil || in.Git == nil {
 		return report, fmt.Errorf("act tick: store, forge, rig and git are required")
 	}
-	actions := &Actions{Store: in.Store, Forge: in.Forge, Rig: in.Rig, Git: in.Git, Now: in.Now}
+	actions := &Actions{
+		Store: in.Store, Forge: in.Forge, Rig: in.Rig, Git: in.Git, Now: in.Now,
+		ProjectID: in.Project.ID,
+	}
 
 	// Verdict capture and the merge watchdog run before new dispatches: a merged
 	// task frees its seat, and the same tick must not re-dispatch it.

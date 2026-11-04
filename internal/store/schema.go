@@ -82,17 +82,24 @@ UPDATE project SET rigs_json = json_array(rig) WHERE rig <> '';
 // schemaV4 lets a verdict belong to an item rather than a dispatch. Adoption
 // merges a change request the app never dispatched, so its verdict has no
 // dispatch to point at (design D2: no synthetic dispatch row). SQLite cannot
-// drop a NOT NULL or a foreign key in place, so the table is rebuilt; item_number
-// is backfilled from the dispatch each existing verdict already points at.
+// drop a NOT NULL or a foreign key in place, so the table is rebuilt.
+//
+// project_id is stored rather than resolved through a join: item_number is unique
+// only within a project, and resolving the project through the item mirror would
+// depend on that cache holding the row — the mirror keeps open items, so the
+// linking row disappears exactly when a merged item closes. Both columns are
+// backfilled from the dispatch each existing verdict already points at.
 const schemaV4 = `
 CREATE TABLE verdict_new (
   id INTEGER PRIMARY KEY, dispatch_id INTEGER REFERENCES dispatch(id),
+  project_id INTEGER NOT NULL,
   item_number INTEGER NOT NULL DEFAULT 0,
   sha TEXT NOT NULL, decision TEXT NOT NULL,  -- accept | reject
   source TEXT NOT NULL, at TEXT NOT NULL
 );
-INSERT INTO verdict_new (id, dispatch_id, item_number, sha, decision, source, at)
-  SELECT v.id, v.dispatch_id, COALESCE(d.item_number, 0), v.sha, v.decision, v.source, v.at
+INSERT INTO verdict_new (id, dispatch_id, project_id, item_number, sha, decision, source, at)
+  SELECT v.id, v.dispatch_id, COALESCE(d.project_id, 0), COALESCE(d.item_number, 0),
+         v.sha, v.decision, v.source, v.at
   FROM verdict v LEFT JOIN dispatch d ON d.id = v.dispatch_id;
 DROP TABLE verdict;
 ALTER TABLE verdict_new RENAME TO verdict;

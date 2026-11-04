@@ -89,9 +89,11 @@ func (s *Store) Dispatch(ctx context.Context, id int64) (*DispatchRow, error) {
 //
 // DispatchID is 0 for an adopted change request: the app never dispatched the
 // item, so there is no row to point at (design D2 — no synthetic dispatch).
-// ItemNumber names the item either way, which is what an adopted merge reads.
+// ProjectID and ItemNumber name the item either way, and both are required: item
+// numbers are unique only within a project.
 type NewVerdict struct {
 	DispatchID int64
+	ProjectID  int64
 	ItemNumber int
 	SHA        string
 	Decision   string
@@ -111,8 +113,10 @@ func (s *Store) AddVerdict(ctx context.Context, v NewVerdict) (int64, error) {
 		dispatchID = v.DispatchID
 	}
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO verdict (dispatch_id, item_number, sha, decision, source, at) VALUES (?, ?, ?, ?, ?, ?)`,
-		dispatchID, v.ItemNumber, v.SHA, v.Decision, v.Source, at.UTC().Format(time.RFC3339Nano))
+		INSERT INTO verdict (dispatch_id, project_id, item_number, sha, decision, source, at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		dispatchID, v.ProjectID, v.ItemNumber, v.SHA, v.Decision, v.Source,
+		at.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return 0, fmt.Errorf("store: add verdict: %w", err)
 	}

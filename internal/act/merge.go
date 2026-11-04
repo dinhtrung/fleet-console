@@ -262,7 +262,7 @@ func (a *Actions) MergeAdopted(ctx context.Context, projectID int64, item int, r
 		return nil, fmt.Errorf("refusing merge: change request #%d is on %s, which does not start with %s",
 			request.Number, request.Branch, branchPrefix(item))
 	}
-	verdicts, err := a.Store.VerdictsForItem(ctx, item)
+	verdicts, err := a.Store.VerdictsForItem(ctx, projectID, item)
 	if err != nil {
 		return nil, err
 	}

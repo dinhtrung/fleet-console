@@ -204,17 +204,21 @@ func (s *Store) Verdicts(ctx context.Context, dispatchID int64) ([]VerdictRow, e
 		WHERE dispatch_id = ? ORDER BY id DESC`, dispatchID)
 }
 
-// VerdictsForItem returns the verdicts recorded for one item, newest first,
-// whatever row they came from. An adopted change request has no dispatch, so a
-// merge that runs without one has to read the verdict by item.
-func (s *Store) VerdictsForItem(ctx context.Context, item int) ([]VerdictRow, error) {
+// VerdictsForItem returns the verdicts recorded for one item of one project,
+// newest first. An adopted change request has no dispatch, so a merge that runs
+// without one reads the verdict by item.
+//
+// The project scope is required, not decoration: item_number is unique only
+// within a project (UNIQUE(project_id, number)), and two projects number their
+// items independently. The row carries its own project_id for that reason.
+func (s *Store) VerdictsForItem(ctx context.Context, projectID int64, item int) ([]VerdictRow, error) {
 	return s.verdictRows(ctx, `
 		SELECT id, COALESCE(dispatch_id, 0), item_number, sha, decision, source, at FROM verdict
-		WHERE item_number = ? ORDER BY id DESC`, item)
+		WHERE project_id = ? AND item_number = ? ORDER BY id DESC`, projectID, item)
 }
 
-func (s *Store) verdictRows(ctx context.Context, query string, arg any) ([]VerdictRow, error) {
-	rows, err := s.db.QueryContext(ctx, query, arg)
+func (s *Store) verdictRows(ctx context.Context, query string, args ...any) ([]VerdictRow, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: verdicts: %w", err)
 	}

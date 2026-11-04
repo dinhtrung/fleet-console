@@ -140,7 +140,7 @@ func TestAdoptRefusesAVerdictAtAnotherSha(t *testing.T) {
 		t.Fatalf("merged at the stale sha: %+v", fake.Writes)
 	}
 	// No verdict is stored for this head, so a later merge cannot find one.
-	verdicts, err := st.VerdictsForItem(ctx, 5)
+	verdicts, err := st.VerdictsForItem(ctx, in.Project.ID, 5)
 	if err != nil {
 		t.Fatalf("verdicts: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestVerdictIsStoredWithNoDispatch(t *testing.T) {
 	if len(report.Verdicts) != 1 {
 		t.Fatalf("verdicts = %+v, want the ACCEPT captured despite the refusal", report.Verdicts)
 	}
-	verdicts, err := st.VerdictsForItem(ctx, 5)
+	verdicts, err := st.VerdictsForItem(ctx, in.Project.ID, 5)
 	if err != nil {
 		t.Fatalf("verdicts: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestAdoptedVerdictIsNotStoredTwice(t *testing.T) {
 			t.Fatalf("tick: %v", err)
 		}
 	}
-	verdicts, err := st.VerdictsForItem(ctx, 5)
+	verdicts, err := st.VerdictsForItem(ctx, in.Project.ID, 5)
 	if err != nil {
 		t.Fatalf("verdicts: %v", err)
 	}
