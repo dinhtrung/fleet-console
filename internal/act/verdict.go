@@ -49,6 +49,7 @@ func (e *UnattributableVerdictError) Is(target error) bool { return target == Er
 // CapturedVerdict is the verdict stored from a reviewer note.
 type CapturedVerdict struct {
 	VerdictID int64
+	Item      int // the item the verdict is about, not the change request number
 	SHA       string
 	Decision  string
 	Source    string
@@ -132,7 +133,10 @@ func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, 
 		fmt.Sprintf("%s %s from note %s", decision, sha, noteID)); err != nil {
 		return nil, err
 	}
-	return &CapturedVerdict{VerdictID: verdictID, SHA: sha, Decision: decision, Source: "note " + noteID, NoteID: noteID}, nil
+	return &CapturedVerdict{
+		VerdictID: verdictID, Item: item, SHA: sha, Decision: decision,
+		Source: "note " + noteID, NoteID: noteID,
+	}, nil
 }
 
 // CaptureFromForge reads the change request's notes and stores the verdict.
