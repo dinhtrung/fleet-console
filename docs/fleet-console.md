@@ -36,6 +36,15 @@ A merge happens only when four facts are true, re-read at the moment of the merg
 
 Anything unknown refuses and names the missing fact. The reviewer keeps the judgement; the app keeps the button.
 
+**Adoption: a hand-dispatched item still merges.** The four facts used to key on a `dispatch` row, so an item whose
+queue row was created by hand — `rig queue create`, outside the app — never merged: the watchdog skipped its change
+request with `closes no dispatch`. When the store holds no dispatch row, the same four facts are now enforced
+against the change request itself, plus two guards that exist only because there is no row to trust: the head branch
+must start with `feature/<item>-`, and a live dispatch for the same item on a *different* branch refuses rather than
+picking a winner. Adoption records `change_request.adopted` before the merge and the ordinary `merge` event after,
+and it invents no dispatch row. Readiness stays the integrator's job: the watchdog marks a draft ready and merges,
+but a human still decides what is worth merging.
+
 ### Reading a verdict
 
 A verdict is a note whose **first line** starts with the token and a sha: `ACCEPT <sha>`,

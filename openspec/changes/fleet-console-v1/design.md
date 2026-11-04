@@ -238,6 +238,17 @@ Anything unknown refuses and raises a `red_gate` decision naming the missing fac
 `gh pr merge <n> --squash --match-head-commit <sha>` (or `glab mr merge <iid> --sha <sha> --yes`), then the item is
 verified closed and the next item unblocked; if the merge did not close it, the app closes it and records why.
 
+**Adoption.** The four facts originally keyed on a `dispatch` row, so an item whose queue row was created by hand —
+by `rig queue create`, outside the app — never merged at all: the watchdog skipped its change request with
+`closes no dispatch`. Adoption closes that gap. When the store holds no dispatch row for the item, the same four
+facts are enforced against the change request directly (accepted at the head sha, green, mergeable, `Closes #<item>`)
+plus two guards that exist only because there is no row to trust: the head branch must start with
+`feature/<item>-`, and a live dispatch for the same item on a *different* branch refuses rather than picking a
+winner. Adoption writes `change_request.adopted` before the forge merge and records the ordinary `merge` event
+after, and it invents **no** dispatch row — a synthetic row would show work nobody did and would collide with the
+`UNIQUE(project_id, item_number, attempt)` key the next real dispatch needs. Readiness stays the integrator's job:
+the watchdog marks a draft ready and merges, but a human still decides what is worth merging.
+
 ## 12. Rig lifecycle
 
 A project row renders a spec from `templates/rig.yaml.tmpl`:
