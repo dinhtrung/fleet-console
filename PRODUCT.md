@@ -19,6 +19,14 @@ repositories: it mirrors the forge and the rig, decides what is ready by a writt
 seats, collects review verdicts, merges on four deterministic facts, and keeps every human obligation as a record
 with an SLA.
 
+## Notices
+
+The phone is told about work only when there is work. A progress notice is suppressed when the snapshot is quiet —
+no open epic, nothing in flight, pending or on hold, and no decision waiting on the operator — and the log records
+`notify: skipped, no open work: nothing to report` so a reader can tell a deliberate skip from a failed send. A
+decision escalation is never muted: an open decision is by definition not quiet. `--notify-report` sends on demand
+even when the board is quiet, because an explicit request from the operator is not an unsolicited trigger.
+
 ## Who it is for
 
 The person who owns the fleets: they need one screen that answers what is running where, what is blocked and why,
