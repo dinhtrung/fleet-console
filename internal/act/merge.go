@@ -224,3 +224,100 @@ func (a *Actions) Finalize(ctx context.Context, dispatchID int64, item int, requ
 	sort.Slice(result.Events, func(i, j int) bool { return result.Events[i] < result.Events[j] })
 	return result, nil
 }
+
+// branchPrefix is the app's branch convention: feature/<item>-<slug>. It is the
+// only cheap way to reject a pull request that merely mentions the item, and a
+// hand-made branch that follows it is treated exactly like the app's own.
+func branchPrefix(item int) string { return fmt.Sprintf("feature/%d-", item) }
+
+// MergeAdopted merges a change request the app never dispatched. It enforces the
+// same four facts as Merge — mergeable, `Closes #<item>`, green checks, ACCEPT at
+// the head sha — plus two refusals adoption alone needs, and it invents no
+// dispatch row (design D2).
+//
+// The verdict is read by item, because there is no dispatch to key on; the
+// caller has already captured it (design D3), so a missing verdict here means the
+// reviewer has not spoken.
+func (a *Actions) MergeAdopted(ctx context.Context, projectID int64, item int, request forge.ChangeRequest) (*MergeResult, error) {
+	if a.Store == nil || a.Forge == nil {
+		return nil, fmt.Errorf("merge adopted: store and forge are required")
+	}
+	// A live dispatch on a *different* branch is the dangerous case: two branches
+	// close one item, and which work survives is a human decision, so this refuses
+	// rather than picking a winner (design D4).
+	live, err := a.Store.Dispatches(ctx, projectID, item)
+	if err != nil {
+		return nil, err
+	}
+	for _, dispatch := range live {
+		if dispatch.EndedAt != nil {
+			continue
+		}
+		if dispatch.Branch != request.Branch {
+			return nil, fmt.Errorf("refusing merge: #%d has a live dispatch on %s and this change request is on %s",
+				item, dispatch.Branch, request.Branch)
+		}
+	}
+	if !strings.HasPrefix(request.Branch, branchPrefix(item)) {
+		return nil, fmt.Errorf("refusing merge: change request #%d is on %s, which does not start with %s",
+			request.Number, request.Branch, branchPrefix(item))
+	}
+	verdicts, err := a.Store.VerdictsForItem(ctx, projectID, item)
+	if err != nil {
+		return nil, err
+	}
+	if len(verdicts) == 0 {
+		return nil, fmt.Errorf("refusing merge: no ACCEPT verdict for #%d", item)
+	}
+	verdict := verdicts[0]
+	if verdict.Decision != "accept" {
+		return nil, fmt.Errorf("refusing merge: newest verdict for #%d is %s", item, verdict.Decision)
+	}
+	if verdict.SHA != request.HeadSHA {
+		return nil, fmt.Errorf("refusing merge: verdict sha %s does not match head %s", verdict.SHA, request.HeadSHA)
+	}
+	if green, reason := request.HeadGreen(); !green {
+		return nil, fmt.Errorf("refusing merge: checks are not green: %s", reason)
+	}
+	if !request.Mergeable {
+		return nil, fmt.Errorf("refusing merge: change request #%d is not mergeable", request.Number)
+	}
+	if closes := forge.ParseCloses(request.Body); closes != item {
+		return nil, fmt.Errorf("refusing merge: body does not close #%d", item)
+	}
+
+	// The trail is written before the merge, because it is the only record of why
+	// this ran: a ledger failure here still refuses and the next tick retries.
+	if _, err := a.event(ctx, "act", "change_request.adopted", fmt.Sprintf("#%d", item),
+		fmt.Sprintf("change request #%d at %s merged with no dispatch", request.Number, request.HeadSHA)); err != nil {
+		return nil, fmt.Errorf("refusing merge: change request #%d adopted but the ledger could not record it: %w", request.Number, err)
+	}
+	if request.Draft {
+		if err := a.Forge.Ready(ctx, request.Number); err != nil {
+			return nil, fmt.Errorf("refusing merge: change request #%d is a draft and could not be marked ready: %w", request.Number, err)
+		}
+	}
+	if err := a.Forge.Merge(ctx, request.Number, verdict.SHA); err != nil {
+		return nil, err
+	}
+	// Past this point the merge has landed: bookkeeping failures are gaps, not
+	// failures, exactly as in Merge.
+	result := &MergeResult{Merged: true, ChangeRequest: request.Number, SHA: verdict.SHA}
+	if eventID, err := a.event(ctx, "act", "merge", fmt.Sprintf("#%d", item),
+		fmt.Sprintf("change request #%d at %s (adopted)", request.Number, verdict.SHA)); err != nil {
+		gap(result, "merge event", err)
+	} else {
+		result.Events = append(result.Events, eventID)
+	}
+	// No dispatch: no EndDispatch, no dispatch.merged. Finalize reads the request
+	// directly, so the item still closes, the marker still clears and a blocked
+	// sibling is still noted.
+	finalized, err := a.Finalize(ctx, 0, item, request, result)
+	if err != nil {
+		if finalized == nil {
+			finalized = result
+		}
+		gap(finalized, "post-merge finalize", err)
+	}
+	return finalized, nil
+}

@@ -128,6 +128,7 @@ type ChangeRequest struct {
 	State      string  `json:"state"`  // open | closed | merged
 	Merged     bool    `json:"merged"` // the change landed
 	HeadSHA    string  `json:"head_sha"`
+	Branch     string  `json:"branch,omitempty"` // the head's branch name, e.g. feature/138-...
 	Draft      bool    `json:"draft"`
 	Mergeable  bool    `json:"mergeable"`
 	Body       string  `json:"body"`

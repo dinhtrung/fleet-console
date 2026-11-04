@@ -200,12 +200,25 @@ type VerdictForItem struct {
 	Decision string
 }
 
-// VerdictsForProject returns every verdict for a project.
+// VerdictsForProject returns every verdict that belongs to one project.
+//
+// The project is taken from the row itself: a dispatched verdict names its
+// dispatch, and an adopted verdict carries the project_id it was written for.
+// Resolving the project through the item mirror instead — as this read did before
+// adoption existed — matches any project holding an item with the same number,
+// because item_number is unique only within a project. That let another project's
+// adopted verdict leak into this project's board and its decision path.
+//
+// COALESCE(d.project_id, v.project_id) is not decoration: every verdict row
+// written before V4, and every one written by a dispatched merge, carries
+// project_id 0, so its dispatch is the only thing that names a project.
 func (s *Store) VerdictsForProject(ctx context.Context, projectID int64) ([]VerdictForItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT d.item_number, v.sha, v.decision
-		FROM verdict v JOIN dispatch d ON d.id = v.dispatch_id
-		WHERE d.project_id = ? ORDER BY v.id DESC`, projectID)
+		SELECT COALESCE(d.item_number, v.item_number), v.sha, v.decision
+		FROM verdict v
+		LEFT JOIN dispatch d ON d.id = v.dispatch_id
+		WHERE COALESCE(d.project_id, v.project_id) = ?
+		ORDER BY v.id DESC`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("store: verdicts: %w", err)
 	}
