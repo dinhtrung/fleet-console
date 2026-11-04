@@ -31,16 +31,19 @@
 
 ## 3. Audit the other senders + docs (builder 2, independent)
 
-- [ ] 3.1 Enumerate every path that can produce a Telegram message — `notify.escalate`, `sendProgress` (digest and
+- [x] 3.1 Enumerate every path that can produce a Telegram message — `notify.escalate`, `sendProgress` (digest and
       merge triggers), `--notify-report`, `internal/alert/*` callers, and any cron/unit file under `deploy/` that
       invokes `--notify-report`. For each, state in the PR body whether it can emit a notice while the snapshot is
       quiet, with `path:line`. The expected answer is: only `--notify-report`, which is the intended exception.
-- [ ] 3.2 If the audit finds a deploy/cron entry that reports on a schedule (a heartbeat), name it and propose the
+- [x] 3.2 If the audit finds a deploy/cron entry that reports on a schedule (a heartbeat), name it and propose the
       concrete change in the PR body — **do not** change deploy files in this row unless the finding is a scheduled
       report that the spec's exception does not cover; in that case make the minimal edit and say so explicitly.
-- [ ] 3.3 Docs: `DESIGN.md` §5 and the notice section of `PRODUCT.md` state the quiet rule, the log line, and the
-      `--notify-report` exception. One paragraph each, no re-documenting of the message format.
-- [ ] 3.4 Evidence: the audit table (path → can it send while quiet → why), the docs diff, `git diff --stat`.
+- [x] 3.3 Docs: the notice section of `docs/cutover.md` § Telegram and a `## Progress notices` section in `PRODUCT.md`
+      state the quiet rule, the log line, and the `--notify-report` exception. One paragraph each, no re-documenting
+      of the message format. (`DESIGN.md` was named in the original brief, but it is the inherited design system —
+      colors, typography, components — and documents no notice behaviour. `docs/cutover.md` is where the two message
+      kinds are described, so the rule went there.)
+- [x] 3.4 Evidence: the audit table (path → can it send while quiet → why), the docs diff, `git diff --stat`.
 
 ## 4. Orchestrator
 

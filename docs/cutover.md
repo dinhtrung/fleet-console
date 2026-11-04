@@ -152,6 +152,14 @@ renders the whole state and sends it as a new message. It is never edited, becau
 lies about what was true yesterday. Repeats are prevented by a hash of the rendered body, not by editing: the
 same state sends nothing, a changed state sends one new message.
 
+**A quiet board is not news.** When the snapshot holds no open epic, nothing in flight, pending or on hold, and
+no decision waiting, the service sends no progress notice — on the digest and on a merge alike. The gate lives in
+the notifier (`cmd/fleet-console/notify.go`), not in the trigger, so a future trigger cannot forget it. The skip
+returns before rendering and before the send, which leaves the dedupe pointing at the last real message; the next
+non-quiet state is sent even if its body matches one from before the quiet stretch. The log records one line,
+`notify: skipped, no open work: nothing to report`, so a deliberate skip reads differently from a failed send.
+`--notify-report` is exempt: it is an explicit request from the operator, and it sends on a quiet board.
+
 Both read `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from the environment; no token is stored or logged. With
 either unset the service prints one line at boot —
 `notify: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set; completion notices are off` — and every trigger becomes a

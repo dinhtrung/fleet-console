@@ -19,6 +19,14 @@ repositories: it mirrors the forge and the rig, decides what is ready by a writt
 seats, collects review verdicts, merges on four deterministic facts, and keeps every human obligation as a record
 with an SLA.
 
+## Progress notices
+
+The owner can have the state of a project delivered to a phone over Telegram: a message after a merge, an optional
+digest, and on demand with `--notify-report`. A quiet board — no open epic, nothing in flight, pending or on hold, no
+decision waiting — sends nothing, and the log says so once, because "nothing happened" is not news. The on-demand
+report is the exception: asking is an instruction, so it always sends. Details and the exact log line live in
+`docs/cutover.md` § Telegram.
+
 ## Who it is for
 
 The person who owns the fleets: they need one screen that answers what is running where, what is blocked and why,
