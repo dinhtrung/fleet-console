@@ -112,7 +112,9 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 // storeVerdict records the decision once. A tick re-reads the same notes, so the
 // same verdict must not be added twice.
 func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, noteID, sha, decision string) (*CapturedVerdict, error) {
-	existing, err := a.Store.Verdicts(ctx, dispatchID)
+	// A verdict with no dispatch belongs to the item: adoption's case. Reading it
+	// back by dispatch would find nothing and store the same note every tick.
+	existing, err := a.verdictsFor(ctx, dispatchID, item)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +124,7 @@ func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, 
 		}
 	}
 	verdictID, err := a.Store.AddVerdict(ctx, store.NewVerdict{
-		DispatchID: dispatchID, SHA: sha, Decision: decision,
+		DispatchID: dispatchID, ItemNumber: item, SHA: sha, Decision: decision,
 		Source: "note " + noteID, At: a.now(),
 	})
 	if err != nil {
@@ -133,6 +135,16 @@ func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, 
 		return nil, err
 	}
 	return &CapturedVerdict{VerdictID: verdictID, SHA: sha, Decision: decision, Source: "note " + noteID, NoteID: noteID}, nil
+}
+
+// verdictsFor reads the verdicts that already exist for this change, keyed the
+// way the merge will read them: by dispatch when there is one, by item when the
+// change request was adopted without a dispatch.
+func (a *Actions) verdictsFor(ctx context.Context, dispatchID int64, item int) ([]store.VerdictRow, error) {
+	if dispatchID != 0 {
+		return a.Store.Verdicts(ctx, dispatchID)
+	}
+	return a.Store.VerdictsForItem(ctx, item)
 }
 
 // CaptureFromForge reads the change request's notes and stores the verdict.

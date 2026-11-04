@@ -260,6 +260,7 @@ type ghPull struct {
 	MergedAt  *string `json:"merged_at"`
 	Head      struct {
 		SHA string `json:"sha"`
+		Ref string `json:"ref"`
 	} `json:"head"`
 }
 
@@ -289,7 +290,7 @@ func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 			// checks and its mergeable flag are dead weight the tick must not pay for.
 			requests = append(requests, ChangeRequest{
 				Number: pull.Number, State: pull.State, Merged: pull.MergedAt != nil,
-				HeadSHA: pull.Head.SHA, Draft: pull.Draft, Body: pull.Body,
+				HeadSHA: pull.Head.SHA, Branch: pull.Head.Ref, Draft: pull.Draft, Body: pull.Body,
 				ClosesItem: ParseCloses(pull.Body), URL: pull.HTMLURL,
 			})
 			continue
@@ -320,7 +321,7 @@ func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 		}
 		requests = append(requests, ChangeRequest{
 			Number: pull.Number, State: pull.State, Merged: pull.MergedAt != nil,
-			HeadSHA: pull.Head.SHA, Draft: pull.Draft,
+			HeadSHA: pull.Head.SHA, Branch: pull.Head.Ref, Draft: pull.Draft,
 			Mergeable: mergeable, Body: pull.Body, ClosesItem: ParseCloses(pull.Body),
 			Checks: checks, DocsOnly: DocsOnly(paths), URL: pull.HTMLURL,
 		})

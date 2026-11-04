@@ -57,10 +57,12 @@ type DispatchRow struct {
 	State      string  `json:"state"`
 }
 
-// VerdictRow is one reviewer verdict.
+// VerdictRow is one reviewer verdict. DispatchID is 0 when the verdict belongs
+// to an adopted change request, which has no dispatch row.
 type VerdictRow struct {
 	ID         int64  `json:"id"`
 	DispatchID int64  `json:"dispatch_id"`
+	ItemNumber int    `json:"item_number"`
 	SHA        string `json:"sha"`
 	Decision   string `json:"decision"`
 	Source     string `json:"source"`
@@ -193,11 +195,26 @@ func (s *Store) Dispatches(ctx context.Context, projectID int64, number int) ([]
 	return out, rows.Err()
 }
 
-// Verdicts returns the verdicts for one dispatch, newest first.
+// Verdicts returns the verdicts for one dispatch, newest first. A verdict
+// recorded for an adopted change request has no dispatch and is not returned
+// here; VerdictsForItem reads those.
 func (s *Store) Verdicts(ctx context.Context, dispatchID int64) ([]VerdictRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, dispatch_id, sha, decision, source, at FROM verdict
+	return s.verdictRows(ctx, `
+		SELECT id, COALESCE(dispatch_id, 0), item_number, sha, decision, source, at FROM verdict
 		WHERE dispatch_id = ? ORDER BY id DESC`, dispatchID)
+}
+
+// VerdictsForItem returns the verdicts recorded for one item, newest first,
+// whatever row they came from. An adopted change request has no dispatch, so a
+// merge that runs without one has to read the verdict by item.
+func (s *Store) VerdictsForItem(ctx context.Context, item int) ([]VerdictRow, error) {
+	return s.verdictRows(ctx, `
+		SELECT id, COALESCE(dispatch_id, 0), item_number, sha, decision, source, at FROM verdict
+		WHERE item_number = ? ORDER BY id DESC`, item)
+}
+
+func (s *Store) verdictRows(ctx context.Context, query string, arg any) ([]VerdictRow, error) {
+	rows, err := s.db.QueryContext(ctx, query, arg)
 	if err != nil {
 		return nil, fmt.Errorf("store: verdicts: %w", err)
 	}
@@ -205,7 +222,7 @@ func (s *Store) Verdicts(ctx context.Context, dispatchID int64) ([]VerdictRow, e
 	var out []VerdictRow
 	for rows.Next() {
 		var v VerdictRow
-		if err := rows.Scan(&v.ID, &v.DispatchID, &v.SHA, &v.Decision, &v.Source, &v.At); err != nil {
+		if err := rows.Scan(&v.ID, &v.DispatchID, &v.ItemNumber, &v.SHA, &v.Decision, &v.Source, &v.At); err != nil {
 			return nil, fmt.Errorf("store: verdicts: %w", err)
 		}
 		out = append(out, v)

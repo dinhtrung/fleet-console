@@ -201,11 +201,19 @@ type VerdictForItem struct {
 }
 
 // VerdictsForProject returns every verdict for a project.
+//
+// A verdict recorded for an adopted change request has no dispatch row, so it is
+// matched to its project by the item mirror instead. The join is a LEFT JOIN on
+// purpose: an adopted ACCEPT that the board cannot see is the same failure this
+// epic exists to end.
 func (s *Store) VerdictsForProject(ctx context.Context, projectID int64) ([]VerdictForItem, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT d.item_number, v.sha, v.decision
-		FROM verdict v JOIN dispatch d ON d.id = v.dispatch_id
-		WHERE d.project_id = ? ORDER BY v.id DESC`, projectID)
+		SELECT COALESCE(d.item_number, v.item_number), v.sha, v.decision
+		FROM verdict v
+		LEFT JOIN dispatch d ON d.id = v.dispatch_id
+		LEFT JOIN item i ON i.number = v.item_number AND i.project_id = ?
+		WHERE d.project_id = ? OR i.project_id = ?
+		ORDER BY v.id DESC`, projectID, projectID, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("store: verdicts: %w", err)
 	}

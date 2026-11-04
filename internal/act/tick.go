@@ -121,14 +121,16 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		if item == 0 {
 			continue
 		}
-		dispatch, ok := latest[item]
-		if !ok {
-			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d: change request #%d closes no dispatch", item, request.Number))
-			continue
+		// Capture first, decide second (design D3): the verdict is a fact about the
+		// change request, and it must be recorded whether or not this tick merges.
+		// A dispatch id of 0 is adoption's case — the item has no row, and the
+		// verdict is keyed by item so a later merge can find it.
+		dispatch, hasDispatch := latest[item]
+		var dispatchID int64
+		if hasDispatch {
+			dispatchID = dispatch.ID
 		}
-		// The verdict is posted on the change request, under the change request's own
-		// number; item is only for the report and the store.
-		captured, err := actions.CaptureFromForge(ctx, dispatch.ID, item, request.Number, request.HeadSHA)
+		captured, err := actions.CaptureFromForge(ctx, dispatchID, item, request.Number, request.HeadSHA)
 		if err != nil {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d verdict: %v", item, err))
 			continue
@@ -136,7 +138,24 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		if captured != nil {
 			report.Verdicts = append(report.Verdicts, *captured)
 		}
-		merged, err := actions.Merge(ctx, dispatch.ID, item)
+		var merged *MergeResult
+		switch {
+		case hasDispatch && request.Branch != "" && request.Branch != dispatch.Branch:
+			// Two branches close one item: the dispatch is one and this change
+			// request is the other. Which work survives is a human decision, so
+			// refuse and name both, exactly as the adoption arm does (design D4).
+			report.Skipped = append(report.Skipped, fmt.Sprintf(
+				"#%d merge waiting: refusing merge: live dispatch on %s and change request #%d is on %s",
+				item, dispatch.Branch, request.Number, request.Branch))
+			continue
+		case hasDispatch:
+			merged, err = actions.Merge(ctx, dispatch.ID, item)
+		default:
+			// No row: adopt the change request when it is the one the app would
+			// have produced (design D1). The guards are in MergeAdopted, so a
+			// refusal here names the missing fact rather than the missing row.
+			merged, err = actions.MergeAdopted(ctx, in.Project.ID, item, request)
+		}
 		if err != nil {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d merge waiting: %v", item, err))
 			continue
