@@ -528,10 +528,6 @@ type decisionOut struct {
 	Questions   []rig.HumanQuestion `json:"questions,omitempty"`
 }
 
-func humanDecision(destination string) bool {
-	return strings.Contains(destination, "human@") || strings.HasSuffix(destination, "@external")
-}
-
 // Decisions reads obligations waiting on a person from the rig, oldest first.
 func (f *Fleet) Decisions(c fiber.Ctx) error {
 	if f.Rig == nil {
@@ -548,14 +544,16 @@ func (f *Fleet) Decisions(c fiber.Ctx) error {
 		}
 		// A pending human row is an obligation the moment it is created; a blocked
 		// row also counts when its blocker is a human seat, whatever its destination.
-		if row.State == "pending" && !humanDecision(row.Destination) {
+		// The predicate is rig.HumanDecision, shared with the quiet rule so
+		// the count and the notice can never disagree.
+		if row.State == "pending" && !rig.HumanDecision(row.Destination) {
 			continue
 		}
 		item, err := f.Rig.QueueShow(c.Context(), row.ID)
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
-		if !humanDecision(item.Destination) && !(item.State == "blocked" && humanDecision(item.BlockedOn)) {
+		if !rig.HumanDecision(item.Destination) && !(item.State == "blocked" && rig.HumanDecision(item.BlockedOn)) {
 			continue
 		}
 		d := decisionOut{
