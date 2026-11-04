@@ -33,14 +33,17 @@
 
 ## 3. End-to-end regression + docs (builder 2, blocked by 1 and 2)
 
-- [ ] 3.1 One end-to-end test that reproduces the reported failure: an item whose row was created outside the app (no
+- [x] 3.1 One end-to-end test that reproduces the reported failure: an item whose row was created outside the app (no
       dispatch row), a pull request with `Closes #<item>`, green checks, `ACCEPT <head>`; assert merge happened, item
       closed, both events written, and **no** `dispatch` row exists afterwards.
-- [ ] 3.2 Prove the old behaviour is gone: on the same fixture, the first tick's report contains no
+- [x] 3.2 Prove the old behaviour is gone: on the same fixture, the first tick's report contains no
       `closes no dispatch` line (grep the rendered skip list).
-- [ ] 3.3 Docs: one paragraph each in `DESIGN.md` (watchdog section) and `PRODUCT.md` (what the app merges) stating
-      adoption, its guards and that readiness stays the integrator's job.
-- [ ] 3.4 Tick tasks 3.1–3.3 in `openspec/changes/merge-adopted-crs/tasks.md` and paste the validate output.
+- [x] 3.3 Docs: one paragraph each in the watchdog section (`openspec/changes/fleet-console-v1/design.md` §11 and
+      `docs/fleet-console.md` § The merge watchdog) and `PRODUCT.md` (a new "What the app merges") stating adoption,
+      its guards and that readiness stays the integrator's job. (`DESIGN.md` was named in the original brief, but it
+      is the inherited visual design system — colors, typography, components — and documents no merge behaviour;
+      `openspec/project.md` keeps behaviour out of it. The watchdog is specified in the two files above.)
+- [x] 3.4 Tick tasks 3.1–3.3 in `openspec/changes/merge-adopted-crs/tasks.md` and paste the validate output.
 
 ## 4. Orchestrator
 

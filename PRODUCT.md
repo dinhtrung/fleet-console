@@ -19,6 +19,16 @@ repositories: it mirrors the forge and the rig, decides what is ready by a writt
 seats, collects review verdicts, merges on four deterministic facts, and keeps every human obligation as a record
 with an SLA.
 
+## What the app merges
+
+A change merges only on four deterministic facts, re-read at the moment of the merge: an `ACCEPT` verdict at the
+current head sha, green checks (or a docs-only diff), a mergeable change request, and a body that closes the item.
+That rule used to require the app to have dispatched the item itself; work started by hand — a queue row created
+with `rig queue create` — never merged. It does now: the same four facts are enforced against the change request
+when no dispatch row exists, guarded by the branch naming the item (`feature/<item>-`) and by a refusal when a live
+dispatch holds the same item on a different branch. Adoption invents no dispatch row and marks a draft ready before
+merging, but readiness stays the integrator's job — a human still decides what is worth merging.
+
 ## Notices
 
 The phone is told about work only when there is work. A progress notice is suppressed when the snapshot is quiet —
