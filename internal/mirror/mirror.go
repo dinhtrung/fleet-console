@@ -286,6 +286,12 @@ func missingRigs(rigs []string, seats []rig.Seat) []string {
 	return missing
 }
 
+// filterRows keeps the project's rows: those addressed to one of its rigs, and
+// those parked on a person. The second kind is not noise to drop — a decision
+// row lives on a seat that is often outside the project's rigs (an @kernel
+// operator or advisor), and the operator still owes an answer. Removing it here
+// is how the quiet rule stopped seeing the very obligations it must never mute
+// (issue #143).
 func filterRows(rows []rig.QueueRow, rigs []string) []rig.QueueRow {
 	if len(rigs) == 0 {
 		return rows
@@ -296,8 +302,11 @@ func filterRows(rows []rig.QueueRow, rigs []string) []rig.QueueRow {
 	}
 	out := make([]rig.QueueRow, 0, len(rows))
 	for _, row := range rows {
-		at := strings.LastIndex(row.Destination, "@")
-		if at >= 0 && wanted[row.Destination[at+1:]] {
+		if at := strings.LastIndex(row.Destination, "@"); at >= 0 && wanted[row.Destination[at+1:]] {
+			out = append(out, row)
+			continue
+		}
+		if rig.HumanDecision(row.BlockedOn) {
 			out = append(out, row)
 		}
 	}

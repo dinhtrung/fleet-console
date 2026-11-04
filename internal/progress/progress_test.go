@@ -1,6 +1,7 @@
 package progress
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"os"
@@ -650,3 +651,99 @@ func TestNotQuietWhenAListIsTruncated(t *testing.T) {
 		t.Fatal("Quiet() = true although the count is 40 and only the rendered list is truncated")
 	}
 }
+
+// TestProductionShapedDecisionRowsAreNotQuiet pins issue #143 end to end. It
+// drives the production path — real `rig queue list` wire bytes through
+// rig.ParseQueueList, then the real mirror through filterRows — rather than
+// handing Build a hand-made row that skipped both. That shortcut is what let
+// the original test pass while production stayed broken.
+//
+// The shape is the one this box actually produces: a `blocked` row whose
+// destination is an agent seat and whose blocker is `operator-human@kernel`.
+// Counted by destination alone it is invisible, and the board served two such
+// decisions while the snapshot read quiet.
+func TestProductionShapedDecisionRowsAreNotQuiet(t *testing.T) {
+	// Exactly the fields `rig queue list -A -a --json` emits for a parked row,
+	// including the required pickup block.
+	const wire = `[
+	  {"pickup":{"state":"parked","evidence":"awaits a person"},
+	   "qitemId":"qitem-20261104014517-6e808968eec861e8",
+	   "tsCreated":"2026-11-04T01:45:17.000Z","sourceSession":"hermes-orchestrator",
+	   "destinationSession":"operator-agent@kernel","state":"blocked","priority":"routine",
+	   "blockedOn":"operator-human@kernel",
+	   "summary":"Row S3 needs a builder","body":"#38 needs a decision"},
+	  {"pickup":{"state":"parked","evidence":"awaits a person"},
+	   "qitemId":"qitem-20261104012716-36bbd84f",
+	   "tsCreated":"2026-11-04T01:27:16.000Z","sourceSession":"hermes-orchestrator",
+	   "destinationSession":"advisor-lead@kernel","state":"blocked","priority":"routine",
+	   "blockedOn":"operator-human@kernel",
+	   "summary":"Release gate","body":"do not tag android-v1.2.0"}
+	]`
+
+	rows, err := rig.ParseQueueList([]byte(wire), nil)
+	if err != nil {
+		t.Fatalf("ParseQueueList: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("decoded rows = %d, want 2", len(rows))
+	}
+	for _, row := range rows {
+		if !rig.HumanDecision(row.BlockedOn) {
+			t.Fatalf("row %s: BlockedOn = %q, not decoded as a human blocker", row.ID, row.BlockedOn)
+		}
+	}
+
+	// The rows are addressed to another rig, so the mirror's filter must keep
+	// them: a person's obligation does not belong to the project's rig.
+	runner := queueRunner(func(_ context.Context, args ...string) ([]byte, error) {
+		switch {
+		case len(args) > 0 && args[0] == "queue":
+			return []byte(wire), nil
+		case len(args) > 0 && args[0] == "ps":
+			return []byte("[]"), nil
+		default:
+			return []byte("[]"), nil
+		}
+	})
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "fleet.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	projectID, err := st.CreateProject(context.Background(), store.ProjectInput{
+		Key: "fleet-console", Name: "fleet-console", ForgeKind: "github",
+		ForgeProject: "dinhtrung/fleet-console", DefaultBranch: "main",
+		Rigs: []string{"fleet-console"}, ConcurrencyCap: 2, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("upsert project: %v", err)
+	}
+	m := &mirror.Mirror{Store: st, Rig: rig.NewAdapter(runner)}
+	ctx := context.Background()
+	read, err := m.Tick(ctx, []mirror.Project{{
+		ID: projectID, Key: "fleet-console",
+		Forge: forge.NewFake(forge.KindGitHub), Rigs: []string{"fleet-console"},
+	}})
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	kept := read.Projects["fleet-console"].Rows
+	if len(kept) != 2 {
+		t.Fatalf("filterRows kept %d rows, want 2: an @kernel decision row was dropped", len(kept))
+	}
+
+	snapshot := Build(read, nil, testProject(), testConfig(), Roster{Plan: &decide.Plan{}})
+	if snapshot.Counts.OpenDecisions != 2 {
+		t.Fatalf("Counts.OpenDecisions = %d, want 2", snapshot.Counts.OpenDecisions)
+	}
+	if snapshot.Quiet() {
+		t.Fatalf("Quiet() = true with 2 decisions waiting; counts = %+v", snapshot.Counts)
+	}
+}
+
+// queueRunner answers the rig CLI for this test: the queue read returns the
+// recorded wire bytes, everything else is empty.
+type queueRunner func(context.Context, ...string) ([]byte, error)
+
+func (f queueRunner) Run(ctx context.Context, args ...string) ([]byte, error) { return f(ctx, args...) }

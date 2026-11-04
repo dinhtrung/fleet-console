@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // QueueRow is one queue item from `rig queue list -A -a --json`.
@@ -12,6 +13,10 @@ type QueueRow struct {
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
 	State       string `json:"state"`
+	// BlockedOn names what a blocked row waits on: a human seat, another qitem,
+	// or a typed gate. `rig queue list` carries it, and it is the only field that
+	// distinguishes a row parked on a person from one parked on a peer's work.
+	BlockedOn   string `json:"blocked_on"`
 	PickupState string `json:"pickup_state"`
 	Summary     string `json:"summary,omitempty"`
 	CreatedAt   string `json:"created_at,omitempty"`
@@ -58,6 +63,7 @@ type queueRowWire struct {
 	Source      string `json:"sourceSession"`
 	Destination string `json:"destinationSession"`
 	State       string `json:"state"`
+	BlockedOn   string `json:"blockedOn"`
 	Summary     string `json:"summary"`
 	CreatedAt   string `json:"tsCreated"`
 	LastNudge   string `json:"lastNudgeAttempt"`
@@ -116,6 +122,7 @@ func ParseQueueList(data []byte, unknown func(key string)) ([]QueueRow, error) {
 			Source:      wire.Source,
 			Destination: wire.Destination,
 			State:       wire.State,
+			BlockedOn:   wire.BlockedOn,
 			PickupState: wire.Pickup.State,
 			Summary:     wire.Summary,
 			CreatedAt:   wire.CreatedAt,
@@ -207,4 +214,13 @@ func ParseSeats(data []byte, unknown func(key string)) ([]Seat, error) {
 		seats = append(seats, seat)
 	}
 	return seats, nil
+}
+
+// HumanDecision reports whether an address names a person rather than a seat:
+// an operator or advisor (`human@`), or an external party. It lives here, on
+// the decoded queue row, because three readers need the same answer — the
+// board's /api/decisions, the mirror's row filter, and the quiet predicate —
+// and a second copy is how those answers drift apart.
+func HumanDecision(address string) bool {
+	return strings.Contains(address, "human@") || strings.HasSuffix(address, "@external")
 }
