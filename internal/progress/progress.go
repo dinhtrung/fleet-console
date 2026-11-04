@@ -684,14 +684,28 @@ type decisionRow struct {
 	body    string
 }
 
+// openDecisions counts the rows a human owes an answer for, by the same rule the
+// board's /api/decisions uses (internal/web/fleet.go: a pending row whose
+// destination is human, or a blocked row whose *blocker* is human).
+//
+// The second arm is the one that matters in production: a decision row is
+// `blocked` with an agent destination and a human blocker, so a predicate reading
+// only Destination sees none of them and calls a board serving two open decisions
+// quiet.
 func openDecisions(rows []rig.QueueRow) []decisionRow {
 	var out []decisionRow
 	for _, row := range rows {
 		state := strings.ToLower(strings.TrimSpace(row.State))
-		if state != "pending" && state != "blocked" {
-			continue
-		}
-		if !humanDestination(row.Destination) {
+		switch state {
+		case "pending":
+			if !humanDestination(row.Destination) {
+				continue
+			}
+		case "blocked":
+			if !humanDestination(row.Destination) && !humanDestination(row.BlockedOn) {
+				continue
+			}
+		default:
 			continue
 		}
 		out = append(out, decisionRow{summary: row.Summary, body: row.Body})

@@ -286,6 +286,14 @@ func missingRigs(rigs []string, seats []rig.Seat) []string {
 	return missing
 }
 
+// filterRows keeps the project's rows: those a project rig owns, and those a
+// human owes an answer for.
+//
+// The second arm is not decoration. A decision row is `blocked` with an agent
+// destination (an @kernel seat) and a human blocker, so keeping only rows whose
+// destination rig is configured drops every one of them before the progress
+// snapshot — and the snapshot then reports a board serving open decisions as
+// quiet. Rows a human owes are the project's business whatever rig they name.
 func filterRows(rows []rig.QueueRow, rigs []string) []rig.QueueRow {
 	if len(rigs) == 0 {
 		return rows
@@ -296,12 +304,24 @@ func filterRows(rows []rig.QueueRow, rigs []string) []rig.QueueRow {
 	}
 	out := make([]rig.QueueRow, 0, len(rows))
 	for _, row := range rows {
-		at := strings.LastIndex(row.Destination, "@")
-		if at >= 0 && wanted[row.Destination[at+1:]] {
+		if humanBlocked(row) || ownsRig(row.Destination, wanted) {
 			out = append(out, row)
 		}
 	}
 	return out
+}
+
+// ownsRig reports whether the seat names one of the project's rigs.
+func ownsRig(seat string, wanted map[string]bool) bool {
+	at := strings.LastIndex(seat, "@")
+	return at >= 0 && wanted[seat[at+1:]]
+}
+
+// humanBlocked reports whether a row waits on a human seat. It is the same rule
+// web.Fleet uses for /api/decisions, kept here because the filter runs first.
+func humanBlocked(row rig.QueueRow) bool {
+	return strings.EqualFold(strings.TrimSpace(row.State), "blocked") &&
+		(strings.Contains(row.BlockedOn, "human@") || strings.HasSuffix(row.BlockedOn, "@external"))
 }
 
 // filterSeats keeps the project's seats and orders them by the configured rig

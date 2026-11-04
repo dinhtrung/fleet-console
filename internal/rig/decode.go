@@ -7,10 +7,16 @@ import (
 )
 
 // QueueRow is one queue item from `rig queue list -A -a --json`.
+//
+// BlockedOn is the seat a blocked row waits on. It is how the board decides a row
+// is a human obligation: production decision rows are blocked rows whose
+// *destination* is an agent and whose *blocker* is a human seat, so a predicate
+// that looks only at Destination cannot see them.
 type QueueRow struct {
 	ID          string `json:"id"`
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
+	BlockedOn   string `json:"blocked_on,omitempty"`
 	State       string `json:"state"`
 	PickupState string `json:"pickup_state"`
 	Summary     string `json:"summary,omitempty"`
@@ -57,6 +63,7 @@ type queueRowWire struct {
 	ID          string `json:"qitemId"`
 	Source      string `json:"sourceSession"`
 	Destination string `json:"destinationSession"`
+	BlockedOn   string `json:"blockedOn"`
 	State       string `json:"state"`
 	Summary     string `json:"summary"`
 	CreatedAt   string `json:"tsCreated"`
@@ -115,6 +122,7 @@ func ParseQueueList(data []byte, unknown func(key string)) ([]QueueRow, error) {
 			ID:          wire.ID,
 			Source:      wire.Source,
 			Destination: wire.Destination,
+			BlockedOn:   wire.BlockedOn,
 			State:       wire.State,
 			PickupState: wire.Pickup.State,
 			Summary:     wire.Summary,
