@@ -152,6 +152,15 @@ renders the whole state and sends it as a new message. It is never edited, becau
 lies about what was true yesterday. Repeats are prevented by a hash of the rendered body, not by editing: the
 same state sends nothing, a changed state sends one new message.
 
+**A quiet board sends nothing.** Before rendering, the notifier checks the snapshot: no open epic, nothing in
+flight, pending or on hold, and no decision waiting on the operator. When all of those hold the unsolicited
+triggers — the merge in an applied tick and the optional digest — send nothing and write one line,
+`notify: skipped, no open work: nothing to report`, so a deliberate skip is distinguishable from a failed send in
+the log. Nothing is recorded as the last reported state, so the next non-quiet snapshot still sends even when its
+body matches one from before the quiet stretch. An open decision is by definition not quiet, so a decision
+escalation is never muted. `--notify-report` is exempt: an explicit request from the operator sends even when the
+board is quiet.
+
 Both read `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from the environment; no token is stored or logged. With
 either unset the service prints one line at boot —
 `notify: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set; completion notices are off` — and every trigger becomes a
