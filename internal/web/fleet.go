@@ -168,9 +168,10 @@ func (f *Fleet) forgeChange(ctx context.Context, projectID int64, number int) *c
 	}
 	var snapshot struct {
 		CRs []struct {
-			Number     int  `json:"number"`
-			ClosesItem int  `json:"closes_item"`
-			Merged     bool `json:"merged"`
+			Number     int    `json:"number"`
+			ClosesItem int    `json:"closes_item"`
+			Merged     bool   `json:"merged"`
+			State      string `json:"state"`
 			Checks     []struct {
 				Name       string `json:"name"`
 				Conclusion string `json:"conclusion"`
@@ -182,7 +183,13 @@ func (f *Fleet) forgeChange(ctx context.Context, projectID int64, number int) *c
 	}
 	var best *changeRequest
 	for _, cr := range snapshot.CRs {
-		if cr.Merged || cr.ClosesItem != number {
+		// The mirror stores every change request the forge read returned, closed
+		// ones included. Skip a closed request as well as a merged one: a closed
+		// pull request is not something the operator can judge, and the verdict
+		// POST refuses it with 409. openChangeRequest (verdict.go) is the twin
+		// predicate and already skips StateClosed; the drawer must agree with it,
+		// or the drawer offers a button the POST rejects.
+		if cr.Merged || cr.State == string(forge.StateClosed) || cr.ClosesItem != number {
 			continue
 		}
 		if best != nil && cr.Number <= best.Number {
