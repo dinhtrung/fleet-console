@@ -1,16 +1,20 @@
 /** The task drawer: everything behind one task's merge, on one page. */
 
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
-import { getItem, shortTime } from "../lib/fleet";
+import { getItem, postVerdict, shortTime } from "../lib/fleet";
 import {
   Badge,
+  Button,
   EmptyState,
   ErrorState,
   LoadingRows,
   Panel,
   PanelHead,
   StatusMagnet,
+  Textarea,
+  useToast,
 } from "../components/ui";
 import { PageHeader } from "../shell/PageHeader";
 
@@ -25,6 +29,63 @@ function CheckList({ checks }: { checks: { name: string; conclusion: string }[] 
         </li>
       ))}
     </ul>
+  );
+}
+
+/** The operator's own approve/reject. It writes the note a reviewer seat would write,
+ *  so a human can overrule a stalled review instead of waiting for one. */
+function VerdictActions({ number, change }: { number: number; change: { number: number } }) {
+  const [reason, setReason] = useState("");
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const submit = useMutation({
+    mutationFn: (verdict: "accept" | "reject") => postVerdict(number, verdict, reason.trim()),
+    onSuccess: (result) => {
+      toast.done(
+        result.verdict === "accept" ? `Approved ${result.sha}` : `Rejected ${result.sha}`,
+        result.merge === "act-tick"
+          ? `Noted on PR #${result.change_request}; the act tick merges on its next pass.`
+          : `Noted on PR #${result.change_request}, but this item has no dispatch row: merge it by hand.`,
+      );
+      setReason("");
+      void queryClient.invalidateQueries({ queryKey: ["item", number] });
+      void queryClient.invalidateQueries({ queryKey: ["board"] });
+    },
+    onError: (error) => {
+      toast.problem("The verdict did not stick", error instanceof Error ? error.message : String(error));
+    },
+  });
+  const busy = submit.isPending;
+  return (
+    <div className="flex flex-col gap-2 border-t border-rule px-3 py-2">
+      <label className="label text-ink-muted" htmlFor="verdict-reason">
+        Reason — required to reject, it is the builder&apos;s work list
+      </label>
+      <Textarea
+        id="verdict-reason"
+        rows={2}
+        value={reason}
+        placeholder="What did you check, or what must change?"
+        onChange={(event) => setReason(event.target.value)}
+      />
+      {submit.error ? (
+        <p className="text-[0.6875rem] text-destructive">{submit.error.message}</p>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="primary" busy={busy} onClick={() => submit.mutate("accept")}>
+          Approve PR #{change.number}
+        </Button>
+        <Button
+          variant="attention"
+          busy={busy}
+          disabled={reason.trim() === ""}
+          title={reason.trim() === "" ? "A reject needs a reason" : undefined}
+          onClick={() => submit.mutate("reject")}
+        >
+          Reject
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -129,6 +190,7 @@ export function TaskDrawerScreen() {
               <p className="text-[0.6875rem] text-ink-muted">No verdict yet.</p>
             )}
           </div>
+          {change ? <VerdictActions number={item.number} change={change} /> : null}
         </Panel>
 
         <Panel className="lg:col-span-2">

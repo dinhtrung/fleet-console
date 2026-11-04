@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dinhtrung/fleet-console/internal/configfile"
+	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/dinhtrung/fleet-console/internal/webui"
@@ -23,6 +24,9 @@ type Config struct {
 	Compat     func(ctx context.Context) rig.Report
 	Store      *store.Store
 	Rig        *rig.Adapter
+	// ForgeFor is the write path a board verdict needs. Nil answers 503 on the
+	// verdict route only; every read still serves.
+	ForgeFor func(ctx context.Context, project store.ProjectRow) (forge.Forge, error)
 	// WriteProject is the config writer, defaulting to configfile.UpsertProject.
 	// A test installs a wrapper here to hand-edit the file between the request's
 	// read and its write, which is the stale-read case.
@@ -55,7 +59,7 @@ func New(cfg Config) (*fiber.App, error) {
 		IdleTimeout:  60 * time.Second,
 	})
 	hub := NewHub()
-	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat}
+	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor}
 
 	app.Use(idempotency())
 	app.Get("/api/health", func(c fiber.Ctx) error {
@@ -72,6 +76,9 @@ func New(cfg Config) (*fiber.App, error) {
 	})
 	api.Get("/board", fleet.Board)
 	api.Get("/items/:number", fleet.Item)
+	// The operator's approve/reject: the same note shape a reviewer seat posts,
+	// so one gate reads both and the newest verdict wins.
+	api.Post("/items/:number/verdict", fleet.ItemVerdict)
 	api.Get("/decisions", fleet.Decisions)
 	api.Post("/decisions/:id/answer", fleet.AnswerDecision)
 	api.Get("/seats", fleet.Seats)

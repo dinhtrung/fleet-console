@@ -320,6 +320,29 @@ export const answerDecision = (id: string, decision: string) =>
     },
   );
 
+/** What an approve/reject did: the note that landed, the sha it names, and where the merge
+ *  happens. `merge: "manual"` is the adoption gap — the note is evidence, nothing merges it. */
+export interface VerdictResult {
+  project: string;
+  item: number;
+  verdict: "accept" | "reject";
+  sha: string;
+  change_request: number;
+  ready: boolean;
+  merge: "act-tick" | "manual";
+  checks?: { name: string; conclusion: string }[];
+}
+
+/** Posts the operator's verdict on the item's open change request. It is the same
+ *  `ACCEPT <sha>` / `REJECT <sha>` note a reviewer seat posts, so the merge gate reads one
+ *  record either way and the newest verdict wins. A reject without a reason is refused by
+ *  the service: the reason is the builder's work list. */
+export const postVerdict = (number: number, verdict: "accept" | "reject", reason: string) =>
+  request<VerdictResult>(`/api/items/${number}/verdict`, {
+    method: "POST",
+    body: JSON.stringify({ verdict, reason }),
+  });
+
 export const getSeats = () => request<{ seats: Seat[] }>("/api/seats");
 
 export const getSeatTail = (session: string, lines = 24) =>
