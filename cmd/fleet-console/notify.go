@@ -109,11 +109,30 @@ func (n *notifier) escalate(ctx context.Context, project string, in act.Decision
 	}
 }
 
-// sendProgress renders one snapshot and sends it when its state is new.
+// sendProgress renders one snapshot and sends it when its state is new, on an
+// unsolicited trigger: the digest interval or a merge inside the applied tick.
 //
-// The caller decides *when* a trigger applies; the notifier decides whether
-// this particular state has been reported already.
+// The caller decides *when* a trigger applies; the notifier decides whether this
+// particular state has been reported already, and whether it is worth a message
+// at all. A quiet board is not news: the skip happens before rendering and before
+// Notify, so nothing is recorded as the last reported state — the dedupe keeps
+// pointing at the last real message, and the next non-quiet snapshot is sent even
+// when its body matches one from before the quiet stretch (design D3).
 func (n *notifier) sendProgress(ctx context.Context, snapshot progress.Snapshot, now time.Time) (alert.ProgressResult, error) {
+	if !n.configured() {
+		return alert.ProgressResult{}, alert.ErrNotConfigured
+	}
+	if snapshot.Quiet() {
+		fmt.Fprintf(n.log, "notify: skipped, no open work: nothing to report\n")
+		return alert.ProgressResult{}, nil
+	}
+	return n.sendNow(ctx, snapshot, now)
+}
+
+// sendNow renders and sends unconditionally. It is the on-demand path behind
+// `--notify-report`, which the spec exempts from the quiet rule: an explicit
+// operator request is not an unsolicited trigger.
+func (n *notifier) sendNow(ctx context.Context, snapshot progress.Snapshot, now time.Time) (alert.ProgressResult, error) {
 	if !n.configured() {
 		return alert.ProgressResult{}, alert.ErrNotConfigured
 	}
@@ -202,7 +221,10 @@ func runNotifyReport(ctx context.Context, args notifyReportArgs) (int, error) {
 		now = time.Now
 	}
 	snapshot := reportSnapshot(ctx, db, args.eff, args.adapter, *project)
-	result, err := n.sendProgress(ctx, snapshot, now())
+	// The on-demand report is exempt from the quiet rule: an explicit operator
+	// request is not an unsolicited trigger (spec: "The on-demand report is
+	// exempt from the quiet rule").
+	result, err := n.sendNow(ctx, snapshot, now())
 	if err != nil {
 		return 1, err
 	}
