@@ -539,13 +539,13 @@ func (f *Fleet) Decisions(c fiber.Ctx) error {
 	}
 	out := make([]decisionOut, 0)
 	for _, row := range rows {
+		// A cheap pre-filter only: `rig queue list` may omit blockedOn, so a
+		// blocked row's fate is decided by QueueShow below. The authoritative
+		// check is rig.WaitsOnHuman on the resolved item — the same rule the
+		// quiet predicate asks, so served and counted are one answer (#143).
 		if row.State != "pending" && row.State != "blocked" {
 			continue
 		}
-		// A pending human row is an obligation the moment it is created; a blocked
-		// row also counts when its blocker is a human seat, whatever its destination.
-		// The predicate is rig.HumanDecision, shared with the quiet rule so
-		// the count and the notice can never disagree.
 		if row.State == "pending" && !rig.HumanDecision(row.Destination) {
 			continue
 		}
@@ -553,7 +553,7 @@ func (f *Fleet) Decisions(c fiber.Ctx) error {
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
-		if !rig.HumanDecision(item.Destination) && !(item.State == "blocked" && rig.HumanDecision(item.BlockedOn)) {
+		if !rig.WaitsOnHuman(item.State, item.Destination, item.BlockedOn) {
 			continue
 		}
 		d := decisionOut{
