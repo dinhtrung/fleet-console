@@ -160,8 +160,23 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	// not closed twice.
 	actions.sweepEpics(ctx, in, &report, rolled)
 
+	// The plan is built before this tick runs, so its "no verdict" judgment is a
+	// prediction about a state the tick itself changes: the merge loop above
+	// captures verdicts from the same notes the plan read. Paging the owner for a
+	// decision they answered before the row reached them is the failure this guard
+	// exists for (#142).
+	capturedItems := make(map[int]bool, len(report.Verdicts))
+	for _, captured := range report.Verdicts {
+		capturedItems[captured.Item] = true
+	}
+
 	for _, intent := range in.Plan.Intents {
 		if intent.Kind != decide.IntentRaiseDecision {
+			continue
+		}
+		if capturedItems[intent.Item] {
+			report.Skipped = append(report.Skipped, fmt.Sprintf(
+				"#%d decision skipped: this tick captured the verdict the plan called missing", intent.Item))
 			continue
 		}
 		result, err := actions.RaiseDecision(ctx, in.Project, intent.Item, intent.Text, intent.Event.Kind, in.WorktreeRoot)
