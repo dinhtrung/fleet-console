@@ -198,3 +198,94 @@ func containsAll(s string, subs ...string) bool {
 	}
 	return true
 }
+
+// The reviewer's finding, as a test: with jitter present — production always
+// passes some — the wait changes on every tick, so comparing the jittered value
+// would log a line every quiet tick at the ceiling. The comparison must use the
+// cadence's own number. Six quiet ticks with a 1ms base and 2ms ceiling give three
+// changes (1ms->2ms, and nothing after), so at most three lines, and the last two
+// ticks repeat the ceiling and log nothing.
+func TestLoopCadenceWithJitterLogsOnlyChanges(t *testing.T) {
+	const base = time.Millisecond
+	const max = 2 * time.Millisecond
+	const jitter = time.Millisecond
+
+	st := newStore(t)
+	id := project(t, st)
+	fake := forge.NewFake(forge.KindGitHub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	var logs []string
+	var waits []time.Duration
+	var ticks int
+
+	m := &Mirror{
+		Store: st,
+		Logf: func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			logs = append(logs, fmt.Sprintf(format, args...))
+		},
+		OnWait: func(wait time.Duration) {
+			mu.Lock()
+			waits = append(waits, wait)
+			done := ticks >= 6
+			mu.Unlock()
+			if done {
+				cancel()
+			}
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Loop(ctx,
+			func(context.Context) ([]Project, error) {
+				return []Project{{ID: id, Key: "app", Forge: fake}}, nil
+			},
+			Cadence{Base: base, Max: max}, jitter,
+			func(TickResult) bool {
+				mu.Lock()
+				defer mu.Unlock()
+				ticks++
+				return false // always quiet
+			})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not stop")
+	}
+
+	mu.Lock()
+	got := append([]string(nil), logs...)
+	gotWaits := append([]time.Duration(nil), waits...)
+	mu.Unlock()
+
+	// The cadence reaches the ceiling on the second quiet tick and stays there, so
+	// exactly one line is a change: 1ms -> 2ms. Anything more means the comparison
+	// saw the jittered wait.
+	if len(got) != 1 {
+		t.Fatalf("cadence log lines with jitter = %d (%v), want 1: the ceiling repeat must not log", len(got), got)
+	}
+	if !containsAll(got[0], "cadence 2ms", "quiet 2") {
+		t.Fatalf("line = %q, want the 2ms ceiling at quiet 2", got[0])
+	}
+	// The sleeps themselves are jittered: every wait is at or above its chosen
+	// value. This is what makes the comparison bug reachable in production.
+	varied := false
+	for i := 1; i < len(gotWaits); i++ {
+		if gotWaits[i] != gotWaits[0] {
+			varied = true
+			break
+		}
+	}
+	if !varied {
+		t.Fatalf("waits were identical (%v); jitter did not apply, so this test proves nothing", gotWaits)
+	}
+}

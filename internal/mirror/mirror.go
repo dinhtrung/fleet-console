@@ -511,7 +511,23 @@ func (m *Mirror) Loop(ctx context.Context, sources func(context.Context) ([]Proj
 	// logs nothing: a wait that did not change is not news.
 	prev := cadence.Base
 	next := func() time.Duration {
-		wait := cadence.Next(quiet)
+		// chosen is the cadence's own number, before jitter. The comparison and
+		// the log line both use it, because jitter changes every wait: comparing
+		// the jittered value would log a line on every quiet tick at the ceiling,
+		// which is exactly the noise task 4.3 forbids.
+		chosen := cadence.Next(quiet)
+		if chosen != prev {
+			// One line per change, and only a change: an operator reads this to
+			// tell a deliberately slow poll from a hung loop, so a repeated wait
+			// would bury the two lines that matter.
+			if cadence.Streak() > 0 {
+				m.logf("cadence %s (quiet %d)", chosen, cadence.Streak())
+			} else {
+				m.logf("cadence %s reset: %s", chosen, reason)
+			}
+			prev = chosen
+		}
+		wait := chosen
 		if jitter > 0 {
 			// Capped at the wait itself, so a long tick_interval does not turn a
 			// short backed-off wait into a much longer one.
@@ -520,17 +536,6 @@ func (m *Mirror) Loop(ctx context.Context, sources func(context.Context) ([]Proj
 				spread = wait
 			}
 			wait += time.Duration(rand.Int63n(int64(spread)))
-		}
-		if wait != prev {
-			// One line per change, and only a change: an operator reads this to
-			// tell a deliberately slow poll from a hung loop, so a repeated wait
-			// would bury the two lines that matter.
-			if cadence.Streak() > 0 {
-				m.logf("cadence %s (quiet %d)", wait, cadence.Streak())
-			} else {
-				m.logf("cadence %s reset: %s", wait, reason)
-			}
-			prev = wait
 		}
 		return wait
 	}
