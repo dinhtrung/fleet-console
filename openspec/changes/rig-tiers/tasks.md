@@ -30,9 +30,9 @@
 
 ## 3. Wiring and proof (builder 2, blocked by 2)
 
-- [ ] 3.1 `internal/act`: assert the created row's destination is `<seat>@<rig>` and that the worktree is still
+- [x] 3.1 `internal/act`: assert the created row's destination is `<seat>@<rig>` and that the worktree is still
       `wt-<key>-<n>` (no per-rig layout change). If a code change is needed, it is in the row request only.
-- [ ] 3.2 End-to-end with `forge.NewFake` and a fake rig: two rigs, tier 0 full, tier 1 free — one dispatch, one
+- [x] 3.2 End-to-end with `forge.NewFake` and a fake rig: two rigs, tier 0 full, tier 1 free — one dispatch, one
       row, on a tier-1 seat, and the journal line.
-- [ ] 3.3 `docs/my-stack.md`: the two triggers, one worked example, and the warning that `on-unavailable` starts the
+- [x] 3.3 `docs/my-stack.md`: the two triggers, one worked example, and the warning that `on-unavailable` starts the
       standby cold.
