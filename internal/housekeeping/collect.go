@@ -98,11 +98,17 @@ func Plan(ctx context.Context, in Input) (Result, error) {
 	}
 	liveRows := liveRowItems(in.QueueRows)
 	if in.Caller != nil {
-		if weighted, err := in.Caller.LiveRows(ctx); err == nil {
-			for _, row := range weighted {
-				for _, item := range row.ItemNumbers {
-					liveRows[item] = true
-				}
+		weighted, err := in.Caller.LiveRows(ctx)
+		if err != nil {
+			// A failed queue read cannot say which items are still live, and "cannot tell"
+			// must never read as "none are": that would make a live item's worktree
+			// removable. Same refusal as an unreadable branch, same do-nothing shape as a
+			// stale forge read.
+			return result, fmt.Errorf("housekeeping: live rows: %w", err)
+		}
+		for _, row := range weighted {
+			for _, item := range row.ItemNumbers {
+				liveRows[item] = true
 			}
 		}
 	}

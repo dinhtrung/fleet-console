@@ -214,12 +214,18 @@ func TestWorktreeItemNames(t *testing.T) {
 // fakeCaller stands in for the app-side facts an older tick does not expose.
 // Branch and dirty come from fakeGit, because Plan asks git directly for them.
 type fakeCaller struct {
-	marked   []CleanupPath
-	liveRows []WeightedRow
+	marked      []CleanupPath
+	liveRows    []WeightedRow
+	liveRowsErr error
 }
 
 func (f *fakeCaller) CleanupPaths(context.Context) ([]CleanupPath, error) { return f.marked, nil }
-func (f *fakeCaller) LiveRows(context.Context) ([]WeightedRow, error)     { return f.liveRows, nil }
+func (f *fakeCaller) LiveRows(context.Context) ([]WeightedRow, error) {
+	if f.liveRowsErr != nil {
+		return nil, f.liveRowsErr
+	}
+	return f.liveRows, nil
+}
 
 func reasonCount(decisions []Decision, reason Reason) int {
 	count := 0
@@ -470,5 +476,36 @@ func runGitTest(t *testing.T, repo string, args ...string) {
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+}
+
+// A failed queue read proposes nothing. "Cannot tell whether this item is live" must never be read
+// as "no item is live": that would make a live item's clean worktree removable. The sibling paths
+// already refuse this way — CleanupPaths errors propagate and an unreadable branch is a keep — and
+// this is the same refusal in the same place.
+func TestPlanLiveRowsErrorProposesNothing(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "wt-app-9")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	git := &fakeGit{}
+	in := Input{
+		Project: "app", WorktreeRoot: root, ForgeOK: true, Git: git,
+		Caller: &fakeCaller{
+			marked:      []CleanupPath{{Path: path, Item: 9, Branch: "feature/9"}},
+			liveRowsErr: errors.New("queue: database is locked"),
+		},
+	}
+	result, err := Plan(context.Background(), in)
+	if err == nil {
+		t.Fatalf("Plan returned no error for a failed queue read; decisions = %+v", result.Decisions)
+	}
+	if len(result.Decisions) != 0 {
+		t.Fatalf("decisions = %+v, want none when the queue read failed", result.Decisions)
+	}
+	// The failure is a read that did not happen, not a removal that did.
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("the worktree was touched: %v", statErr)
 	}
 }
