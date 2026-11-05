@@ -308,6 +308,12 @@ func projectRigs(project store.ProjectRow) []string {
 
 func changeRequestFor(requests []forge.ChangeRequest, item int) *forge.ChangeRequest {
 	for index := range requests {
+		// A closed or merged change request can never merge again. It must not block
+		// a re-dispatch: a rejected attempt leaves its PR closed, and the item is
+		// free work for the next builder.
+		if requests[index].Merged || strings.EqualFold(requests[index].State, "closed") {
+			continue
+		}
 		if requests[index].ClosesItem == item || forge.ParseCloses(requests[index].Body) == item {
 			return &requests[index]
 		}

@@ -395,3 +395,50 @@ func TestRunTickNotifiesEachMergeAndNoDecisionAlone(t *testing.T) {
 		}
 	})
 }
+
+// A rejected attempt leaves its pull request closed. A closed pull request can
+// never merge again, so it must not keep the item out of the dispatch queue: the
+// item is free work for the next builder.
+func TestRunTickDispatchesAfterRejectedCRClosed(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC)
+	st := newStore(t)
+	pid := newProject(t, st)
+	if _, err := st.CreateDispatch(ctx, store.NewDispatch{
+		ProjectID: pid, ItemNumber: 5, Attempt: 1, Seat: "seat@rig",
+		Branch: "feature/5-x", Worktree: "wt", BaseSHA: "base", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	rows, err := st.Dispatches(ctx, pid, 5)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("dispatch rows = %+v err=%v", rows, err)
+	}
+	if err := st.EndDispatch(ctx, rows[0].ID, "superseded"); err != nil {
+		t.Fatalf("end dispatch: %v", err)
+	}
+
+	fake := forge.NewFake(forge.KindGitHub)
+	fake.ItemsValue = []forge.Item{{Number: 5, Kind: forge.KindTask, State: forge.StateOpen, Title: "Five"}}
+	// The rejected attempt's pull request is closed; it must not block attempt 2.
+	fake.RequestsValue = []forge.ChangeRequest{{
+		Number: 9, HeadSHA: "abc1234", State: "closed", Body: "Closes #5",
+	}}
+	queue := &queueStub{item: &rig.QueueItem{ID: "qitem-2", State: "pending"}, created: &rig.CreateRequest{}}
+	project := store.ProjectRow{ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r", Rig: "rig", ConcurrencyCap: 2, Enabled: true}
+	in := TickInput{
+		Store: st, Project: project, Forge: fake, Rig: queue, Git: &fakeGit{}, Gate: openGate(), Apply: true,
+		Items: fake.ItemsValue, CRs: fake.RequestsValue, Plan: dispatchPlan(5, "seat@rig"),
+		WorktreeRoot: t.TempDir(), Now: func() time.Time { return now },
+	}
+	report, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(report.Dispatches) != 1 {
+		t.Fatalf("report = %+v, want one dispatch after the closed CR", report)
+	}
+	if hasSkip(report, "already has a change request") {
+		t.Fatalf("closed CR still blocked the dispatch: %v", report.Skipped)
+	}
+}
