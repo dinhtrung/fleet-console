@@ -170,6 +170,116 @@ func pollCadence(eff *config.Effective) mirror.Cadence {
 	return mirror.Cadence{Base: eff.TickInterval, Max: eff.RigLifecycle.IdlePollMax}
 }
 
+// readReplies resolves decisions from the answers on their items. It runs once per applied tick,
+// after the act phase, and only when decision_notes is on. The open set is the project's live rows
+// that wait on a person: those are the obligations the app has already asked about on the item.
+//
+// A failure is one log line and never fails the tick: a broken forge read must not stop dispatch.
+func readReplies(
+	ctx context.Context,
+	db *store.Store,
+	forgeClient forge.Forge,
+	rigClient act.Rig,
+	projectRead mirror.ProjectResult,
+	eff *config.Effective,
+	projectKey string,
+) {
+	notes := make([]decisions.Note, 0, len(projectRead.Rows))
+	for _, row := range projectRead.Rows {
+		if !rig.WaitsOnHuman(row.State, row.Destination, row.BlockedOn) {
+			continue
+		}
+		item := decisions.ItemNumber(0, row.Summary)
+		if item <= 0 {
+			continue
+		}
+		askedAt, ok := notedAt(ctx, db, item, row.ID)
+		if !ok {
+			// No decision.noted event means the app never asked on the item, so there is no note to
+			// answer. A row parked before decision_notes was turned on is exactly this case.
+			continue
+		}
+		createdAt, _ := time.Parse(time.RFC3339, strings.TrimSpace(row.CreatedAt))
+		notes = append(notes, decisions.Note{
+			Decision: decisions.Decision{
+				ID: row.ID, Summary: row.Summary, Item: item,
+				Destination: row.Destination, CreatedAt: createdAt,
+			},
+			AskedAt: askedAt,
+		})
+	}
+	if len(notes) == 0 {
+		return
+	}
+	reader := &decisions.ReplyReader{
+		Forge:    forgeClient,
+		Store:    decisionLedger{db},
+		Resolver: rowResolver{&act.Actions{Store: db, Forge: forgeClient, Rig: rigClient, Now: time.Now}},
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "decision-reply: "+format+"\n", args...)
+		},
+	}
+	for _, outcome := range reader.Read(ctx, notes, eff.DecisionAnswerers) {
+		switch {
+		case outcome.Resolved:
+			fmt.Fprintf(os.Stderr, "decision-reply: %s answered by %s\n", outcome.DecisionID, outcome.CommentID)
+		case outcome.Corrected:
+			fmt.Fprintf(os.Stderr, "decision-reply: %s ambiguous, correction posted\n", outcome.CommentID)
+		case outcome.Reason != "":
+			fmt.Fprintf(os.Stderr, "decision-reply: %s skipped: %s\n", outcome.DecisionID, outcome.Reason)
+		}
+	}
+}
+
+// decisionLedger bridges the store's event row to the decisions package's narrow shape. The two
+// differ only in the extra fields the audit table carries, so the adapter is a field copy and nothing
+// more: no behaviour lives here.
+type decisionLedger struct{ db *store.Store }
+
+func (l decisionLedger) HasEvent(ctx context.Context, kind, subject, contains string) (bool, error) {
+	return l.db.HasEvent(ctx, kind, subject, contains)
+}
+
+func (l decisionLedger) AppendEvent(ctx context.Context, e decisions.Event) (int64, error) {
+	return l.db.AppendEvent(ctx, store.Event{
+		Actor: e.Actor, Kind: e.Kind, Subject: e.Subject, Detail: e.Detail,
+	})
+}
+
+// rowResolver adapts act.Actions' ResolveRow to the decisions package's Resolver. The board's answer
+// calls the same method, so a reply and a board click cannot disagree about which surface won: the
+// rig refuses the second one.
+type rowResolver struct{ actions *act.Actions }
+
+func (r rowResolver) ResolveRow(ctx context.Context, id, decision string) error {
+	_, err := r.actions.ResolveRow(ctx, id, decision)
+	return err
+}
+
+// notedAt reports when the app asked about this decision on this item, from the decision.noted event
+// T1's noter wrote. A comment older than that cannot answer the decision, so the time matters as much
+// as the presence.
+func notedAt(ctx context.Context, db *store.Store, item int, decisionID string) (time.Time, bool) {
+	page, err := db.Events(ctx, store.EventFilter{Kind: "decision.noted", Limit: 200})
+	if err != nil {
+		return time.Time{}, false
+	}
+	for _, event := range page.Events {
+		if event.Subject != fmt.Sprintf("#%d", item) {
+			continue
+		}
+		if !strings.Contains(event.Detail, decisionID) {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, event.At)
+		if err != nil {
+			continue
+		}
+		return at, true
+	}
+	return time.Time{}, false
+}
+
 // noteContextFor builds what a decision's note needs: the item's link from the
 // read the tick already has, the board's deep link, and how many decisions are
 // open on that item so the reply line can name the id when it must (design D3).
@@ -714,6 +824,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 				if err != nil {
 					fmt.Fprintf(stderr, "act: %s: %v\n", project.Key, err)
 					continue
+				}
+				// The reply phase runs after the act phase: a decision raised this
+				// tick has its note on the item, so an answer to it can be read on
+				// the next tick and resolved through the same call the board uses.
+				// A failure here is one log line and never fails the tick.
+				if eff.DecisionNotes {
+					readReplies(ctx, db, source.Forge, rig.NewAdapter(rigRunner), projectRead, eff, projectKey)
 				}
 				fmt.Fprintf(stderr, "act: %s dispatches=%d verdicts=%d merges=%d skipped=%d\n",
 					project.Key, len(report.Dispatches), len(report.Verdicts), len(report.Merges), len(report.Skipped))

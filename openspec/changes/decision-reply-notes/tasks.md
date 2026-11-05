@@ -25,18 +25,18 @@
 
 ## 2. The reply (builder 2, after 1)
 
-- [ ] 2.1 `internal/decisions`: read `Forge.Notes(item)` for each open, noted decision; match the first non-empty
+- [x] 2.1 `internal/decisions`: read `Forge.Notes(item)` for each open, noted decision; match the first non-empty
       line against `fleet:`; require author ∈ `decision_answerers` (default: the slug owner) and
       `created_at > the question note's`; cap the answer at 200 chars.
       Evidence: a table test — valid, wrong author, no prefix, older comment, prefix with an unknown decision,
       ambiguous item with two open decisions.
-- [ ] 2.2 Resolve through the rig adapter's `QueueResolve`, post the closing note (`answered: <answer> — <author>`,
+- [x] 2.2 Resolve through the rig adapter's `QueueResolve`, post the closing note (`answered: <answer> — <author>`,
       the comment link), record `decision.answered` with the comment id, and never resolve a terminal row.
       Evidence: a fake rig recording one resolve per answer and none for a terminal row; a board-answered row is
       unchanged by a later reply.
-- [ ] 2.3 Corrections: at most one per comment id, recorded as `decision.reply_ignored`; a re-read posts nothing.
+- [x] 2.3 Corrections: at most one per comment id, recorded as `decision.reply_ignored`; a re-read posts nothing.
       Evidence: the same comment read twice → one note.
-- [ ] 2.4 `cmd/fleet-console/main.go`: one call per applied tick, after the act phase, gated by `decision_notes`;
+- [x] 2.4 `cmd/fleet-console/main.go`: one call per applied tick, after the act phase, gated by `decision_notes`;
       a failure is one log line and never fails the tick.
 
 ## 3. Docs (builder 3, after 1 and 2)
