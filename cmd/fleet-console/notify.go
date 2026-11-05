@@ -24,6 +24,7 @@ import (
 	"github.com/dinhtrung/fleet-console/internal/act"
 	"github.com/dinhtrung/fleet-console/internal/alert"
 	"github.com/dinhtrung/fleet-console/internal/config"
+	"github.com/dinhtrung/fleet-console/internal/decisions"
 	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/progress"
 	"github.com/dinhtrung/fleet-console/internal/rig"
@@ -54,7 +55,11 @@ type notifier struct {
 	sender    alert.Telegram
 	progress  *alert.Notifier
 	escalator *alert.Escalator
-	log       io.Writer
+	// notes posts a decision's question on its item when decision_notes is on.
+	// The Forge is filled in per decision, from the project's read.
+	notes         *decisions.Noter
+	decisionNotes bool
+	log           io.Writer
 }
 
 // configured reports whether a message could be sent at all.
@@ -84,13 +89,61 @@ func newNotifier(db *store.Store, eff *config.Effective, logw io.Writer, boardUR
 		},
 	}
 	n.escalator = &alert.Escalator{Store: db, Sender: sender, BoardURL: boardURL}
+	// The decision note's ledger is the event table; the forge is resolved per
+	// call, because the notifier is built before the projects are read.
+	n.notes = &decisions.Noter{Store: &decisionStore{db: db}, Logf: func(format string, args ...any) {
+		fmt.Fprintf(logw, "notify: %s\n", fmt.Sprintf(format, args...))
+	}}
+	n.decisionNotes = eff != nil && eff.DecisionNotes
 	return n
+}
+
+// decisionStore adapts *store.Store to the noter's narrow ledger interface.
+type decisionStore struct {
+	db *store.Store
+}
+
+func (s *decisionStore) HasEvent(ctx context.Context, kind, subject, contains string) (bool, error) {
+	return s.db.HasEvent(ctx, kind, subject, contains)
+}
+
+func (s *decisionStore) AppendEvent(ctx context.Context, e decisions.Event) (int64, error) {
+	return s.db.AppendEvent(ctx, store.Event{
+		Actor: e.Actor, Kind: e.Kind, Subject: e.Subject, Detail: e.Detail,
+	})
 }
 
 // escalate puts one raised decision on the phone. A failure is logged and
 // swallowed: the decision row is the durable record, and nothing in the tick may
 // wait on Telegram (design.md §5).
-func (n *notifier) escalate(ctx context.Context, project string, in act.DecisionRaised) {
+// noteDecision posts the decision's question on its item when decision_notes is
+// on. A nil noter means the feature is off and nothing happens (design D8). A
+// failure is one log line: the tick must not fail because a comment did not land,
+// and the escalation still goes out.
+func (n *notifier) noteDecision(ctx context.Context, in act.DecisionRaised, note decisions.NoteContext, write decisions.Forge) {
+	if n == nil || n.notes == nil || !n.decisionNotes {
+		return
+	}
+	n.notes.Forge = write
+	d := decisions.Decision{
+		ID: in.QItemID, Question: in.Text, Summary: in.Text, Item: in.Item,
+	}
+	result, err := n.notes.Note(ctx, d, note)
+	switch {
+	case err != nil:
+		fmt.Fprintf(n.log, "notify: decision.note %s: %v\n", in.QItemID, err)
+	case result.Posted:
+		fmt.Fprintf(n.log, "notify: decision.note %s posted on #%d\n", in.QItemID, in.Item)
+	case result.Skipped && result.Reason != "already noted":
+		fmt.Fprintf(n.log, "notify: decision.note %s skipped: %s\n", in.QItemID, result.Reason)
+	}
+}
+
+// escalate puts one raised decision on the phone. The message carries the item
+// link and the reply line the note prints, so the operator copies the line rather
+// than composing it. A nil reply line means the app could not name the item, and
+// the message omits the line instead of inventing one.
+func (n *notifier) escalate(ctx context.Context, project string, in act.DecisionRaised, note decisions.NoteContext) {
 	if n == nil || n.escalator == nil {
 		return
 	}
@@ -99,6 +152,8 @@ func (n *notifier) escalate(ctx context.Context, project string, in act.Decision
 		Project:    project,
 		Item:       in.Item,
 		Question:   in.Text,
+		ItemURL:    note.ItemURL,
+		ReplyLine:  decisions.ReplyLine(decisions.Decision{ID: in.QItemID, Item: in.Item}, note),
 	})
 	if err != nil {
 		fmt.Fprintf(n.log, "notify: decision %s: %v\n", in.QItemID, err)

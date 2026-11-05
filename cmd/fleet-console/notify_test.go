@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dinhtrung/fleet-console/internal/act"
+	"github.com/dinhtrung/fleet-console/internal/decisions"
 	"github.com/dinhtrung/fleet-console/internal/alert"
 	"github.com/dinhtrung/fleet-console/internal/config"
 	"github.com/dinhtrung/fleet-console/internal/forge"
@@ -131,6 +132,8 @@ func notifierFor(t *testing.T, eff *config.Effective, bot *fakeBotAPI, logw *byt
 			Logf:  func(string, ...any) {},
 		},
 		escalator: &alert.Escalator{Store: db, Sender: sender, BoardURL: "http://127.0.0.1:8787"},
+		notes:     &decisions.Noter{Store: &decisionStore{db: db}, Logf: func(string, ...any) {}},
+		decisionNotes: eff != nil && eff.DecisionNotes,
 		log:       logw,
 	}
 }
@@ -294,7 +297,10 @@ func TestEscalatorReachesThePhone(t *testing.T) {
 	n := notifierFor(t, eff, bot, &logw)
 
 	raised := act.DecisionRaised{QItemID: "qitem-1", Item: 62, Text: "re-review needed"}
-	n.escalate(context.Background(), "app", raised)
+	note := decisions.NoteContext{
+		ItemURL: "https://github.com/dinhtrung/fleet-console/issues/62", OpenOnItem: 1,
+	}
+	n.escalate(context.Background(), "app", raised, note)
 	if got := bot.count(); got != 1 {
 		t.Fatalf("sends = %d, want 1", got)
 	}
@@ -322,7 +328,7 @@ func TestEscalatorReachesThePhone(t *testing.T) {
 	}
 
 	// The same decision again: the message is edited, not resent.
-	n.escalate(context.Background(), "app", raised)
+	n.escalate(context.Background(), "app", raised, note)
 	if got := bot.count(); got != 1 {
 		t.Fatalf("sends after re-escalation = %d, want 1 (the second is an edit)", got)
 	}

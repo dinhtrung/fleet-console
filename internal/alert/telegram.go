@@ -105,6 +105,13 @@ type EscalationInput struct {
 	Item       int
 	Question   string
 	Deadline   time.Time
+	// ItemURL links the item whose thread carries the note. Empty when the app
+	// does not know the item's number, in which case the message omits the line
+	// rather than linking a guess.
+	ItemURL string
+	// ReplyLine is the exact text the operator comments on the item to answer.
+	// It is the same line the note prints, so copying the message works.
+	ReplyLine string
 }
 
 // Escalation is what happened to the message.
@@ -123,14 +130,26 @@ type Escalator struct {
 	Now      func() time.Time
 }
 
-// Text is the one message body: project, item, question and a board deep link.
+// Text is the one message body: project, item, question, the reply line and the
+// links. No inline keyboard: the app cannot receive a button press (design D9), so
+// offering one would be a control that does nothing.
 func (e *Escalator) Text(in EscalationInput) string {
 	link := strings.TrimRight(e.BoardURL, "/") + "/decisions#" + in.DecisionID
 	deadline := "no deadline"
 	if !in.Deadline.IsZero() {
 		deadline = in.Deadline.UTC().Format(time.RFC3339)
 	}
-	return fmt.Sprintf("%s #%d: %s\nDeadline: %s\n%s", in.Project, in.Item, in.Question, deadline, link)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s #%d: %s\n", in.Project, in.Item, in.Question)
+	fmt.Fprintf(&b, "Deadline: %s\n", deadline)
+	if in.ReplyLine != "" {
+		fmt.Fprintf(&b, "Reply on the item with: %s\n", in.ReplyLine)
+	}
+	if in.ItemURL != "" {
+		fmt.Fprintf(&b, "Item: %s\n", in.ItemURL)
+	}
+	fmt.Fprintf(&b, "Board: %s", link)
+	return b.String()
 }
 
 // Escalate sends the first time and edits afterwards. One decision, one message.
