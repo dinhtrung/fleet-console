@@ -70,7 +70,7 @@ func TestLoopCadenceSequence(t *testing.T) {
 					return verdicts[ticks-1]
 				}
 				return true
-			})
+			}, nil)
 	}()
 
 	select {
@@ -166,7 +166,7 @@ func TestLoopCadenceTreatsAFailedReadAsBusy(t *testing.T) {
 				}
 				return []Project{{ID: id, Key: "app", Forge: fake}}, nil
 			},
-			Cadence{Base: base, Max: max}, 0, nil)
+			Cadence{Base: base, Max: max}, 0, nil, nil)
 	}()
 
 	select {
@@ -253,7 +253,7 @@ func TestLoopCadenceWithJitterLogsOnlyChanges(t *testing.T) {
 				defer mu.Unlock()
 				ticks++
 				return false // always quiet
-			})
+			}, nil)
 	}()
 
 	select {

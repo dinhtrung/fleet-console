@@ -159,7 +159,7 @@ func TestLoopTicksAndStops(t *testing.T) {
 					cancel()
 				}
 				return true
-			})
+			}, nil)
 		close(done)
 	}()
 	select {

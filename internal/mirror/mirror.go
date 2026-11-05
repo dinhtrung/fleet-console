@@ -472,7 +472,14 @@ type verdictFields = decide.VerdictState
 // onTick may be nil, which leaves every tick quiet. The cadence may be zero,
 // which makes every wait Base — the pre-cadence behaviour, still the default for
 // a box that never writes the rig_lifecycle block.
-func (m *Mirror) Loop(ctx context.Context, sources func(context.Context) ([]Project, error), cadence Cadence, jitter time.Duration, onTick func(TickResult) bool) {
+//
+// wake lets another goroutine ask for a tick before the timer would fire. A
+// receive runs the tick immediately and resets the cadence to Base, exactly as a
+// busy tick does: the wait after a wake is tick_interval even when the tick it
+// triggered found nothing. A nil channel disables the arm, so every caller that
+// predates the wake keeps its behaviour. Coalescing belongs to the sender — see
+// Waker — so this loop only ever sees one pending wake at a time.
+func (m *Mirror) Loop(ctx context.Context, sources func(context.Context) ([]Project, error), cadence Cadence, jitter time.Duration, onTick func(TickResult) bool, wake <-chan struct{}) {
 	seen := make(map[string]string)
 	// quiet and reason describe the tick that just ran: whether it found nothing
 	// anywhere, and when it did find something, the fact that ended the stretch.
@@ -552,6 +559,16 @@ func (m *Mirror) Loop(ctx context.Context, sources func(context.Context) ([]Proj
 			return
 		case <-timer.C:
 			tick()
+		case <-wake:
+			timer.Stop()
+			tick()
+			// A wake is a busy verdict even when the tick it triggered found
+			// nothing: something changed out there, and the next wait must be
+			// tick_interval rather than a further doubling. This is the same
+			// path a busy tick takes — cadence.Next(false) clears the streak and
+			// returns Base — so the cadence's own arithmetic is untouched.
+			quiet = false
+			reason = "woken by a forge delivery"
 		}
 	}
 }

@@ -785,6 +785,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 			busy, _ := mirror.Busy(read)
 			return busy
 		},
+		// nil until #170's webhook receiver supplies a Waker.Channel().
+		nil,
 	)
 
 	app, err := web.New(web.Config{
