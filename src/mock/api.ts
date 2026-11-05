@@ -412,45 +412,6 @@ export async function listSessions(query: ListQuery = {}): Promise<Page<Session 
   return paginate(sorted, query);
 }
 
-export async function listAudit(query: ListQuery = {}): Promise<Page<AuditEvent>> {
-  await gate();
-  const db = readStore();
-  let rows = [...db.audit];
-  const q = query.q?.trim().toLowerCase();
-  if (q) {
-    rows = rows.filter(
-      (e) =>
-        e.actorName.toLowerCase().includes(q) ||
-        e.targetLabel.toLowerCase().includes(q) ||
-        e.action.toLowerCase().includes(q),
-    );
-  }
-  if (query.action) rows = rows.filter((e) => e.action === query.action);
-  if (query.actorId) rows = rows.filter((e) => e.actorId === query.actorId);
-  if (query.orgId) {
-    const inOrg = new Set(db.users.filter((u) => u.orgIds.includes(query.orgId!)).map((u) => u.id));
-    rows = rows.filter((e) => inOrg.has(e.actorId) || inOrg.has(e.targetId));
-  }
-  if (query.from) rows = rows.filter((e) => e.at >= query.from!);
-  if (query.to) rows = rows.filter((e) => e.at <= `${query.to!}T23:59:59.999Z`);
-  if (query.sort === "at" || !query.sort) {
-    rows.sort((a, b) => (a.at < b.at ? 1 : -1));
-    if (query.dir === "asc") rows.reverse();
-  }
-  return paginate(rows, query);
-}
-
-export async function getAuditEvent(id: string): Promise<AuditEvent> {
-  await gate();
-  const event = readStore().audit.find((e) => e.id === id);
-  if (!event) throw new ApiError("not_found", `No audit event ${id}.`);
-  return event;
-}
-
-export async function auditActions(): Promise<string[]> {
-  await gate();
-  return [...new Set(readStore().audit.map((e) => e.action))].sort();
-}
 
 export async function getSettings(): Promise<WorkspaceSettings> {
   await gate();

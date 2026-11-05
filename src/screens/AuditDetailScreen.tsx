@@ -1,87 +1,32 @@
-/** One audit event, field by field.
+/** One event, field by field, exactly as the log recorded it.
  *
- *  The detail shows what the action did: the before and after of every affected field, marked as an
- *  addition, a removal or a change, alongside the actor, the IP and the exact time. It is read-only
- *  by construction — there is no control here that could edit or delete the event. */
+ *  The row carries the actor, kind, subject, detail, timestamp and — when the event ran a command —
+ *  its exit code and stdout hash. Design D3 keeps it to those fields: the hash is what the audit
+ *  contract records, and pretending to re-read the command's output would be a storage promise the
+ *  app does not make. Read-only by construction: nothing here can edit or delete the event. */
 
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Equal, Minus, Pencil, Plus } from "lucide-react";
-import { Badge, ErrorState, FieldRow, LoadingRows, NotFoundState, Panel, PanelHead } from "../components/ui";
-import { RequirePermission } from "../components/RequirePermission";
+import { ErrorState, FieldRow, LoadingRows, NotFoundState, Panel, PanelHead } from "../components/ui";
 import { PageHeader } from "../shell/PageHeader";
-import { getAuditEvent } from "../mock/api";
-import { isApiError, type AuditEvent, type FieldChange } from "../mock/types";
-import { cn } from "../lib/cn";
-import { dateTime, orDash, plural, relativeTime } from "../lib/format";
+import { getEvent, isApiError } from "../lib/fleet";
+import { dateTime, orDash, relativeTime } from "../lib/format";
 
 export function AuditDetailScreen({ eventId }: { eventId: string }) {
-  return (
-    <RequirePermission permission="audit.read" what="This audit event" title="Audit event">
-      <AuditEventBody eventId={eventId} />
-    </RequirePermission>
-  );
-}
-
-/** The target names a user, an organization or a role: link to it where such a surface exists. */
-function TargetLink({ event }: { event: AuditEvent }) {
-  const className = "text-ink underline decoration-rule-strong hover:decoration-ink";
-  switch (event.targetType) {
-    case "user":
-      return (
-        <Link to="/users/$userId" params={{ userId: event.targetId }} className={className}>
-          {event.targetLabel}
-        </Link>
-      );
-    case "organization":
-      return (
-        <Link to="/organizations/$orgId" params={{ orgId: event.targetId }} className={className}>
-          {event.targetLabel}
-        </Link>
-      );
-    case "role":
-      return (
-        <Link to="/roles/$roleId" params={{ roleId: event.targetId }} className={className}>
-          {event.targetLabel}
-        </Link>
-      );
-    case "settings":
-      return (
-        <Link to="/settings" className={className}>
-          {event.targetLabel}
-        </Link>
-      );
-    default:
-      return <span className="text-ink">{event.targetLabel}</span>;
-  }
-}
-
-function ChangeRow({ change }: { change: FieldChange }) {
-  const added = change.before === null;
-  const removed = change.after === null;
-  const unchanged = !added && !removed && change.before === change.after;
-  const kind = added ? "Added" : removed ? "Removed" : unchanged ? "Unchanged" : "Changed";
-  const Icon = added ? Plus : removed ? Minus : unchanged ? Equal : Pencil;
-
-  return (
-    <li className="flex flex-col gap-1 border-b border-rule px-3 py-2 last:border-b-0">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-[0.6875rem] font-semibold text-ink-muted">{change.field}</span>
-        <Badge tone="quiet">
-          <Icon size={11} aria-hidden="true" /> {kind}
-        </Badge>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 font-mono text-body">
-        <span className={cn("break-words text-ink-muted", removed && "line-through")}>{orDash(change.before)}</span>
-        <ArrowRight size={12} aria-hidden="true" className="shrink-0 text-ink-muted" />
-        <span className={cn("break-words", removed ? "text-ink-muted" : "text-ink")}>{orDash(change.after)}</span>
-      </div>
-    </li>
-  );
+  return <AuditEventBody eventId={eventId} />;
 }
 
 function AuditEventBody({ eventId }: { eventId: string }) {
-  const query = useQuery({ queryKey: ["audit-event", eventId], queryFn: () => getAuditEvent(eventId) });
+  // The route param is a string; the API's id is an integer. A param that is not one cannot name a
+  // row, so it is a 404 rather than a request the server would answer with its own 404 anyway.
+  const id = Number(eventId);
+  const valid = Number.isInteger(id) && id > 0;
+
+  const query = useQuery({
+    queryKey: ["audit-event", id],
+    queryFn: () => getEvent(id),
+    enabled: valid,
+  });
 
   const header = (
     <PageHeader
@@ -89,6 +34,19 @@ function AuditEventBody({ eventId }: { eventId: string }) {
       crumbs={[{ label: "Board", to: "/" }, { label: "Audit record", to: "/audit" }, { label: eventId }]}
     />
   );
+
+  if (!valid) {
+    return (
+      <>
+        {header}
+        <div className="px-3 sm:px-5">
+          <NotFoundState what="audit event">
+            <BackLink />
+          </NotFoundState>
+        </div>
+      </>
+    );
+  }
 
   if (query.isLoading) {
     return (
@@ -104,19 +62,23 @@ function AuditEventBody({ eventId }: { eventId: string }) {
   }
 
   if (query.error) {
-    const missing = isApiError(query.error) && query.error.code === "not_found";
+    // A 404 is "no such event" and nothing else; anything else is a read that failed, and it keeps
+    // the retry. The two must not collapse into one state.
+    const missing = isApiError(query.error) && query.error.status === 404;
     return (
       <>
         {header}
         <div className="px-3 sm:px-5">
           {missing ? (
             <NotFoundState what="audit event">
-              <Link to="/audit" className="text-ink underline decoration-rule-strong hover:decoration-ink">
-                Back to the audit record
-              </Link>
+              <BackLink />
             </NotFoundState>
           ) : (
-            <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+            <ErrorState
+              title="The audit event could not be read"
+              error={query.error}
+              onRetry={() => void query.refetch()}
+            />
           )}
         </div>
       </>
@@ -138,44 +100,61 @@ function AuditEventBody({ eventId }: { eventId: string }) {
           />
           <div className="grid gap-x-6 px-3 py-2 sm:grid-cols-2">
             <FieldRow label="Actor">
-              <span className="text-ink">{event.actorName}</span>
-              <span className="block font-mono text-[0.6875rem] text-ink-muted">{event.actorId}</span>
+              <span className="font-mono">{event.actor}</span>
             </FieldRow>
-            <FieldRow label="Action">
-              <span className="font-mono">{event.action}</span>
+            <FieldRow label="Kind">
+              <span className="font-mono">{event.kind}</span>
             </FieldRow>
-            <FieldRow label="Target">
-              <TargetLink event={event} />
-              <span className="block font-mono text-[0.6875rem] text-ink-muted">{event.targetId}</span>
-            </FieldRow>
-            <FieldRow label="IP address">
-              <span className="font-mono">{event.ip}</span>
+            <FieldRow label="Subject">
+              <span className="font-mono">{orDash(event.subject)}</span>
             </FieldRow>
             <FieldRow label="Recorded">
               <span className="text-ink">{dateTime(event.at)}</span>
               <span className="block font-mono text-[0.6875rem] text-ink-muted">{event.at}</span>
             </FieldRow>
             <FieldRow label="Event reference">
-              <span className="font-mono">{event.id}</span>
+              <span className="num">{event.id}</span>
             </FieldRow>
           </div>
         </Panel>
 
         <Panel>
-          <PanelHead title="Field-level change" count={plural(event.changes.length, "field")} />
-          {event.changes.length === 0 ? (
-            <p className="px-3 py-3 text-body text-ink-muted">
-              This event did not change a field. It is recorded so the action is not lost from the record.
-            </p>
+          <PanelHead title="Detail" />
+          {event.detail ? (
+            <pre className="overflow-x-auto px-3 py-2 font-mono text-[0.75rem] whitespace-pre-wrap text-ink">
+              {event.detail}
+            </pre>
           ) : (
-            <ul>
-              {event.changes.map((change, index) => (
-                <ChangeRow key={`${change.field}-${index}`} change={change} />
-              ))}
-            </ul>
+            <p className="px-3 py-3 text-body text-ink-muted">
+              This event recorded no detail. It is still the whole record of what happened.
+            </p>
           )}
         </Panel>
+
+        {/* The command's outcome only exists when the event ran one: an exit code is present or it is
+            not, and a stdout hash is only meaningful next to it. */}
+        {event.exit_code !== undefined || event.stdout_hash ? (
+          <Panel>
+            <PanelHead title="Command" description="What the recorded command returned." />
+            <div className="grid gap-x-6 px-3 py-2 sm:grid-cols-2">
+              <FieldRow label="Exit code">
+                <span className="num">{event.exit_code === undefined ? "—" : event.exit_code}</span>
+              </FieldRow>
+              <FieldRow label="stdout hash">
+                <span className="font-mono text-[0.6875rem] break-all">{orDash(event.stdout_hash)}</span>
+              </FieldRow>
+            </div>
+          </Panel>
+        ) : null}
       </div>
     </>
+  );
+}
+
+function BackLink() {
+  return (
+    <Link to="/audit" className="text-ink underline decoration-rule-strong hover:decoration-ink">
+      Back to the audit record
+    </Link>
   );
 }

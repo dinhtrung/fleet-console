@@ -1,269 +1,277 @@
-/** The audit record: append-only, and nothing here can be changed or removed.
+/** The audit record: the app's own event log, read newest first.
  *
- *  Every state-changing action is one row — actor, action, target, IP and time — filterable by
- *  free text, action, actor and date range. A filter that matches nothing says so; it is never
- *  confused with a board that has no events at all. */
+ *  Every row is one thing the app did — actor, kind, subject and detail — appended once and never
+ *  edited. The server owns the paging: the screen asks for a page, then asks for the page before the
+ *  cursor it was given. Filters are a closed set (`actor`, `kind`, `subject`, `since`, `until`), all
+ *  applied by the server, so a filter this screen cannot express is one the operator cannot ask for.
+ *
+ *  Three states are kept distinct on purpose: loading, "no events match", and "the log could not be
+ *  read" with a retry. A failed read is never rendered as an empty table — that would read as quiet,
+ *  which is the one thing a broken audit log must not look like. */
 
-import { Link } from "@tanstack/react-router";
+import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, X } from "lucide-react";
-import { DataGrid, GridSearch } from "../components/grid/DataGrid";
-import type { GridColumn } from "../components/grid/DataGrid";
-import { Button, SelectInput, TextInput, Toolbar } from "../components/ui";
-import { RequirePermission } from "../components/RequirePermission";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { Button, EmptyState, ErrorState, IconButton, LoadingRows, NoMatchesState, TextInput, Toolbar } from "../components/ui";
 import { PageHeader } from "../shell/PageHeader";
-import { useScope } from "../shell/scope";
+import { listEvents, type AuditEvent } from "../lib/fleet";
 import { useListState } from "../lib/urlState";
-import { auditActions, DEFAULT_PAGE_SIZE, listAudit, listUsers } from "../mock/api";
-import type { AuditEvent, ListQuery, User } from "../mock/types";
-import { dateTime, number, relativeTime } from "../lib/format";
+import { dateTime, orDash, relativeTime } from "../lib/format";
 
-/** The API pages at 50 at most, so the actor picker walks the pages until the board is exhausted. */
-async function fetchActors(orgId: string | undefined): Promise<User[]> {
-  const pageSize = 50;
-  const first = await listUsers({ pageSize, page: 1, orgId });
-  const all = [...first.items];
-  const pages = Math.min(Math.ceil(first.total / pageSize), 4);
-  for (let page = 2; page <= pages; page += 1) {
-    const next = await listUsers({ pageSize, page, orgId });
-    all.push(...next.items);
-  }
-  return all.sort((a, b) => a.name.localeCompare(b.name));
-}
+/** The page size the server clamps to anyway; the screen asks for the same default so the pager
+ *  arithmetic and the server's page agree. */
+const PAGE_SIZE = 50;
 
-/** A target names a user, an organization or a role: link to it where such a surface exists. */
-function TargetLink({ event }: { event: AuditEvent }) {
-  const className = "text-ink underline decoration-rule-strong hover:decoration-ink";
-  switch (event.targetType) {
-    case "user":
-      return (
-        <Link to="/users/$userId" params={{ userId: event.targetId }} className={className}>
-          {event.targetLabel}
-        </Link>
-      );
-    case "organization":
-      return (
-        <Link to="/organizations/$orgId" params={{ orgId: event.targetId }} className={className}>
-          {event.targetLabel}
-        </Link>
-      );
-    case "role":
-      return (
-        <Link to="/roles/$roleId" params={{ roleId: event.targetId }} className={className}>
-          {event.targetLabel}
-        </Link>
-      );
-    case "settings":
-      return (
-        <Link to="/settings" className={className}>
-          {event.targetLabel}
-        </Link>
-      );
-    default:
-      return <span className="text-ink">{event.targetLabel}</span>;
-  }
-}
+const COLUMNS = ["When", "Actor", "Kind", "Subject", "Detail"] as const;
 
 export function AuditListScreen() {
-  return (
-    <RequirePermission permission="audit.read" what="The audit record" title="Audit record">
-      <AuditBoard />
-    </RequirePermission>
-  );
+  return <AuditBoard />;
 }
 
 function AuditBoard() {
-  const { orgId, sweepKey } = useScope();
-
   const [list, setList] = useListState({
-    page: 1,
-    pageSize: DEFAULT_PAGE_SIZE,
-    sort: "at",
-    dir: "desc",
-    q: "",
-    action: "",
-    actorId: "",
-    from: "",
-    to: "",
+    actor: "",
+    kind: "",
+    subject: "",
+    since: "",
+    until: "",
+    limit: PAGE_SIZE,
+    // `before` is the keyset cursor: 0 means "the newest page". It lives in the URL so a page is
+    // shareable and a reload lands on the same rows.
+    before: 0,
   });
 
-  const q = typeof list.q === "string" ? list.q : "";
-  const sort = typeof list.sort === "string" ? list.sort : "at";
-  const dir: "asc" | "desc" = list.dir === "asc" ? "asc" : "desc";
-  const action = typeof list.action === "string" ? list.action : "";
-  const actorId = typeof list.actorId === "string" ? list.actorId : "";
-  const from = typeof list.from === "string" ? list.from : "";
-  const to = typeof list.to === "string" ? list.to : "";
+  const actor = typeof list.actor === "string" ? list.actor : "";
+  const kind = typeof list.kind === "string" ? list.kind : "";
+  const subject = typeof list.subject === "string" ? list.subject : "";
+  const since = typeof list.since === "string" ? list.since : "";
+  const until = typeof list.until === "string" ? list.until : "";
+  const limit = typeof list.limit === "number" && list.limit > 0 ? list.limit : PAGE_SIZE;
+  const before = typeof list.before === "number" && list.before > 0 ? list.before : 0;
 
-  const params: ListQuery = {
-    page: list.page,
-    pageSize: list.pageSize,
-    sort,
-    dir,
-    q: q || undefined,
-    action: action || undefined,
-    actorId: actorId || undefined,
-    from: from || undefined,
-    to: to || undefined,
-    orgId: orgId || undefined,
-  };
+  const filtersActive = Boolean(actor || kind || subject || since || until);
 
-  const events = useQuery({ queryKey: ["audit", params], queryFn: () => listAudit(params) });
-  const actions = useQuery({ queryKey: ["audit", "actions"], queryFn: () => auditActions() });
-  const actors = useQuery({
-    queryKey: ["users", { scope: orgId ?? "all", picker: "actors" }],
-    queryFn: () => fetchActors(orgId || undefined),
+  // `before` is part of the key so each cursor is its own cached page; the filters are part of it so
+  // a narrowed read never serves a page cached under a different question.
+  const page = useQuery({
+    queryKey: ["audit", { actor, kind, subject, since, until, limit, before }],
+    queryFn: () =>
+      listEvents({
+        actor: actor || undefined,
+        kind: kind || undefined,
+        subject: subject || undefined,
+        since: since ? toInstant(since, "start") : undefined,
+        until: until ? toInstant(until, "end") : undefined,
+        limit,
+        before: before || undefined,
+      }),
   });
 
-  const rows = events.data?.items ?? [];
-  const total = events.data?.total ?? 0;
-  const filtersActive = Boolean(q || action || actorId || from || to);
-  const actorName = actors.data?.find((user) => user.id === actorId)?.name;
+  const rows = page.data?.events ?? [];
+  const nextBefore = page.data?.next_before ?? 0;
 
-  const filterParts: string[] = [];
-  if (q) filterParts.push(`“${q}”`);
-  if (action) filterParts.push(`action ${action}`);
-  if (actorId) filterParts.push(`actor ${actorName ?? actorId}`);
-  if (from || to) filterParts.push(`${from || "the beginning"} to ${to || "now"}`);
-  const filterSummary = filterParts.join(" · ");
+  const setFilter = useCallback(
+    (patch: Record<string, string | number>) => {
+      // Any filter change restarts the walk: a cursor from a different filter's page would address
+      // the wrong rows. Clearing the cursor is the whole reason this is not a plain setList.
+      setList({ ...patch, before: 0 });
+    },
+    [setList],
+  );
 
-  const clearFilters = () => setList({ q: "", action: "", actorId: "", from: "", to: "" });
+  const clearFilters = () => setFilter({ actor: "", kind: "", subject: "", since: "", until: "" });
 
-  const onSort = (columnId: string) => {
-    setList(sort === columnId ? { dir: dir === "asc" ? "desc" : "asc" } : { sort: columnId, dir: "asc" });
-  };
+  const filterSummary = useMemo(() => {
+    const parts: string[] = [];
+    if (actor) parts.push(`actor ${actor}`);
+    if (kind) parts.push(`kind ${kind}`);
+    if (subject) parts.push(`subject starts ${subject}`);
+    if (since || until) parts.push(`${since || "the beginning"} to ${until || "now"}`);
+    return parts.join(" · ");
+  }, [actor, kind, subject, since, until]);
 
-  const columns: GridColumn<AuditEvent>[] = [
-    {
-      id: "at",
-      header: "When",
-      sortable: true,
-      hideable: false,
-      width: "10rem",
-      cell: (event) => (
-        <Link
-          to="/audit/$eventId"
-          params={{ eventId: event.id }}
-          className="inline-flex items-center gap-1 text-ink hover:underline"
-          title={`${dateTime(event.at)} — open this event`}
-        >
-          <time dateTime={event.at} className="num">
-            {relativeTime(event.at)}
-          </time>
-          <ArrowUpRight size={11} aria-hidden="true" className="text-ink-muted" />
-        </Link>
-      ),
-    },
-    {
-      id: "actor",
-      header: "Actor",
-      width: "14rem",
-      cell: (event) => (
-        <div className="flex min-w-0 flex-col">
-          <span className="truncate text-ink" title={event.actorName}>
-            {event.actorName}
-          </span>
-          <span className="truncate font-mono text-[0.6875rem] text-ink-muted" title={event.actorId}>
-            {event.actorId}
-          </span>
-        </div>
-      ),
-    },
-    {
-      id: "action",
-      header: "Action",
-      width: "15rem",
-      cell: (event) => <span className="font-mono text-ink">{event.action}</span>,
-    },
-    {
-      id: "target",
-      header: "Target",
-      cell: (event) => <TargetLink event={event} />,
-    },
-    {
-      id: "ip",
-      header: "IP address",
-      width: "9rem",
-      cell: (event) => (
-        <span className="font-mono text-[0.6875rem] text-ink" title={event.ip}>
-          {event.ip}
-        </span>
-      ),
-    },
-  ];
+  const header = (
+    <PageHeader
+      title="Audit record"
+      description="Everything the app did, recorded once. This log is append-only: no event can be edited or removed."
+      crumbs={[{ label: "Board", to: "/" }, { label: "Audit record" }]}
+    />
+  );
 
   return (
     <>
-      <PageHeader
-        title="Audit record"
-        count={`${number(total)} ${total === 1 ? "event" : "events"}`}
-        description="Every state-changing action, recorded once. This record is append-only: no event can be edited or removed."
-        crumbs={[{ label: "Board", to: "/" }, { label: "Audit record" }]}
-      />
+      {header}
 
       <Toolbar>
-        <GridSearch
-          value={q}
-          onChange={(value) => setList({ q: value })}
-          placeholder="Search actor, action or target"
-        />
-        <div className="w-52">
-          <SelectInput
-            label="Action"
-            value={action}
-            onChange={(event) => setList({ action: event.target.value })}
-            options={[
-              { value: "", label: "Any action" },
-              ...(actions.data ?? []).map((value) => ({ value, label: value })),
-            ]}
-          />
-        </div>
-        <div className="w-56">
-          <SelectInput
+        <div className="w-44">
+          <TextInput
             label="Actor"
-            value={actorId}
-            onChange={(event) => setList({ actorId: event.target.value })}
-            options={[
-              { value: "", label: "Any actor" },
-              ...(actors.data ?? []).map((user) => ({ value: user.id, label: user.name })),
-            ]}
+            placeholder="who did it"
+            value={actor}
+            onChange={(event) => setFilter({ actor: event.target.value })}
+          />
+        </div>
+        <div className="w-44">
+          <TextInput
+            label="Kind"
+            placeholder="housekeeping.remove"
+            value={kind}
+            onChange={(event) => setFilter({ kind: event.target.value })}
+          />
+        </div>
+        <div className="w-44">
+          <TextInput
+            label="Subject"
+            placeholder="fleet-console or #157"
+            value={subject}
+            onChange={(event) => setFilter({ subject: event.target.value })}
           />
         </div>
         <div className="w-40">
-          <TextInput label="From" type="date" value={from} onChange={(event) => setList({ from: event.target.value })} />
+          <TextInput
+            label="Since"
+            type="date"
+            value={since}
+            onChange={(event) => setFilter({ since: event.target.value })}
+          />
         </div>
         <div className="w-40">
-          <TextInput label="To" type="date" value={to} onChange={(event) => setList({ to: event.target.value })} />
+          <TextInput
+            label="Until"
+            type="date"
+            value={until}
+            onChange={(event) => setFilter({ until: event.target.value })}
+          />
         </div>
         {filtersActive ? (
-          <Button variant="quiet" size="sm" icon={<X size={12} aria-hidden="true" />} onClick={clearFilters}>
+          <Button variant="quiet" size="sm" onClick={clearFilters}>
             Clear filters
           </Button>
         ) : null}
       </Toolbar>
 
-      <DataGrid
-        rows={rows}
-        columns={columns}
-        rowKey={(event) => event.id}
-        caption="Audit events, newest first"
-        total={total}
-        page={events.data?.page ?? list.page}
-        pageSize={events.data?.pageSize ?? list.pageSize}
-        sort={sort}
-        dir={dir}
-        onSort={onSort}
-        onPage={(page) => setList({ page })}
-        onPageSize={(pageSize) => setList({ pageSize })}
-        isLoading={events.isLoading}
-        error={events.error}
-        onRetry={() => void events.refetch()}
-        emptyTitle="No events recorded yet"
-        emptyBody="The audit record is append-only and starts empty on a fresh board. Every state-changing action appears here, unchanged, as soon as it happens."
-        noMatchesQuery={filtersActive ? filterSummary || "these filters" : undefined}
-        onClearFilters={clearFilters}
-        sweepKey={sweepKey}
-      />
+      <div className="flex min-w-0 flex-col">
+        {page.isLoading ? (
+          <LoadingRows rows={Math.min(limit, 8)} />
+        ) : page.error ? (
+          // A failed read is its own state: the store could not be read, which is not the same
+          // answer as "there are no events". Rendering an empty table here would hide a broken log.
+          <ErrorState
+            title="The audit log could not be read"
+            error={page.error}
+            onRetry={() => void page.refetch()}
+          />
+        ) : rows.length === 0 ? (
+          filtersActive ? (
+            <NoMatchesState query={filterSummary} onClear={clearFilters} />
+          ) : (
+            <EmptyState
+              title="No events recorded yet"
+              body="The event log is append-only and starts empty on a fresh instance. Every action the app takes appears here, unchanged, as soon as it happens."
+            />
+          )
+        ) : (
+          <AuditTable rows={rows} />
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 border-t border-rule px-3 py-1.5">
+          <p className="text-[0.6875rem] text-ink-muted">
+            {page.isLoading
+              ? "Reading the log"
+              : page.error
+                ? "The log did not load"
+                : rows.length === 0
+                  ? "No events on this page"
+                  : `${rows.length} ${rows.length === 1 ? "event" : "events"} on this page`}
+          </p>
+          <div className="ml-auto flex items-center gap-1">
+            <IconButton
+              label="Newest page"
+              disabled={before === 0}
+              onClick={() => setList({ before: 0 })}
+              className="border border-rule-strong"
+            >
+              <ChevronLeft size={14} />
+            </IconButton>
+            <IconButton
+              label="Older page"
+              // An empty cursor is the last page: the server returned fewer rows than the limit and
+              // there is nothing further back to ask for.
+              disabled={nextBefore === 0}
+              onClick={() => setList({ before: nextBefore })}
+              className="border border-rule-strong"
+            >
+              <ChevronRight size={14} />
+            </IconButton>
+          </div>
+        </div>
+      </div>
     </>
   );
+}
+
+/** The rows, newest first. The table is hand-rolled rather than `DataGrid` because the grid pages by
+ *  offset and design D1 rejects that for an append-only ledger: the server pages by keyset, so the
+ *  pager is two cursor buttons and there is no total to print. */
+function AuditTable({ rows }: { rows: AuditEvent[] }) {
+  return (
+    <div className="min-w-0 overflow-x-auto">
+      <table className="w-full min-w-[46rem] border-collapse text-left">
+        <caption className="sr-only">Audit events, newest first</caption>
+        <thead>
+          <tr className="border-b border-rule-strong">
+            {COLUMNS.map((column) => (
+              <th
+                key={column}
+                scope="col"
+                className="px-3 py-1.5 text-[0.6875rem] font-semibold tracking-[0.02em] text-ink-muted uppercase"
+              >
+                {column}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((event) => (
+            <tr key={event.id} className="border-b border-rule last:border-b-0 hover:bg-hover">
+              <td className="px-3 py-[var(--density-row-pad-y)] text-body align-middle">
+                <Link
+                  to="/audit/$eventId"
+                  params={{ eventId: String(event.id) }}
+                  className="text-ink underline decoration-rule-strong hover:decoration-ink"
+                  title={`${dateTime(event.at)} — open this event`}
+                >
+                  <time dateTime={event.at} className="num">
+                    {relativeTime(event.at)}
+                  </time>
+                </Link>
+              </td>
+              <td className="px-3 py-[var(--density-row-pad-y)] text-body text-ink align-middle font-mono text-[0.6875rem]">
+                {event.actor}
+              </td>
+              <td className="px-3 py-[var(--density-row-pad-y)] text-body text-ink align-middle font-mono">
+                {event.kind}
+              </td>
+              <td className="px-3 py-[var(--density-row-pad-y)] text-body text-ink align-middle">{event.subject}</td>
+              <td className="px-3 py-[var(--density-row-pad-y)] text-body text-ink align-middle">
+                <span className="line-clamp-2" title={event.detail}>
+                  {orDash(event.detail)}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** The date input gives a bare `YYYY-MM-DD`; the server's closed set wants an RFC3339 instant. A
+ *  bare date is read as the whole day, so `until` must reach the day's last instant. `at` is written
+ *  RFC3339Nano, so `T23:59:59Z` stops a full second short and silently hides events in the
+ *  sub-second tail between .000000001 and .999999999. Nine fractional digits is the most RFC3339Nano
+ *  can express, so that is the day's last instant. */
+function toInstant(date: string, edge: "start" | "end"): string {
+  return edge === "start" ? `${date}T00:00:00Z` : `${date}T23:59:59.999999999Z`;
 }
