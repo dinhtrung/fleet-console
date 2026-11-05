@@ -190,10 +190,10 @@ func keySpan(data []byte, root *yaml.Node, key string) (span, bool, bool) {
 // any trailing inline comment outside the range. A non-scalar value has no
 // replaceable span: replacing a block wholesale would destroy its comments.
 //
-// The third return reports whether the operator wrote the value in double
-// quotes. An edit preserves that style, because rewriting `"30s"` as `30s`
-// changes bytes nobody asked to change — and a re-save would then report a
-// change that never happened.
+// The second return reports whether the operator wrote the value in double
+// quotes and the third whether a replaceable span was found. An edit preserves
+// the quote style, because rewriting `"30s"` as `30s` changes bytes nobody asked
+// to change — and a re-save would then report a change that never happened.
 func valueSpan(data []byte, value *yaml.Node) (span, bool, bool) {
 	if value.Kind != yaml.ScalarNode || value.Line <= 0 || value.Column <= 0 {
 		return span{}, false, false
@@ -223,7 +223,7 @@ func valueSpan(data []byte, value *yaml.Node) (span, bool, bool) {
 	for end > start && (data[end-1] == ' ' || data[end-1] == '\t') {
 		end--
 	}
-	return span{start: start, end: end}, true, false
+	return span{start: start, end: end}, false, true
 }
 
 // encodeValue renders one YAML value. A boolean key renders as a bare bool, so a

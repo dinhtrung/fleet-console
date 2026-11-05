@@ -255,3 +255,69 @@ rig_lifecycle:
 		}
 	}
 }
+
+// An UNQUOTED scalar is the case the first version of this splice got wrong: its
+// valueSpan reported "not found" for it, so spliceSettings appended a duplicate
+// key instead of replacing in place, and the loader refused the merged document
+// with "mapping key tick_interval already defined". Every value in the main
+// fixture is quoted, which is why the suite missed it. This fixture is unquoted
+// end to end, the way a hand-written config usually is.
+func TestUpdateSettingsReplacesUnquotedScalarsInPlace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	fixture := `# A hand-written file with no quotes anywhere.
+listen: 127.0.0.1:8787
+database: fleet-console.db
+tick_interval: 15s
+act: false
+rig_lifecycle:
+  enabled: true
+  idle_after: 10m
+  idle_poll_max: 10m
+`
+	if err := os.WriteFile(path, []byte(fixture), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	hash := sha256.Sum256([]byte(fixture))
+
+	outcome, err := UpdateSettings(path, map[string]string{
+		"tick_interval":            "30s",
+		"rig_lifecycle.idle_after": "20m",
+	}, &hash)
+	if err != nil {
+		t.Fatalf("update refused an unquoted file: %v", err)
+	}
+	if outcome != OutcomeCreated {
+		t.Fatalf("outcome = %q, want Created", outcome)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	text := string(got)
+
+	// The duplicate key is the bug: the loader's own complaint names it.
+	if strings.Count(text, "tick_interval:") != 1 {
+		t.Fatalf("tick_interval appears %d times; the splice appended instead of replacing:\n%s",
+			strings.Count(text, "tick_interval:"), text)
+	}
+	if !strings.Contains(text, "tick_interval: 30s") {
+		t.Errorf("the value was not replaced:\n%s", text)
+	}
+	if !strings.Contains(text, "idle_after: 20m") {
+		t.Errorf("the nested unquoted value was not replaced:\n%s", text)
+	}
+	// An unquoted file stays unquoted: the splice must not add quotes.
+	if strings.Contains(text, `"30s"`) || strings.Contains(text, `"20m"`) {
+		t.Errorf("the splice introduced quotes into an unquoted file:\n%s", text)
+	}
+	if !strings.Contains(text, "# A hand-written file with no quotes anywhere.") {
+		t.Errorf("the header comment was lost:\n%s", text)
+	}
+	if !strings.Contains(text, "act: false") {
+		t.Errorf("an untouched bool changed:\n%s", text)
+	}
+	if err := config.ValidateContent(got, dir, ""); err != nil {
+		t.Fatalf("merged document does not load:\n%s\n%v", text, err)
+	}
+}
