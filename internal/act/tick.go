@@ -246,6 +246,14 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d has a live row", intent.Item))
 			continue
 		}
+		// A change request on this item is already work in flight. decide's
+		// branch_open_cr only sees a CR whose branch name encodes the number, so a
+		// CR on a differently named branch reaches here and must not be dispatched
+		// twice; it also counts in Result.Ready, which can start the rig.
+		if changeRequestFor(in.CRs, intent.Item) != nil {
+			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d already has a change request", intent.Item))
+			continue
+		}
 		result, err := actions.Dispatch(ctx, DispatchInput{
 			ProjectID: in.Project.ID, ProjectKey: in.Project.Key, Item: *item,
 			Seat: intent.Seat, WorktreeRoot: in.WorktreeRoot,
