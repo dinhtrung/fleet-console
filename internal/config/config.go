@@ -68,15 +68,19 @@ type Project struct {
 
 // File is the YAML shape. KnownFields rejects anything else.
 type File struct {
-	Listen         string   `yaml:"listen"`
-	Database       string   `yaml:"database"`
-	Token          string   `yaml:"token"`
-	TokenFile      string   `yaml:"token_file"`
-	RigBinary      string   `yaml:"rig_binary"`
-	GhBinary       string   `yaml:"gh_binary"`
-	GlabBinary     string   `yaml:"glab_binary"`
-	TickInterval   Duration `yaml:"tick_interval"`
-	NotifyInterval Duration `yaml:"notify_interval"`
+	Listen    string `yaml:"listen"`
+	Database  string `yaml:"database"`
+	Token     string `yaml:"token"`
+	TokenFile string `yaml:"token_file"`
+	// WebhookSecretFile is the HMAC secret the forge delivery route verifies
+	// against. A file next to the token, never inline: config files get copied
+	// into tickets (design D3). Empty means the route is not registered.
+	WebhookSecretFile string   `yaml:"webhook_secret_file"`
+	RigBinary         string   `yaml:"rig_binary"`
+	GhBinary          string   `yaml:"gh_binary"`
+	GlabBinary        string   `yaml:"glab_binary"`
+	TickInterval      Duration `yaml:"tick_interval"`
+	NotifyInterval    Duration `yaml:"notify_interval"`
 	// HousekeepingInterval is the reclaim sweep's cadence. Zero means off, the
 	// default: a box that never opted in must not start deleting worktrees.
 	HousekeepingInterval Duration       `yaml:"housekeeping_interval"`
@@ -129,6 +133,10 @@ func EditableKey(key string) (bool, string) {
 	switch key {
 	case "listen", "database", "token", "token_file", "rig_binary", "gh_binary", "glab_binary":
 		return false, fmt.Sprintf("%s needs the operator's hand: the running process reads it once at boot", key)
+	case "webhook_secret_file":
+		// The secret is read once at boot and lives in memory; the settings screen must
+		// not write a credential, and a running process would keep the old one anyway.
+		return false, "webhook_secret_file is read once at boot and names a credential; edit it in the file"
 	case "decision_notes", "decision_answerers":
 		return false, fmt.Sprintf("%s is read once when the notifier is built at boot; edit it in the file", key)
 	case "project_timeout":
@@ -226,15 +234,18 @@ type Options struct {
 
 // Effective is the resolved configuration and where each value came from.
 type Effective struct {
-	Listen         string
-	Database       string
-	Token          string
-	TokenFile      string
-	RigBinary      string
-	GhBinary       string
-	GlabBinary     string
-	TickInterval   time.Duration
-	NotifyInterval time.Duration // digest cadence; 0 means off
+	Listen    string
+	Database  string
+	Token     string
+	TokenFile string
+	// WebhookSecret is read at boot and held in memory; empty disables the route.
+	WebhookSecretFile string
+	WebhookSecret     string
+	RigBinary         string
+	GhBinary          string
+	GlabBinary        string
+	TickInterval      time.Duration
+	NotifyInterval    time.Duration // digest cadence; 0 means off
 	// HousekeepingInterval is the reclaim sweep's cadence; 0 means off.
 	HousekeepingInterval time.Duration
 	ProjectTimeout       Timeouts
@@ -479,6 +490,20 @@ func Load(opts Options) (*Effective, error) {
 	default:
 		eff.Sources["token"] = "none"
 	}
+	// The webhook secret follows the token's rules: a path resolved once at boot,
+	// the value read into memory, and "none" when unset so an upgraded box gains
+	// no public route until the operator asks for one (design D3).
+	if file.WebhookSecretFile != "" {
+		eff.WebhookSecretFile = resolve(dir, file.WebhookSecretFile, home)
+		eff.Sources["webhook_secret_file"] = "file"
+		secret, err := readSecretFile(eff.WebhookSecretFile, "webhook_secret_file")
+		if err != nil {
+			return nil, err
+		}
+		eff.WebhookSecret = secret
+	} else {
+		eff.Sources["webhook_secret_file"] = "none"
+	}
 	if err := validateProjects(&file, dir, home); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
@@ -546,39 +571,51 @@ func resolveBinary(dir, value, home string) string {
 }
 
 func readTokenFile(path string) (string, error) {
+	return readSecretFile(path, "token_file")
+}
+
+// readSecretFile reads one credential from a 0600 file. Both the bearer token and
+// the webhook secret follow the same rules, so a mistake in one is a mistake in
+// both: a readable-by-others file is refused rather than used, because a config
+// error that silently weakens a credential is worse than a refusal at boot.
+func readSecretFile(path, key string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", fmt.Errorf("config: token_file %s: %w", path, err)
+		return "", fmt.Errorf("config: %s %s: %w", key, path, err)
 	}
 	mode := info.Mode().Perm()
 	if mode != 0o600 {
-		return "", fmt.Errorf("config: token_file %s has mode %04o; must be 0600", path, mode)
+		return "", fmt.Errorf("config: %s %s has mode %04o; must be 0600", key, path, mode)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("config: token_file %s: %w", path, err)
+		return "", fmt.Errorf("config: %s %s: %w", key, path, err)
 	}
-	token := strings.TrimSpace(string(data))
-	if token == "" {
-		return "", fmt.Errorf("config: token_file %s is empty", path)
+	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return "", fmt.Errorf("config: %s %s is empty", key, path)
 	}
-	return token, nil
+	return value, nil
 }
 
 // Print renders the effective configuration as YAML without the token value and
 // with the source of every value.
 func (e *Effective) Print() ([]byte, error) {
 	type view struct {
-		Config     string `yaml:"config"`
-		Listen     string `yaml:"listen"`
-		Database   string `yaml:"database"`
-		Token      string `yaml:"token,omitempty"`
-		TokenFile  string `yaml:"token_file,omitempty"`
-		RigBinary  string `yaml:"rig_binary"`
-		GhBinary   string `yaml:"gh_binary"`
-		GlabBinary string `yaml:"glab_binary"`
-		Tick       string `yaml:"tick_interval"`
-		Notify     string `yaml:"notify_interval"`
+		Config    string `yaml:"config"`
+		Listen    string `yaml:"listen"`
+		Database  string `yaml:"database"`
+		Token     string `yaml:"token,omitempty"`
+		TokenFile string `yaml:"token_file,omitempty"`
+		// WebhookSecret is redacted like the token: the key and its source are named,
+		// the value never is (design D3).
+		WebhookSecret     string `yaml:"webhook_secret,omitempty"`
+		WebhookSecretFile string `yaml:"webhook_secret_file,omitempty"`
+		RigBinary         string `yaml:"rig_binary"`
+		GhBinary          string `yaml:"gh_binary"`
+		GlabBinary        string `yaml:"glab_binary"`
+		Tick              string `yaml:"tick_interval"`
+		Notify            string `yaml:"notify_interval"`
 		// Housekeeping is the reclaim sweep's cadence; "0s" is off.
 		Housekeeping string `yaml:"housekeeping_interval"`
 		Timeout      struct {
@@ -620,6 +657,12 @@ func (e *Effective) Print() ([]byte, error) {
 	if e.Token != "" {
 		out.Token = "<redacted>"
 	}
+	// The webhook secret is redacted on the same rule as the token: the operator
+	// sees that one is configured and where it came from, never its value.
+	if e.WebhookSecret != "" {
+		out.WebhookSecret = "<redacted>"
+	}
+	out.WebhookSecretFile = e.WebhookSecretFile
 	return yaml.Marshal(out)
 }
 

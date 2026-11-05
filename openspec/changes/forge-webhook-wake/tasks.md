@@ -22,13 +22,13 @@
 
 ## 2. The route (builder 1, blocked by 1)
 
-- [ ] 2.1 `internal/config`: `webhook_secret_file`, resolved like `token_file`, redacted in `--print-config`,
+- [x] 2.1 `internal/config`: `webhook_secret_file`, resolved like `token_file`, redacted in `--print-config`,
       absent by default.
-- [ ] 2.2 `internal/web`: `POST /api/hooks/forge` registered **outside** the bearer group, with a 1 MB body limit,
+- [x] 2.2 `internal/web`: `POST /api/hooks/forge` registered **outside** the bearer group, with a 1 MB body limit,
       raw-body read, HMAC-SHA256 compare in constant time, 202/401/413, one log line per accepted delivery. Absent
       secret ⇒ 404 without reading the body.
       Evidence: handler tests for 202 (and that the waker was called once), 401 (missing and wrong), 413, 404 when
       unconfigured, and `--print-config` redaction.
-- [ ] 2.3 `cmd/fleet-console/main.go`: construct the `Waker`, pass it to both the loop and `web.Config`.
-- [ ] 2.4 `docs/`: one page — payload URL, content type `application/json`, secret, events `issues`,
+- [x] 2.3 `cmd/fleet-console/main.go`: construct the `Waker`, pass it to both the loop and `web.Config`.
+- [x] 2.4 `docs/`: one page — payload URL, content type `application/json`, secret, events `issues`,
       `pull_request`, `issue_comment`, and the tunnel requirement. No screenshot.

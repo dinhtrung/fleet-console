@@ -187,6 +187,42 @@ event with the counts (`removed`, each keep reason, `failed`), even when it remo
 found nothing" and "the sweep never ran" must be distinguishable. Read them from the board's `/audit` screen or
 `GET /api/events?kind=housekeeping.remove`.
 
+### Waking the loop from the forge instead of waiting for the timer
+
+The loop polls. A forge delivery can end a long idle wait early: `POST /api/hooks/forge` verifies the delivery's
+signature and asks the loop to tick now, so a new issue is picked up in seconds instead of at the next poll.
+
+It is **off until configured**, and it changes no row — it only shortens the wait. Set a secret in the config file:
+
+```yaml
+webhook_secret_file: /etc/fleet-console/hook-secret   # mode 0600, one line, same rules as token_file
+```
+
+Then point the forge's webhook at the board. It must be reachable from the internet, which on a laptop means a
+tunnel in front of the listen address; the board itself stays bound to loopback.
+
+| Setting | Value |
+|---|---|
+| Payload URL | `https://<your-tunnel-host>/api/hooks/forge` |
+| Content type | `application/json` |
+| Secret | the same value as in `hook-secret` |
+| Events | `issues`, `pull_request`, `issue_comment` |
+
+The route is registered on the app itself, **not** behind the board's bearer token: a forge cannot present the
+board's token, so the HMAC over the raw body is the whole credential. A delivery with no signature, a malformed
+one, or one computed with a different secret is refused `401` and sends no wake. A body over 1 MiB is refused
+`413` before the HMAC runs. With no secret configured the route answers `404` and reads no body, so upgrading the
+board gains no public route until the operator asks for one.
+
+A verified delivery answers `202` with `{"woke": true}`. When a wake is already pending the loop coalesces it and
+the answer is `{"woke": false}` — the tick it would have caused is already about to run. Either way the delivery is
+accepted; a forge should treat both as success. Replays are harmless for the same reason: the second delivery
+coalesces into the first, and the tick it triggers is an ordinary tick that writes nothing the same tick would not
+have written on its own. The secret never appears in `--print-config` or in any response.
+
+The one line each accepted delivery writes names the repository, the action and the issue number — never the
+payload. The body is the forge's data, and the board's log is a file with wider access than the forge.
+
 ---
 
 ## 4. Rebuilding this on a new box
