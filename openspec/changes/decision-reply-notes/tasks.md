@@ -41,5 +41,5 @@
 
 ## 3. Docs (builder 3, after 1 and 2)
 
-- [ ] 3.1 `PRODUCT.md` + `docs/my-stack.md`: the reply line, where it goes, who may answer, what wins against the
+- [x] 3.1 `PRODUCT.md` + `docs/my-stack.md`: the reply line, where it goes, who may answer, what wins against the
       board, and the two audit kinds. One operator paragraph, no restatement of the requirements.

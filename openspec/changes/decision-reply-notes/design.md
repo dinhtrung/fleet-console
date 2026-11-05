@@ -59,8 +59,9 @@ next tick. The escalation is unaffected: the phone message goes out even when th
 Three cases, three behaviours:
 
 - **No prefix, wrong author, or a comment older than the question** — not a reply. Silence: it is conversation.
-- **Prefix, but the decision is not open / already answered** — one note saying so, once per comment id
-  (`decision.reply_ignored`).
+- **Prefix, but the decision is not open / already answered** — recorded as `decision.reply_ignored`, once per
+  comment id, and **no note is posted**: the row is terminal and a comment on a public item saying "you replied too
+  late" is noise. `replyreader_test.go` pins this ("closing notes = 0, want none on a terminal row").
 - **Prefix, but the answer is ambiguous** (two open decisions on the item and no id named) — one note listing the
   open ids, once per comment id.
 
