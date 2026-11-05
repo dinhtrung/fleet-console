@@ -183,6 +183,7 @@ func readReplies(
 	projectRead mirror.ProjectResult,
 	eff *config.Effective,
 	projectKey string,
+	forgeProject string,
 ) {
 	notes := make([]decisions.Note, 0, len(projectRead.Rows))
 	for _, row := range projectRead.Rows {
@@ -219,7 +220,7 @@ func readReplies(
 			fmt.Fprintf(os.Stderr, "decision-reply: "+format+"\n", args...)
 		},
 	}
-	for _, outcome := range reader.Read(ctx, notes, eff.DecisionAnswerers) {
+	for _, outcome := range reader.Read(ctx, notes, decisionAnswerers(eff, forgeProject)) {
 		switch {
 		case outcome.Resolved:
 			fmt.Fprintf(os.Stderr, "decision-reply: %s answered by %s\n", outcome.DecisionID, outcome.CommentID)
@@ -229,6 +230,25 @@ func readReplies(
 			fmt.Fprintf(os.Stderr, "decision-reply: %s skipped: %s\n", outcome.DecisionID, outcome.Reason)
 		}
 	}
+}
+
+// decisionAnswerers resolves the author allowlist for one project. An empty configured list means
+// the repository owner (design D4), which is who the escalations go to — "empty means the owner, not
+// nobody", as the config's own comment says. Passing the raw empty list through would leave a fresh
+// install with no login able to answer, which the spec's default-author-rule scenario forbids.
+func decisionAnswerers(eff *config.Effective, forgeProject string) []string {
+	if eff != nil && len(eff.DecisionAnswerers) > 0 {
+		return eff.DecisionAnswerers
+	}
+	slug := strings.TrimSpace(forgeProject)
+	if at := strings.Index(slug, "/"); at > 0 {
+		if owner := strings.TrimSpace(slug[:at]); owner != "" {
+			return []string{owner}
+		}
+	}
+	// A slug with no owner part leaves nothing to default to. Returning nil keeps the raw behaviour
+	// rather than inventing a login, and the caller logs nothing because there is no author to blame.
+	return nil
 }
 
 // decisionLedger bridges the store's event row to the decisions package's narrow shape. The two
@@ -830,7 +850,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 				// the next tick and resolved through the same call the board uses.
 				// A failure here is one log line and never fails the tick.
 				if eff.DecisionNotes {
-					readReplies(ctx, db, source.Forge, rig.NewAdapter(rigRunner), projectRead, eff, projectKey)
+					readReplies(ctx, db, source.Forge, rig.NewAdapter(rigRunner), projectRead, eff, projectKey, project.ForgeProject)
 				}
 				fmt.Fprintf(stderr, "act: %s dispatches=%d verdicts=%d merges=%d skipped=%d\n",
 					project.Key, len(report.Dispatches), len(report.Verdicts), len(report.Merges), len(report.Skipped))
