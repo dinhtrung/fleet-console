@@ -130,6 +130,51 @@ The dispatcher must detect (3) itself — a log line, a note on the item, and th
 because it is the failure nobody notices. It is also why an app that manages fleets needs **decisions as records**,
 not notifications: see `docs/fleet-console.md`.
 
+#### The rig's own lifecycle, and the poll's cadence
+
+Telling those three apart is a *reading*. The app also acts on the fourth thing an idle fleet costs: a rig with no
+work still holds seats. So the control plane starts a project's rig when work arrives and stops it once the quiet
+window has elapsed — `rig_lifecycle.enabled`, false by default so an upgraded box keeps today's behaviour.
+
+```yaml
+rig_lifecycle:
+  enabled: true          # false: the app never starts or stops a rig
+  idle_after: 10m        # how long a rig may sit with no work before it is stopped
+  idle_poll_max: 10m     # the poll's ceiling while idle; refused when below tick_interval
+projects:
+  - key: thuocla-tracker
+    lifecycle: off       # this project's rig stays warm; absent means "follow enabled"
+```
+
+Two properties make this safe to leave running. A rig is stopped only when nothing it owns needs a seat: no row in a
+state that means work or waiting — and **a row blocked on a person does not hold the rig open**, because that rig
+would idle for as long as the operator takes. A rig is started before its dispatch intent is written, so a row never
+points at a seat that does not exist yet. Every start and stop writes one log line naming the rig, the action and the
+reason, plus one `rig.started` or `rig.stopped` audit event; neither sends a phone message, because housekeeping is
+neither work nor a decision. A failed `rig up` or `rig down` names the command and its error and records no success.
+
+The poll backs off while the fleet is idle. `tick_interval` is the busy cadence and `idle_poll_max` the ceiling: each
+quiet tick doubles the wait up to the ceiling, and the first busy tick returns it to `tick_interval`. The **latency
+trade is the whole point** — a 10m ceiling means work that arrives just after a poll waits up to ten minutes to be
+seen. Set `idle_poll_max` to what you are willing to wait, not to the longest you can tolerate. Each change of the
+wait writes one log line, so a slow poll is distinguishable from a hung loop, and an unchanged wait writes nothing.
+
+The exact lines to grep for:
+
+```
+rig-lifecycle: <rig> started — <reason>
+rig-lifecycle: <rig> stopped — quiet <duration>
+act-skip: <rig>: <command> failed: <error>          # a launch failed; its work is skipped this tick
+mirror: cadence <wait> (quiet <n>)                  # the wait doubled
+mirror: cadence <wait> reset: <the busy fact>       # the wait returned to tick_interval
+```
+
+So `journalctl --user -u fleet-console | grep 'rig-lifecycle:'` reads the lifecycle's whole history, and
+`grep 'mirror: cadence'` reads the poll's. A broken forge read is *not* idleness — the wait stays at
+`tick_interval` while the read is failing, because a rig that cannot see its work is not a rig without work.
+
+The requirements live in `openspec/changes/rig-lifecycle/`; this section is orientation, not the contract.
+
 ### Incidents worth designing against
 
 | Symptom | Cause | Handling |
@@ -188,6 +233,23 @@ Verify with §2's table, then one real task end-to-end. A green install with no 
 | kill switch | `systemctl --user stop fleet-console && systemctl --user disable fleet-console` |
 | dry run | `fleet-console --tick` — mirror + decide only; no forge, rig or git write |
 | old timer | `gh-autodispatch.service` — stop and disable it before enabling the act loop |
+
+### Turning the rig lifecycle off, and keeping one project warm
+
+Two switches, at different scopes. To stop the app managing rigs at all, set `rig_lifecycle.enabled: false` — or delete
+the block, which is the same thing and the default. To keep one project's rig up while the rest come and go, leave the
+block enabled and give that project `lifecycle: off`; its rig then never starts or stops on its own. `--print-config`
+shows the block and each project's effective value with the source it came from, so a project whose setting you cannot
+explain is one command away from an answer.
+
+Both are file edits. The running process reads the block once at boot, so after changing it:
+
+```bash
+systemctl --user restart fleet-console
+```
+
+A restart is safe: the board is a database and the mirror rebuilds from the forge on the next tick. Changing it while
+the app is running does nothing, which is worth knowing before you conclude the setting has no effect.
 
 ## 5. What is deliberately absent
 
