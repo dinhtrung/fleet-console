@@ -69,16 +69,16 @@
 
 ## 4. The cadence (builder 2, blocked by 1.1)
 
-- [ ] 4.1 `internal/mirror`: `Cadence{Base, Max}` with `Next(quiet bool) time.Duration` — double on quiet, cap at
+- [x] 4.1 `internal/mirror`: `Cadence{Base, Max}` with `Next(quiet bool) time.Duration` — double on quiet, cap at
       `Max`, reset to `Base` on busy — and a `Streak() int` for the log line. Pure arithmetic, no timers.
       Evidence: a table test for the doubling sequence, the cap, and the reset.
-- [ ] 4.2 `mirror.Loop` takes the cadence instead of a bare interval and calls `onTick` for a verdict:
+- [x] 4.2 `mirror.Loop` takes the cadence instead of a bare interval and calls `onTick` for a verdict:
       `onTick func(TickResult) bool` returning busy. Keep the existing jitter, capped at the wait it is added to.
       `cmd/fleet-console/main.go` returns busy from the read it already has: an open item, an open change request, a
       non-terminal row, or a stale/failed read in **any** project.
       Evidence: a loop test with a stub `onTick` and an injected wait recorder asserting the sequence of waits and
       that the busy verdict resets it.
-- [ ] 4.3 Log `mirror: cadence <wait> (quiet N)` on each change only, and
+- [x] 4.3 Log `mirror: cadence <wait> (quiet N)` on each change only, and
       `mirror: cadence <wait> reset: <the fact>` on a reset. No line when the wait does not change.
       Evidence: the log lines from a test, quoted.
 

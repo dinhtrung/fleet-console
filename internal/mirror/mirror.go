@@ -58,6 +58,11 @@ type Mirror struct {
 	Now            func() time.Time
 	ProjectTimeout TimeoutSettings
 	Logf           func(format string, args ...any)
+	// OnWait, when set, records each wait the loop is about to sleep. A test
+	// seam: production leaves it nil and the loop just sleeps. It runs before
+	// the timer starts, so a recorder that cancels the context stops the loop
+	// without the test waiting out a real interval.
+	OnWait func(time.Duration)
 }
 
 // TimeoutSettings scales one project's read deadline with its item count. The
@@ -456,29 +461,89 @@ type verdictFields = decide.VerdictState
 // Loop ticks immediately and then on a jittered interval until ctx is done. A
 // source error or a failed tick is retried on the next interval; it never stops the
 // loop.
-func (m *Mirror) Loop(ctx context.Context, sources func(context.Context) ([]Project, error), interval, jitter time.Duration, onTick func(TickResult)) {
+//
+// The wait comes from the cadence: the caller's onTick verdict says whether the
+// tick ended quiet (the wait doubles, capped at the cadence's Max) or busy (the
+// wait returns to Base). A tick that could not read at all counts as busy, so a
+// broken source is retried at the normal rate instead of the backed-off one.
+// jitter is added to the chosen wait and never exceeds it, so a jittered wait
+// cannot jump past the ceiling the operator set.
+//
+// onTick may be nil, which leaves every tick quiet. The cadence may be zero,
+// which makes every wait Base — the pre-cadence behaviour, still the default for
+// a box that never writes the rig_lifecycle block.
+func (m *Mirror) Loop(ctx context.Context, sources func(context.Context) ([]Project, error), cadence Cadence, jitter time.Duration, onTick func(TickResult) bool) {
 	seen := make(map[string]string)
+	// quiet and reason describe the tick that just ran: whether it found nothing
+	// anywhere, and when it did find something, the fact that ended the stretch.
+	var quiet bool
+	var reason string
 	tick := func() {
+		quiet, reason = true, ""
 		projects, err := sources(ctx)
 		if err != nil {
 			m.note(seen, "sources", err)
+			quiet, reason = false, "sources: "+err.Error()
 			return
 		}
 		result, err := m.Tick(ctx, projects)
 		if err != nil {
 			m.note(seen, "tick", err)
+			quiet, reason = false, "tick: "+err.Error()
 			return
 		}
 		m.noteProjects(seen, result)
-		if onTick != nil {
-			onTick(result)
+		if onTick == nil {
+			return
 		}
+		if !onTick(result) {
+			return
+		}
+		// Busy. Name the fact from the same read, so the reset line says why the
+		// poll went back to the normal rate instead of only that it did.
+		quiet = false
+		_, reason = Busy(result)
+		if reason == "" {
+			reason = "the caller reported busy"
+		}
+	}
+	// prev starts at the base so the first tick, which also returns the base,
+	// logs nothing: a wait that did not change is not news.
+	prev := cadence.Base
+	next := func() time.Duration {
+		// chosen is the cadence's own number, before jitter. The comparison and
+		// the log line both use it, because jitter changes every wait: comparing
+		// the jittered value would log a line on every quiet tick at the ceiling,
+		// which is exactly the noise task 4.3 forbids.
+		chosen := cadence.Next(quiet)
+		if chosen != prev {
+			// One line per change, and only a change: an operator reads this to
+			// tell a deliberately slow poll from a hung loop, so a repeated wait
+			// would bury the two lines that matter.
+			if cadence.Streak() > 0 {
+				m.logf("cadence %s (quiet %d)", chosen, cadence.Streak())
+			} else {
+				m.logf("cadence %s reset: %s", chosen, reason)
+			}
+			prev = chosen
+		}
+		wait := chosen
+		if jitter > 0 {
+			// Capped at the wait itself, so a long tick_interval does not turn a
+			// short backed-off wait into a much longer one.
+			spread := jitter
+			if spread > wait {
+				spread = wait
+			}
+			wait += time.Duration(rand.Int63n(int64(spread)))
+		}
+		return wait
 	}
 	tick()
 	for {
-		wait := interval
-		if jitter > 0 {
-			wait += time.Duration(rand.Int63n(int64(jitter)))
+		wait := next()
+		if m.OnWait != nil {
+			m.OnWait(wait)
 		}
 		timer := time.NewTimer(wait)
 		select {
@@ -488,6 +553,14 @@ func (m *Mirror) Loop(ctx context.Context, sources func(context.Context) ([]Proj
 		case <-timer.C:
 			tick()
 		}
+	}
+}
+
+// logf writes one line when a logger is configured. The loop logs only changes,
+// so a nil logger costs nothing on a quiet box.
+func (m *Mirror) logf(format string, args ...any) {
+	if m.Logf != nil {
+		m.Logf(format, args...)
 	}
 }
 

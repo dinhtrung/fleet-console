@@ -163,8 +163,13 @@ type Lifecycle struct {
 	IdlePollMax Duration `yaml:"idle_poll_max"`
 }
 
-// LifecycleSettings is the resolved rig_lifecycle block.
+// LifecycleSettings is the resolved rig_lifecycle block. Written records whether
+// the file actually carried the block, which is what decides the poll cadence: a
+// box that never opts in must poll at the fixed tick_interval, exactly as it did
+// before this setting existed. Enabled alone cannot answer that, because the
+// block's zero value is also "not enabled".
 type LifecycleSettings struct {
+	Written     bool
 	Enabled     bool
 	IdleAfter   time.Duration
 	IdlePollMax time.Duration
@@ -373,7 +378,10 @@ func Load(opts Options) (*Effective, error) {
 				idlePollMax, tick)
 		}
 	}
-	eff.RigLifecycle = LifecycleSettings{Enabled: enabled, IdleAfter: idleAfter, IdlePollMax: idlePollMax}
+	eff.RigLifecycle = LifecycleSettings{
+		Written: file.RigLifecycle != nil, Enabled: enabled,
+		IdleAfter: idleAfter, IdlePollMax: idlePollMax,
+	}
 	eff.Lifecycles = make([]ProjectLifecycle, 0, len(file.Projects))
 	for _, project := range file.Projects {
 		if project.Lifecycle == "" {

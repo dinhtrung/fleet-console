@@ -151,11 +151,14 @@ func TestLoopTicksAndStops(t *testing.T) {
 	go func() {
 		m.Loop(ctx,
 			func(context.Context) ([]Project, error) { return []Project{{ID: id, Key: "app", Forge: fake}}, nil },
-			5*time.Millisecond, time.Millisecond,
-			func(TickResult) {
+			Cadence{Base: 5 * time.Millisecond, Max: 5 * time.Millisecond}, time.Millisecond,
+			func(TickResult) bool {
+				// Busy: an open item, so the wait stays at the base and the
+				// second tick arrives promptly.
 				if atomic.AddInt32(&ticks, 1) >= 2 {
 					cancel()
 				}
+				return true
 			})
 		close(done)
 	}()
