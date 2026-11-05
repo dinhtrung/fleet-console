@@ -12,14 +12,14 @@
 
 ## 1. Config write path (builder 1)
 
-- [ ] 1.1 `internal/config/config.go`: `EditableKeys()` (a classification table over `File`) and a test that every
+- [x] 1.1 `internal/config/config.go`: `EditableKey()` (a classification table over `File`) and a test that every
       YAML key of `File` is classified editable or read-only, so a new key cannot slip in unclassified.
-- [ ] 1.2 `internal/configfile`: `UpdateSettings(path string, values map[string]string, expectedHash *[32]byte)` —
+- [x] 1.2 `internal/configfile`: `UpdateSettings(path string, values map[string]string, expectedHash *[32]byte)` —
       textual splice for top-level scalars and the `rig_lifecycle` block, `ErrStaleRead` on a hash mismatch,
       `config.ValidateContent` on the merged bytes, atomic replace, comments preserved.
       Evidence: tests for the splice keeping a header comment and an untouched project block, the stale-read
       refusal, the validation refusal, and the unchanged no-write.
-- [ ] 1.3 `internal/web/settings.go`: `GET /api/config` from the effective settings (reuse the `--print-config`
+- [x] 1.3 `internal/web/settings.go`: `GET /api/config` from the effective settings (reuse the `--print-config`
       view; redact), `PUT /api/config` with the allowlist, 400 naming the key, 409 on `ErrStaleRead`.
       Evidence: handler tests, including "no credential value appears in the JSON".
 
