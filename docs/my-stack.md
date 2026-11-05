@@ -277,6 +277,30 @@ have written on its own. The secret never appears in `--print-config` or in any 
 
 The one line each accepted delivery writes names the repository, the action and the issue number — never the
 payload. The body is the forge's data, and the board's log is a file with wider access than the forge.
+### Answering a decision on the item, not only on the board
+
+A decision is a row waiting on a person, and that person is usually already reading the issue. Turn the notes on
+and the app writes the question as one comment there:
+
+```yaml
+decision_notes: true          # default false: a note is a write on somebody else's item
+# decision_answerers: []      # default: the owner of the project's repo slug, e.g. dinhtrung for dinhtrung/app
+```
+
+Reply by commenting on the item with the line the note ends with — `fleet: accept`, or `fleet: accept qitem-…`
+when the item has more than one open decision. The reply must come from an allowed login and be newer than the
+question; anything else is ordinary conversation and resolves nothing.
+
+The first answer wins: a valid reply goes through the same resolution the board's own answer uses, so the two
+cannot disagree, and a reply that arrives after the board already answered resolves nothing. That late case is
+**recorded and ignored without a note**: the row is already terminal, so the thread gets nothing to read
+(`decision.reply_ignored` names the comment in the audit log) — a "you replied too late" comment on a public item
+would be noise. An answer that starts with the prefix but cannot be applied because it is **ambiguous** — two open
+decisions and no id named — does earn one correction listing the ids, once per comment, so an unfixable typo
+cannot become a loop. The board keeps the whole surface: `/decisions` lists what waits and answers it with a
+click, with or without the notes configured. The four audit kinds are `decision.noted`, `decision.answered`,
+`decision.reply_ignored` and `decision.note_failed`; read them on `/audit`. The requirements live in
+`openspec/changes/decision-reply-notes/`.
 
 ---
 
