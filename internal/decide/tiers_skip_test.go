@@ -11,12 +11,12 @@ func TestNoFreeBuilderSkipNamesTheTier(t *testing.T) {
 	item := Item{Number: 42, Kind: KindTask, State: "open", Title: "ready work"}
 
 	cases := []struct {
-		name   string
-		rigs   []RigRef
-		free   []string
-		build  []string
-		busy   []string
-		want   string
+		name  string
+		rigs  []RigRef
+		free  []string
+		build []string
+		busy  []string
+		want  string
 	}{
 		{
 			name: "a cold standby with on-unavailable",
@@ -24,10 +24,10 @@ func TestNoFreeBuilderSkipNamesTheTier(t *testing.T) {
 				{Name: "primary", Tier: 0, Spill: SpillOnFull},
 				{Name: "standby", Tier: 1, Spill: SpillOnUnavailable},
 			},
-			free:   []string{"dev-build-2@standby"},
-			build:  []string{"dev-build-1@primary", "dev-build-2@standby"},
-			busy:   []string{"dev-build-1@primary"},
-			want:   "tier 1 (spill=on-unavailable: every earlier tier has a running seat on standby)",
+			free:  []string{"dev-build-2@standby"},
+			build: []string{"dev-build-1@primary", "dev-build-2@standby"},
+			busy:  []string{"dev-build-1@primary"},
+			want:  "tier 1 (spill=on-unavailable: every earlier tier has a running seat on standby)",
 		},
 		{
 			name: "a never tier",
@@ -35,17 +35,17 @@ func TestNoFreeBuilderSkipNamesTheTier(t *testing.T) {
 				{Name: "primary", Tier: 0, Spill: SpillOnFull},
 				{Name: "standby", Tier: 1, Spill: SpillNever},
 			},
-			free:   []string{"dev-build-2@standby"},
-			build:  []string{"dev-build-2@standby"},
-			want:   "tier 1 (spill=never: an earlier tier exists on standby)",
+			free:  []string{"dev-build-2@standby"},
+			build: []string{"dev-build-2@standby"},
+			want:  "tier 1 (spill=never: an earlier tier exists on standby)",
 		},
 		{
-			name: "every tier empty",
-			rigs: []RigRef{{Name: "primary", Tier: 0, Spill: SpillOnFull}},
-			free:   nil,
-			build:  []string{"dev-build-1@primary"},
-			busy:   []string{"dev-build-1@primary"},
-			want:   "tier 0 (spill=on-full: no free seat on this rig on primary)",
+			name:  "every tier empty",
+			rigs:  []RigRef{{Name: "primary", Tier: 0, Spill: SpillOnFull}},
+			free:  nil,
+			build: []string{"dev-build-1@primary"},
+			busy:  []string{"dev-build-1@primary"},
+			want:  "tier 0 (spill=on-full: no free seat on this rig on primary)",
 		},
 	}
 	for _, tc := range cases {

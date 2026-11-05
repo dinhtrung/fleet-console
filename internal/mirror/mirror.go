@@ -468,6 +468,7 @@ func decideRigRefs(tiers []store.RigTier) []decide.RigRef {
 	}
 	return out
 }
+
 type itemFields = decide.Item
 type linkFields = decide.Link
 type rowFields = decide.Row

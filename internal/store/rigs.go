@@ -37,12 +37,21 @@ func encodeRigs(rigs []string) string {
 	return string(raw)
 }
 
+// decodeRigs reads rigs_json into the rig names every reader already used.
+//
+// It is derived from decodeRigTiers rather than parsing the column a second way:
+// encodeRigTiers writes a bare name for a tier-0/on-full entry and an object for
+// anything else, so a []string unmarshal fails on the object form and silently
+// collapsed the list to the single-rig fallback — which then hid work queued on
+// the second and later rigs from the mirror's own filters. One decoder means the
+// two views of the same column cannot disagree.
 func decodeRigs(raw, fallback string) []string {
-	var rigs []string
-	if err := json.Unmarshal([]byte(raw), &rigs); err != nil || len(rigs) == 0 {
-		return normalizeRigs(fallback, nil)
+	tiers := decodeRigTiers(raw, fallback)
+	names := make([]string, 0, len(tiers))
+	for _, tier := range tiers {
+		names = append(names, tier.Name)
 	}
-	return normalizeRigs("", rigs)
+	return normalizeRigs("", names)
 }
 
 // RigTier is one rig's place in the fill order. It mirrors the config's rig entry
