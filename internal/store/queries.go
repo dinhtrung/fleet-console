@@ -17,6 +17,7 @@ type ProjectRow struct {
 	DefaultBranch  string
 	Rig            string
 	Rigs           []string
+	RigTiers       []RigTier
 	RigTemplate    string
 	ConcurrencyCap int
 	Enabled        bool
@@ -102,6 +103,7 @@ func (s *Store) Projects(ctx context.Context) ([]ProjectRow, error) {
 			return nil, fmt.Errorf("store: projects: %w", err)
 		}
 		p.Rigs = decodeRigs(rigsJSON, p.Rig)
+		p.RigTiers = decodeRigTiers(rigsJSON, p.Rig)
 		p.Enabled, p.OnHold = enabled != 0, onhold != 0
 		out = append(out, p)
 	}
