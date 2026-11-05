@@ -170,6 +170,10 @@ type Comment struct {
 	ID        string `json:"id"`
 	Body      string `json:"body"`
 	CreatedAt string `json:"created_at"`
+	// Author is the login that wrote the comment. Empty when a forge read did not
+	// carry one; the decision reply rule treats an unknown author as "not allowed",
+	// so a forge that omits it cannot silently answer a decision.
+	Author string `json:"author,omitempty"`
 }
 
 // CandidateReader is implemented by a forge that can skip per-change details for

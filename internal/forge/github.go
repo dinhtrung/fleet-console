@@ -429,13 +429,18 @@ func (g *GitHub) Notes(ctx context.Context, number int) ([]Comment, error) {
 		ID        int64  `json:"id"`
 		Body      string `json:"body"`
 		CreatedAt string `json:"created_at"`
+		User      struct {
+			Login string `json:"login"`
+		} `json:"user"`
 	}
 	if err := json.Unmarshal(raw, &batch); err != nil {
 		return nil, fmt.Errorf("forge: decode GitHub comments: %w", err)
 	}
 	out := make([]Comment, 0, len(batch))
 	for _, note := range batch {
-		out = append(out, Comment{ID: fmt.Sprint(note.ID), Body: note.Body, CreatedAt: note.CreatedAt})
+		out = append(out, Comment{
+			ID: fmt.Sprint(note.ID), Body: note.Body, CreatedAt: note.CreatedAt, Author: note.User.Login,
+		})
 	}
 	return out, nil
 }
