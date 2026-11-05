@@ -32,6 +32,7 @@ import (
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/git"
 	"github.com/dinhtrung/fleet-console/internal/hostcheck"
+	"github.com/dinhtrung/fleet-console/internal/housekeeping"
 	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/progress"
 	"github.com/dinhtrung/fleet-console/internal/registry"
@@ -305,6 +306,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	printConfig := flags.Bool("print-config", false, "print the effective config with secrets redacted and exit")
 	applyConfig := flags.Bool("apply-config", false, "create or refresh the projects from the config; projects absent from the file are disabled")
 	prune := flags.Bool("prune", false, "delete projects absent from the config and exit; refused while a live dispatch exists")
+	housekeep := flags.Bool("housekeep", false, "print the worktree reclaim plan and exit; change nothing without --apply")
 	syncOnHold := flags.Bool("sync-onhold", false, "with --apply-config, copy each project's onhold from the config")
 	notifyReportFlag := flags.Bool("notify-report", false, "render the progress report from the store and send it; no mirror, no dispatch")
 	notifyProject := flags.String("notify-project", "fleet-console", "with --notify-report, the project to report on")
@@ -417,6 +419,20 @@ func run(args []string, stdout, stderr io.Writer) error {
 		defer db.Close()
 		fmt.Fprintln(stdout, "database migrated")
 		return nil
+	}
+
+	if *housekeep {
+		db, err := store.Open(ctx, eff.Database)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		// Exit 0 even when removals fail: the failure is recorded in the event and
+		// printed on stderr, and a sweep that refused one path is not a broken run.
+		return runHousekeep(ctx, housekeepArgs{
+			eff: eff, db: db, runner: forgeRunner, rigRunner: rigRunner, apply: *applyFlag,
+			out: stdout, errOut: stderr,
+		})
 	}
 
 	if *tick {
@@ -571,6 +587,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	// The lifecycle's memory is the running process: a quiet window is not
 	// persisted, so a restart simply gives every rig a fresh idle_after
 	// (design D6). With the block absent the coordinator decides nothing.
+	// The reclaim sweep's cadence. Zero (the default) means the tick never runs it.
+	// The stamp lives in memory: a restart legitimately resets the cadence and the
+	// first run waits one full interval, so a restart loop cannot become a delete
+	// loop (design D6).
+	housekeepingScheduler := act.NewScheduler(eff.HousekeepingInterval, time.Now().UTC())
 	lifecycle := act.NewLifecycle(eff.RigLifecycle, db, rig.NewAdapter(rigRunner), func(format string, args ...any) {
 		fmt.Fprintf(stderr, "%s\n", fmt.Sprintf(format, args...))
 	})
@@ -745,6 +766,19 @@ func run(args []string, stdout, stderr io.Writer) error {
 			// The stop runs after the dispatch phase, so a tick that merges the
 			// last item and finds the window elapsed stops in the same tick (3.3).
 			lifecycle.Stop(ctx, lifecycleActions)
+			// The reclaim sweep runs after the dispatch phase too, and for the same
+			// reason: an item dispatched on this tick already has a live dispatch row
+			// when the sweep reads it, so its worktree is kept without a second lock
+			// (design D5). A zero interval is off, and the first run waits one full
+			// interval after boot so a restart loop cannot become a delete loop (D6).
+			if housekeepingScheduler.Due(read.At) {
+				if err := runHousekeep(ctx, housekeepArgs{
+					eff: eff, db: db, runner: forgeRunner, rigRunner: rigRunner, apply: true,
+					out: stderr, errOut: stderr,
+				}); err != nil {
+					fmt.Fprintf(stderr, "housekeep: %v\n", err)
+				}
+			}
 			// D7: the verdict comes from the read this tick already did. A failed
 			// dispatch or merge does not make the fleet busy; only the read does,
 			// so the cadence stays a property of what the app can see.
@@ -872,4 +906,113 @@ func adoptPendingDispatches(ctx context.Context, db *store.Store, adapter *rig.A
 		}
 	}
 	return nil
+}
+
+// housekeepArgs is one --housekeep run's inputs.
+type housekeepArgs struct {
+	eff       *config.Effective
+	db        *store.Store
+	runner    forge.Runner
+	rigRunner rig.Runner
+	apply     bool
+	out       io.Writer
+	errOut    io.Writer
+}
+
+// runHousekeep prints one reclaim plan per project and, with --apply, performs it.
+//
+// It reads each project's forge once, the same way the tick does, so the four
+// keep conditions are answered from real facts rather than the store's cache. A
+// project whose forge read fails proposes nothing and says so: "the read failed"
+// is not "nothing is left".
+//
+// The exit code is 0 even when a removal fails. The failure lives in the event
+// and on stderr; a sweep that refused one path is a working sweep.
+func runHousekeep(ctx context.Context, in housekeepArgs) error {
+	projects, err := in.db.Projects(ctx)
+	if err != nil {
+		return err
+	}
+	specs, err := projectSources(ctx, in.db, in.runner)
+	if err != nil {
+		return err
+	}
+	specByKey := make(map[string]mirror.Project, len(specs))
+	for _, spec := range specs {
+		specByKey[spec.Key] = spec
+	}
+	mirrorer := &mirror.Mirror{Store: in.db, Rig: rig.NewAdapter(in.rigRunner), ProjectTimeout: mirrorTimeouts(in.eff)}
+	read, err := mirrorer.Tick(ctx, specs)
+	if err != nil {
+		return err
+	}
+	total := 0
+	for _, project := range projects {
+		source, ok := specByKey[project.Key]
+		if !ok {
+			continue
+		}
+		projectRead := read.Projects[project.Key]
+		hkGit := housekeeping.ExecGit{RepoPath: source.RepoPath}
+		report, err := act.Housekeep(ctx, act.HousekeepInput{
+			Store: in.db, Project: project,
+			// The mirror's own read outcome is the fact: a project whose read failed
+			// this tick has nothing to say about its change requests.
+			ForgeOK:      func() bool { return !projectRead.ForgeStale && projectRead.ForgeError == "" },
+			Items:        projectRead.Items,
+			CRs:          projectRead.CRs,
+			Rows:         projectRead.Rows,
+			WorktreeRoot: worktreeRoot(in.eff, project, source),
+			Git:          hkGit,
+			Apply:        in.apply,
+		})
+		if err != nil {
+			fmt.Fprintf(in.errOut, "housekeep: %s: %v\n", project.Key, err)
+			continue
+		}
+		verb := "would remove"
+		if in.apply {
+			verb = "removed"
+		}
+		for _, path := range report.Removed {
+			fmt.Fprintf(in.out, "%s %s\n", verb, path)
+		}
+		if report.Failed > 0 {
+			fmt.Fprintf(in.errOut, "housekeep: %s: %d removal(s) refused by git; see the events\n", project.Key, report.Failed)
+		}
+		// The summary line the task asks for, on stdout so an operator's script can
+		// read it without parsing prose from stderr.
+		fmt.Fprintf(in.out, "housekeep %s: %s\n", project.Key, housekeepSummary(report))
+		total += len(report.Removed)
+	}
+	if !in.apply && total > 0 {
+		fmt.Fprintf(in.out, "housekeep: dry run; pass --apply to perform these removals\n")
+	}
+	return nil
+}
+
+// housekeepSummary renders the counts in one line, matching the summary event's
+// detail so the console and the audit trail read the same.
+func housekeepSummary(report act.HousekeepReport) string {
+	parts := []string{fmt.Sprintf("removed=%d", len(report.Removed))}
+	for _, reason := range []housekeeping.Reason{
+		housekeeping.ReasonOpenCR,
+		housekeeping.ReasonLiveDispatch,
+		housekeeping.ReasonLiveRow,
+		housekeeping.ReasonDirty,
+		housekeeping.ReasonGitRefused,
+		housekeeping.ReasonSymlink,
+		housekeeping.ReasonOutsideRoot,
+	} {
+		if count := report.Kept[reason]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", reason, count))
+		}
+	}
+	if report.Failed > 0 {
+		parts = append(parts, fmt.Sprintf("failed=%d", report.Failed))
+	}
+	if report.ForgeStale {
+		parts = append(parts, "forge-stale=1")
+	}
+	return strings.Join(parts, " ")
 }

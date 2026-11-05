@@ -150,6 +150,43 @@ not notifications: see `docs/fleet-console.md`.
 - Quota is per account: a fleet on one login stalls together. Only a second account/key makes it 24/7.
 - Symmetric "related" links plus a smaller-id heuristic can block wrongly when the links are dirty.
 
+### Reclaiming worktrees: what the sweep touches, and what it does not
+
+The control plane reclaims worktrees the fleet no longer needs. It is **dry-run by default and off by default**;
+both defaults exist so a restart cannot become a delete.
+
+```bash
+fleet-console --housekeep            # print the plan; change nothing
+fleet-console --housekeep --apply    # perform it
+```
+
+To run it on a cadence, set `housekeeping_interval: 6h` in the config. `0` (the default) means the tick never runs
+it. The first scheduled run happens one interval **after boot**, not at boot, so a crash-loop cannot delete on every
+restart. The stamp is in memory: a restart legitimately resets the cadence.
+
+**What it removes.** Only a direct child of the project's worktree root whose directory name matches
+`wt-<project-key>-<number>`, and only when all four keep conditions are false:
+
+1. an open change request's head branch equals the worktree's branch;
+2. a live dispatch row names its item;
+3. a non-terminal queue row names its item;
+4. `git status --porcelain` in the worktree is non-empty.
+
+If any holds, the worktree is kept. It runs `git worktree remove` **without `--force`**, so git has the last word: a
+worktree git refuses to remove stays and its event carries git's own words. The sweep never touches the main
+checkout, and it skips a symlink rather than following it. When the forge read failed this tick, it proposes nothing
+at all — "the read failed" is not "nothing is left".
+
+**What it cannot do.** The sweep removes a worktree's *directory*. It does not stop a process, kill a session, or
+reclaim journal or log storage. Those still need the operator's own cleanup, which is why that script stays: the
+sweep is the safe half of housekeeping, not a replacement for it.
+
+**The audit trail.** Each removal writes one `housekeeping.remove` event naming the worktree, its branch and its
+item; a refused removal carries the error and a non-zero exit code. Each run writes one `housekeeping.summary`
+event with the counts (`removed`, each keep reason, `failed`), even when it removed nothing — "the sweep ran and
+found nothing" and "the sweep never ran" must be distinguishable. Read them from the board's `/audit` screen or
+`GET /api/events?kind=housekeeping.remove`.
+
 ---
 
 ## 4. Rebuilding this on a new box

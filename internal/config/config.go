@@ -68,17 +68,20 @@ type Project struct {
 
 // File is the YAML shape. KnownFields rejects anything else.
 type File struct {
-	Listen         string         `yaml:"listen"`
-	Database       string         `yaml:"database"`
-	Token          string         `yaml:"token"`
-	TokenFile      string         `yaml:"token_file"`
-	RigBinary      string         `yaml:"rig_binary"`
-	GhBinary       string         `yaml:"gh_binary"`
-	GlabBinary     string         `yaml:"glab_binary"`
-	TickInterval   Duration       `yaml:"tick_interval"`
-	NotifyInterval Duration       `yaml:"notify_interval"`
-	ProjectTimeout ProjectTimeout `yaml:"project_timeout"`
-	Act            bool           `yaml:"act"`
+	Listen         string   `yaml:"listen"`
+	Database       string   `yaml:"database"`
+	Token          string   `yaml:"token"`
+	TokenFile      string   `yaml:"token_file"`
+	RigBinary      string   `yaml:"rig_binary"`
+	GhBinary       string   `yaml:"gh_binary"`
+	GlabBinary     string   `yaml:"glab_binary"`
+	TickInterval   Duration `yaml:"tick_interval"`
+	NotifyInterval Duration `yaml:"notify_interval"`
+	// HousekeepingInterval is the reclaim sweep's cadence. Zero means off, the
+	// default: a box that never opted in must not start deleting worktrees.
+	HousekeepingInterval Duration       `yaml:"housekeeping_interval"`
+	ProjectTimeout       ProjectTimeout `yaml:"project_timeout"`
+	Act                  bool           `yaml:"act"`
 	// DecisionNotes turns on writing a decision's question as a comment on its
 	// item. Default false: a note is an external side effect on somebody's item,
 	// and an upgraded binary must not start writing there by itself (design D8).
@@ -112,7 +115,7 @@ var lifecycleFields = []string{"enabled", "idle_after", "idle_poll_max"}
 // File does not declare is never writable.
 func EditableKey(key string) (bool, string) {
 	switch key {
-	case "tick_interval", "notify_interval", "act", EditableRigLifecycle:
+	case "tick_interval", "notify_interval", "housekeeping_interval", "act", EditableRigLifecycle:
 		return true, ""
 	}
 	if field, ok := strings.CutPrefix(key, EditableRigLifecycle+"."); ok {
@@ -223,25 +226,27 @@ type Options struct {
 
 // Effective is the resolved configuration and where each value came from.
 type Effective struct {
-	Listen            string
-	Database          string
-	Token             string
-	TokenFile         string
-	RigBinary         string
-	GhBinary          string
-	GlabBinary        string
-	TickInterval      time.Duration
-	NotifyInterval    time.Duration // digest cadence; 0 means off
-	ProjectTimeout    Timeouts
-	Act               bool
-	DecisionNotes     bool
-	DecisionAnswerers []string
-	RigLifecycle      LifecycleSettings
-	Lifecycles        []ProjectLifecycle
-	Projects          []Project
-	ConfigPath        string
-	Sources           map[string]string
-	Warnings          []string
+	Listen         string
+	Database       string
+	Token          string
+	TokenFile      string
+	RigBinary      string
+	GhBinary       string
+	GlabBinary     string
+	TickInterval   time.Duration
+	NotifyInterval time.Duration // digest cadence; 0 means off
+	// HousekeepingInterval is the reclaim sweep's cadence; 0 means off.
+	HousekeepingInterval time.Duration
+	ProjectTimeout       Timeouts
+	Act                  bool
+	DecisionNotes        bool
+	DecisionAnswerers    []string
+	RigLifecycle         LifecycleSettings
+	Lifecycles           []ProjectLifecycle
+	Projects             []Project
+	ConfigPath           string
+	Sources              map[string]string
+	Warnings             []string
 }
 
 const (
@@ -409,6 +414,10 @@ func Load(opts Options) (*Effective, error) {
 	// notify_interval is the optional digest cadence. Zero means off, which is
 	// the default: an unattended run should not start talking on its own.
 	eff.NotifyInterval, eff.Sources["notify_interval"] = time.Duration(file.NotifyInterval), "file"
+	// housekeeping_interval is the reclaim sweep's cadence. Zero means off, which is
+	// the default: an upgraded box keeps its current behaviour and never starts
+	// deleting worktrees because a new key appeared with a non-zero default.
+	eff.HousekeepingInterval, eff.Sources["housekeeping_interval"] = time.Duration(file.HousekeepingInterval), "file"
 
 	base, perItem, ceiling := 30*time.Second, 2*time.Second, 2*time.Minute
 	timeoutSource := "default"
@@ -570,7 +579,9 @@ func (e *Effective) Print() ([]byte, error) {
 		GlabBinary string `yaml:"glab_binary"`
 		Tick       string `yaml:"tick_interval"`
 		Notify     string `yaml:"notify_interval"`
-		Timeout    struct {
+		// Housekeeping is the reclaim sweep's cadence; "0s" is off.
+		Housekeeping string `yaml:"housekeeping_interval"`
+		Timeout      struct {
 			Base    string `yaml:"base"`
 			PerItem string `yaml:"per_item"`
 			Ceiling string `yaml:"ceiling"`
@@ -594,6 +605,7 @@ func (e *Effective) Print() ([]byte, error) {
 		Tick: e.TickInterval.String(), Notify: e.NotifyInterval.String(),
 		Act: e.Act, Projects: e.Projects, Sources: e.Sources, Warnings: e.Warnings,
 		DecisionNotes: e.DecisionNotes, DecisionAnswerers: e.DecisionAnswerers,
+		Housekeeping: e.HousekeepingInterval.String(),
 	}
 	out.Timeout.Base = e.ProjectTimeout.Base.String()
 	out.Timeout.PerItem = e.ProjectTimeout.PerItem.String()
