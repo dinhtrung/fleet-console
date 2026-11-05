@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -83,6 +84,62 @@ type File struct {
 	// defaults": an upgraded box keeps today's behaviour (design D9).
 	RigLifecycle *Lifecycle `yaml:"rig_lifecycle"`
 	Projects     []Project  `yaml:"projects"`
+}
+
+// The settings surface writes only what the file can safely change while the
+// app runs. Every other key describes where the app lives — its socket, its
+// database, its credentials, the project registry — and needs the operator's
+// hand or a different route. The classification lives here, beside File, so a
+// key added to File without a decision fails the completeness test instead of
+// becoming silently writable (design D2).
+//
+// EditableRigLifecycle is writable as a block; its fields are addressed as
+// rig_lifecycle.<field> so a write can name one without replacing the block.
+const EditableRigLifecycle = "rig_lifecycle"
+
+// lifecycleFields are the rig_lifecycle block's writable fields.
+var lifecycleFields = []string{"enabled", "idle_after", "idle_poll_max"}
+
+// EditableKey reports whether the settings surface may write key. The second
+// return value is the refusal sentence, empty when the key is writable. A key
+// File does not declare is never writable.
+func EditableKey(key string) (bool, string) {
+	switch key {
+	case "tick_interval", "notify_interval", "act", EditableRigLifecycle:
+		return true, ""
+	}
+	if field, ok := strings.CutPrefix(key, EditableRigLifecycle+"."); ok {
+		for _, known := range lifecycleFields {
+			if field == known {
+				return true, ""
+			}
+		}
+		return false, fmt.Sprintf("%s is not a rig_lifecycle field", key)
+	}
+	switch key {
+	case "listen", "database", "token", "token_file", "rig_binary", "gh_binary", "glab_binary":
+		return false, fmt.Sprintf("%s needs the operator's hand: the running process reads it once at boot", key)
+	case "project_timeout":
+		return false, fmt.Sprintf("%s is per-project tuning; edit it in the file", key)
+	case "projects":
+		return false, "projects has its own route (POST /api/projects); the settings surface does not write the registry"
+	}
+	return false, fmt.Sprintf("unknown key %q", key)
+}
+
+// FileKeys lists every YAML key File declares, read from its own struct tags so
+// the list cannot drift from the shape. The completeness test walks it.
+func FileKeys() []string {
+	typ := reflect.TypeOf(File{})
+	keys := make([]string, 0, typ.NumField())
+	for index := range typ.NumField() {
+		name, _, _ := strings.Cut(typ.Field(index).Tag.Get("yaml"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		keys = append(keys, name)
+	}
+	return keys
 }
 
 // ProjectTimeout is the file form of the per-project read deadline:
@@ -690,6 +747,26 @@ func ProjectWarnings(p Project) []string {
 		return []string{fmt.Sprintf("project %q: paths.main %s does not exist yet", p.Key, p.Paths.Main)}
 	}
 	return nil
+}
+
+// ValidateDocument applies the loader's own rules to candidate bytes: the whole
+// File decodes under KnownFields, the project rules run, and the cross-checks
+// Load performs — the rig_lifecycle ceiling against tick_interval — are enforced
+// too. ValidateContent stops short of those cross-checks, so a settings write
+// that used only it could leave a file the app refuses to boot from. The bytes
+// are written to a temp file and read through Load, which is the only way to run
+// the loader's resolution without a second copy of its arithmetic.
+func ValidateDocument(data []byte, dir, home string) error {
+	if err := ValidateContent(data, dir, home); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, ".settings-validate.yaml")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("config: validate %s: %w", path, err)
+	}
+	defer os.Remove(path)
+	_, err := Load(Options{FlagPath: path, Home: home, Cwd: dir})
+	return err
 }
 
 // ValidateContent applies the loader's whole-file rules to a document the
