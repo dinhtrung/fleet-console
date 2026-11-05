@@ -25,12 +25,12 @@
 
 ## 2. Surface, schedule and audit (builder 1, after 1)
 
-- [ ] 2.1 `--housekeep [--apply]`: the plan, the summary, exit 0 even when removals fail (the failure is in the
+- [x] 2.1 `--housekeep [--apply]`: the plan, the summary, exit 0 even when removals fail (the failure is in the
       events), and `--apply` gated by the same four conditions.
-- [ ] 2.2 Tick schedule: `housekeeping_interval` (default 0), last-run stamp in memory, run **after** the dispatch
+- [x] 2.2 Tick schedule: `housekeeping_interval` (default 0), last-run stamp in memory, run **after** the dispatch
       phase, never at boot.
-- [ ] 2.3 Audit: one event per removal, one summary per run with the counts; a failed removal carries the error and
+- [x] 2.3 Audit: one event per removal, one summary per run with the counts; a failed removal carries the error and
       is not counted as removed.
       Evidence: the event rows from a test run, quoted.
-- [ ] 2.4 `docs/my-stack.md`: what it will and will not touch, why the operator script still exists for process and
+- [x] 2.4 `docs/my-stack.md`: what it will and will not touch, why the operator script still exists for process and
       journal reclamation, and the dry-run command.
