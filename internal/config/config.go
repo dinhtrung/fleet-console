@@ -79,6 +79,13 @@ type File struct {
 	NotifyInterval Duration       `yaml:"notify_interval"`
 	ProjectTimeout ProjectTimeout `yaml:"project_timeout"`
 	Act            bool           `yaml:"act"`
+	// DecisionNotes turns on writing a decision's question as a comment on its
+	// item. Default false: a note is an external side effect on somebody's item,
+	// and an upgraded binary must not start writing there by itself (design D8).
+	DecisionNotes bool `yaml:"decision_notes"`
+	// DecisionAnswerers lists the logins whose comments may answer a decision.
+	// Empty means the owner of the project's repository slug (design D4).
+	DecisionAnswerers []string `yaml:"decision_answerers"`
 	// RigLifecycle is the opt-in that lets the app stop an idle rig and start a
 	// stopped one. A pointer so "no block" is distinguishable from "block with
 	// defaults": an upgraded box keeps today's behaviour (design D9).
@@ -214,23 +221,25 @@ type Options struct {
 
 // Effective is the resolved configuration and where each value came from.
 type Effective struct {
-	Listen         string
-	Database       string
-	Token          string
-	TokenFile      string
-	RigBinary      string
-	GhBinary       string
-	GlabBinary     string
-	TickInterval   time.Duration
-	NotifyInterval time.Duration // digest cadence; 0 means off
-	ProjectTimeout Timeouts
-	Act            bool
-	RigLifecycle   LifecycleSettings
-	Lifecycles     []ProjectLifecycle
-	Projects       []Project
-	ConfigPath     string
-	Sources        map[string]string
-	Warnings       []string
+	Listen            string
+	Database          string
+	Token             string
+	TokenFile         string
+	RigBinary         string
+	GhBinary          string
+	GlabBinary        string
+	TickInterval      time.Duration
+	NotifyInterval    time.Duration // digest cadence; 0 means off
+	ProjectTimeout    Timeouts
+	Act               bool
+	DecisionNotes     bool
+	DecisionAnswerers []string
+	RigLifecycle      LifecycleSettings
+	Lifecycles        []ProjectLifecycle
+	Projects          []Project
+	ConfigPath        string
+	Sources           map[string]string
+	Warnings          []string
 }
 
 const (
@@ -423,6 +432,21 @@ func Load(opts Options) (*Effective, error) {
 		eff.Sources["act"] = "default"
 	}
 
+	eff.DecisionNotes = file.DecisionNotes
+	if file.DecisionNotes {
+		eff.Sources["decision_notes"] = "file"
+	} else {
+		eff.Sources["decision_notes"] = "default"
+	}
+	// The default author rule is resolved per project from its repository slug
+	// (design D4), so an empty list here means "the owner", not "nobody".
+	eff.DecisionAnswerers = append([]string(nil), file.DecisionAnswerers...)
+	if len(eff.DecisionAnswerers) > 0 {
+		eff.Sources["decision_answerers"] = "file"
+	} else {
+		eff.Sources["decision_answerers"] = "default"
+	}
+
 	if file.TokenFile != "" {
 		eff.TokenFile = resolve(dir, file.TokenFile, home)
 		eff.Sources["token_file"] = "file"
@@ -549,8 +573,10 @@ func (e *Effective) Print() ([]byte, error) {
 			PerItem string `yaml:"per_item"`
 			Ceiling string `yaml:"ceiling"`
 		} `yaml:"project_timeout"`
-		Act          bool `yaml:"act"`
-		RigLifecycle struct {
+		Act               bool     `yaml:"act"`
+		DecisionNotes     bool     `yaml:"decision_notes"`
+		DecisionAnswerers []string `yaml:"decision_answerers,omitempty"`
+		RigLifecycle      struct {
 			Enabled     bool   `yaml:"enabled"`
 			IdleAfter   string `yaml:"idle_after"`
 			IdlePollMax string `yaml:"idle_poll_max"`
@@ -565,6 +591,7 @@ func (e *Effective) Print() ([]byte, error) {
 		RigBinary: e.RigBinary, GhBinary: e.GhBinary, GlabBinary: e.GlabBinary,
 		Tick: e.TickInterval.String(), Notify: e.NotifyInterval.String(),
 		Act: e.Act, Projects: e.Projects, Sources: e.Sources, Warnings: e.Warnings,
+		DecisionNotes: e.DecisionNotes, DecisionAnswerers: e.DecisionAnswerers,
 	}
 	out.Timeout.Base = e.ProjectTimeout.Base.String()
 	out.Timeout.PerItem = e.ProjectTimeout.PerItem.String()

@@ -28,6 +28,7 @@ import (
 	"github.com/dinhtrung/fleet-console/internal/config"
 	"github.com/dinhtrung/fleet-console/internal/dblock"
 	"github.com/dinhtrung/fleet-console/internal/decide"
+	"github.com/dinhtrung/fleet-console/internal/decisions"
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/git"
 	"github.com/dinhtrung/fleet-console/internal/hostcheck"
@@ -167,6 +168,51 @@ func pollCadence(eff *config.Effective) mirror.Cadence {
 		return mirror.Cadence{Base: eff.TickInterval, Max: eff.TickInterval}
 	}
 	return mirror.Cadence{Base: eff.TickInterval, Max: eff.RigLifecycle.IdlePollMax}
+}
+
+// noteContextFor builds what a decision's note needs: the item's link from the
+// read the tick already has, the board's deep link, and how many decisions are
+// open on that item so the reply line can name the id when it must (design D3).
+//
+// It reads no forge and no store: the item URL is in the item the mirror read, and
+// the open count is a walk over rows already in memory. A decision whose item the
+// app cannot name gets an empty ItemURL, which makes Render omit the link rather
+// than print a guess.
+func noteContextFor(raised act.DecisionRaised, eff *config.Effective, projectRead mirror.ProjectResult) decisions.NoteContext {
+	item := decisions.ItemNumber(raised.Item, raised.Text)
+	nc := decisions.NoteContext{
+		BoardURL: boardURLFrom(eff.Listen) + "/decisions#" + raised.QItemID,
+	}
+	if item > 0 {
+		for _, read := range projectRead.Items {
+			if read.Number == item && read.URL != "" {
+				nc.ItemURL = read.URL
+				break
+			}
+		}
+	}
+	// Count the rows waiting on a person for the same item, including this one.
+	// The read was taken before the tick, so the row this decision just created is
+	// not in it: seed it by identity and skip a pre-tick row carrying the same id,
+	// so a row already parked counts once rather than twice. With two open,
+	// "fleet: accept" would not say which question it answers.
+	open := 0
+	if item > 0 {
+		open = 1
+		for _, row := range projectRead.Rows {
+			if row.ID == raised.QItemID {
+				continue
+			}
+			if !rig.WaitsOnHuman(row.State, row.Destination, row.BlockedOn) {
+				continue
+			}
+			if decisions.ItemNumber(0, row.Summary) == item {
+				open++
+			}
+		}
+	}
+	nc.OpenOnItem = open
+	return nc
 }
 
 // filterSeatsFor keeps a project's rig seats in the configured order, the same
@@ -656,8 +702,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 					LifecycleFailed: lifecycleFailed,
 					// A raised decision reaches the phone from here: the tick
 					// knows the row exists, and the notifier owns the transport.
+					// The note goes on the item first when decision_notes is on, so
+					// the escalation's reply line points at a thread that already
+					// carries the question.
 					OnDecision: func(raised act.DecisionRaised) {
-						notify.escalate(ctx, projectKey, raised)
+						noteCtx := noteContextFor(raised, eff, projectRead)
+						notify.noteDecision(ctx, raised, noteCtx, source.Forge)
+						notify.escalate(ctx, projectKey, raised, noteCtx)
 					},
 				})
 				if err != nil {
