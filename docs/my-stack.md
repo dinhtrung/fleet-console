@@ -164,14 +164,24 @@ The exact lines to grep for:
 ```
 rig-lifecycle: <rig> started — <reason>
 rig-lifecycle: <rig> stopped — quiet <duration>
-act-skip: <rig>: <command> failed: <error>          # a launch failed; its work is skipped this tick
+act-skip: <project>: <why>                          # any per-project skip, one line each
 mirror: cadence <wait> (quiet <n>)                  # the wait doubled
 mirror: cadence <wait> reset: <the busy fact>       # the wait returned to tick_interval
 ```
 
-So `journalctl --user -u fleet-console | grep 'rig-lifecycle:'` reads the lifecycle's whole history, and
-`grep 'mirror: cadence'` reads the poll's. A broken forge read is *not* idleness — the wait stays at
-`tick_interval` while the read is failing, because a rig that cannot see its work is not a rig without work.
+`act-skip` carries the **project key** first and then the reason that project's tick action was skipped — not only a
+failed launch. The two shapes that matter most here are a stopped rig's work and a merge that will not land:
+
+```
+act-skip: <project>: rig <rig> up: <error>          # the launch failed, so nothing was written for that rig
+act-skip: <project>: #<n> merge waiting: <error>    # the merge gate refused
+```
+
+So `journalctl --user -u fleet-console | grep 'rig-lifecycle:'` reads the lifecycle's whole history,
+`grep 'mirror: cadence'` reads the poll's, and `grep 'act-skip:'` reads what a tick declined to do and why.
+
+A broken forge read is *not* idleness: the wait stays at `tick_interval` while the read is failing, because a rig that
+cannot see its work is not a rig without work.
 
 The requirements live in `openspec/changes/rig-lifecycle/`; this section is orientation, not the contract.
 
