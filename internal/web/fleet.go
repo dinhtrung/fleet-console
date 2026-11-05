@@ -678,17 +678,81 @@ func (f *Fleet) SeatTail(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"session": session, "lines": lines, "tail": tail})
 }
 
-// Events returns the newest audit rows.
+// allowedEventFilters is the closed set of /api/events query parameters. A name
+// outside it is refused, never ignored: a silently dropped filter answers
+// "nothing matched" for a question the operator did ask.
+var allowedEventFilters = map[string]bool{
+	"actor": true, "kind": true, "subject": true,
+	"since": true, "until": true, "limit": true, "before": true,
+}
+
+// Events returns one page of the audit log, newest first.
 func (f *Fleet) Events(c fiber.Ctx) error {
-	limit := 50
-	if raw := c.Query("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 500 {
-			limit = n
+	// Every parameter is validated before the store is touched, so a refused
+	// request costs no query.
+	for name := range c.Queries() {
+		if !allowedEventFilters[name] {
+			return fiber.NewError(fiber.StatusBadRequest, "unsupported filter: "+name)
 		}
 	}
-	events, err := f.Store.RecentEvents(c.Context(), limit)
+
+	filter := store.EventFilter{
+		Actor:         c.Query("actor"),
+		Kind:          c.Query("kind"),
+		SubjectPrefix: c.Query("subject"),
+		Limit:         50,
+	}
+	// limit keeps its existing clamp: an unusable value falls back to the default
+	// rather than refusing the read the operator is already looking at.
+	if raw := c.Query("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 500 {
+			filter.Limit = n
+		}
+	}
+	if raw := c.Query("before"); raw != "" {
+		before, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || before <= 0 {
+			return fiber.NewError(fiber.StatusBadRequest, "unsupported filter: before")
+		}
+		filter.Before = before
+	}
+	for _, name := range []string{"since", "until"} {
+		raw := c.Query(name)
+		if raw == "" {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "unsupported filter: "+name)
+		}
+		// Normalized to UTC RFC3339Nano: the store compares the column with
+		// julianday, and one spelling of the bound keeps that comparison exact.
+		if name == "since" {
+			filter.Since = at.UTC().Format(time.RFC3339Nano)
+		} else {
+			filter.Until = at.UTC().Format(time.RFC3339Nano)
+		}
+	}
+
+	page, err := f.Store.Events(c.Context(), filter)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
-	return c.JSON(fiber.Map{"events": events})
+	return c.JSON(page)
+}
+
+// Event returns one audit row by id, with its exit code and stdout hash.
+func (f *Fleet) Event(c fiber.Ctx) error {
+	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
+	if err != nil || id <= 0 {
+		return fiber.NewError(fiber.StatusNotFound, "event not found")
+	}
+	event, err := f.Store.EventByID(c.Context(), id)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	if event == nil {
+		return fiber.NewError(fiber.StatusNotFound, "event not found")
+	}
+	return c.JSON(event)
 }

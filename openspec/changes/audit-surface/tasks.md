@@ -11,15 +11,15 @@
 
 ## 1. Store and API (builder)
 
-- [ ] 1.1 `internal/store/queries.go`: `EventFilter{Actor, Kind, SubjectPrefix, Since, Until string; Before int64;
+- [x] 1.1 `internal/store/queries.go`: `EventFilter{Actor, Kind, SubjectPrefix, Since, Until string; Before int64;
       Limit int}` and `Events(ctx, filter)` with keyset `id DESC`; keep `RecentEvents` as a thin wrapper so
       existing callers and tests stay green.
       Evidence: store test with 5 rows, page size 2 — pages `[5,4]`, `[3,2]`, `[1]`, cursor empty at the end, and a
       filter by actor and by subject prefix.
-- [ ] 1.2 `internal/web/fleet.go`: parse and validate the parameters; unknown parameter → `400 unsupported filter`;
+- [x] 1.2 `internal/web/fleet.go`: parse and validate the parameters; unknown parameter → `400 unsupported filter`;
       unparseable time → `400`; `limit` clamped 1..500 as today. `GET /api/events/:id` → 404 when absent.
       Evidence: handler tests for the three 400s, the 404, and a happy page whose `next_before` is asserted.
-- [ ] 1.3 The 400s are sent without touching the store: assert the fake store recorded zero calls.
+- [x] 1.3 The 400s are sent without touching the store: assert the fake store recorded zero calls.
 
 ## 2. Screen (builder, blocked by 1)
 

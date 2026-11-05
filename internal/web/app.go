@@ -84,6 +84,7 @@ func New(cfg Config) (*fiber.App, error) {
 	api.Get("/seats", fleet.Seats)
 	api.Get("/seats/:session/tail", fleet.SeatTail)
 	api.Get("/events", fleet.Events)
+	api.Get("/events/:id", fleet.Event)
 	api.Get("/stream", hub.Stream)
 	// Projects routes
 	RegisterProjectsRoutes(api, cfg, cfg.ConfigPath)
