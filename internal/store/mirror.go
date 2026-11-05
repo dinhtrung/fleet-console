@@ -243,6 +243,7 @@ type ProjectInput struct {
 	DefaultBranch  string
 	Rig            string
 	Rigs           []string
+	RigTiers       []RigTier
 	RigTemplate    string
 	ConcurrencyCap int
 	Enabled        bool
@@ -263,11 +264,15 @@ func (s *Store) CreateProject(ctx context.Context, in ProjectInput) (int64, erro
 	if len(rigs) > 0 {
 		firstRig = rigs[0]
 	}
+	rigsJSON := encodeRigs(rigs)
+	if len(in.RigTiers) > 0 {
+		rigsJSON = encodeRigTiers(in.RigTiers)
+	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO project (key, name, forge_kind, forge_project, default_branch, rig, rigs_json, rig_template,
 		                     concurrency_cap, enabled, onhold, gate_cmd)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		in.Key, in.Name, in.ForgeKind, in.ForgeProject, in.DefaultBranch, firstRig, encodeRigs(rigs), in.RigTemplate,
+		in.Key, in.Name, in.ForgeKind, in.ForgeProject, in.DefaultBranch, firstRig, rigsJSON, in.RigTemplate,
 		in.ConcurrencyCap, boolInt(in.Enabled), boolInt(in.OnHold), nullString(in.GateCmd))
 	if err != nil {
 		return 0, fmt.Errorf("store: create project: %w", err)

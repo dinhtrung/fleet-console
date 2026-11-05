@@ -20,12 +20,12 @@
 
 ## 2. The fill order (builder 1, after 1)
 
-- [ ] 2.1 `internal/decide`: group free seats by the `@rig` suffix of the session name; walk `Rigs` in order; apply
+- [x] 2.1 `internal/decide`: group free seats by the `@rig` suffix of the session name; walk `Rigs` in order; apply
       the trigger; expose the chosen seat. Keep `freeBuilders`/`busyBuilders` as the primitives.
       Evidence: a table test — free seat in tier 0 wins; tier 1 used on `on-full` overflow; not used when
       `on-unavailable` and tier 0 is running; used when tier 0 has zero seats; a foreign seat ignored; the cap
       counting as "full".
-- [ ] 2.2 Skip detail `tier N (spill=<trigger>: <fact>)` on every `ReasonNoFreeBuilder`, with the fact that refused
+- [x] 2.2 Skip detail `tier N (spill=<trigger>: <fact>)` on every `ReasonNoFreeBuilder`, with the fact that refused
       it. Evidence: the exact skip strings in the PR body.
 
 ## 3. Wiring and proof (builder 2, blocked by 2)
