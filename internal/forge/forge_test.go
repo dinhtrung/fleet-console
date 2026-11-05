@@ -411,6 +411,30 @@ func TestWritesAreExactlyTheFour(t *testing.T) {
 	}
 }
 
+func TestDocsOnly(t *testing.T) {
+	cases := []struct {
+		name  string
+		paths []string
+		want  bool
+	}{
+		{"markdown only", []string{"docs/run.md", "README.md"}, true},
+		{"openspec spec text", []string{"openspec/specs/pools/spec.md"}, true},
+		{"openspec change set with metadata", []string{
+			"openspec/changes/archive/2026-11-05-x/.openspec.yaml",
+			"openspec/changes/archive/2026-11-05-x/specs/pools/spec.md",
+		}, true},
+		{"code beside docs", []string{"openspec/specs/pools/spec.md", "internal/forge/forge.go"}, false},
+		{"no paths", nil, false},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := DocsOnly(test.paths); got != test.want {
+				t.Fatalf("DocsOnly(%v) = %v, want %v", test.paths, got, test.want)
+			}
+		})
+	}
+}
+
 func TestHeadGreenRules(t *testing.T) {
 	cases := []struct {
 		name   string
