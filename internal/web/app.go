@@ -10,6 +10,7 @@ import (
 
 	"github.com/dinhtrung/fleet-console/internal/configfile"
 	"github.com/dinhtrung/fleet-console/internal/forge"
+	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/dinhtrung/fleet-console/internal/webui"
@@ -39,6 +40,12 @@ type Config struct {
 	// output. Nil means the setup endpoint answers 500: a test supplies a fake,
 	// the binary supplies the real runner.
 	SetupExec func(ctx context.Context, name string, args ...string) (string, error)
+	// WebhookSecret is the shared secret a forge signs deliveries with. Empty leaves
+	// the receiver off: the route answers 404 and reads no body (design D3).
+	WebhookSecret string
+	// Waker is the mirror loop's wake channel. Nil means no loop is running in this
+	// process (the one-shot commands); a verified delivery still answers 202.
+	Waker *mirror.Waker
 }
 
 // New builds the HTTP app. /api/health is open; every other /api route needs
@@ -74,6 +81,11 @@ func New(cfg Config) (*fiber.App, error) {
 	app.Post("/logout", logout)
 	app.Post("/api/session", sessionCreate(cfg.Token))
 	app.Delete("/api/session", sessionDelete)
+	// The forge receiver sits on the app, not the bearer group: a forge cannot
+	// present the board's token, so the HMAC is the whole credential. Registering it
+	// here also means bearerAuth never runs for it.
+	app.Post("/api/hooks/forge", ForgeHook{Secret: cfg.WebhookSecret, Waker: cfg.Waker}.Handle)
+
 	api := app.Group("/api", bearerAuth(cfg.Token))
 	api.Get("/compat", func(c fiber.Ctx) error {
 		return c.JSON(compat(c.Context()))

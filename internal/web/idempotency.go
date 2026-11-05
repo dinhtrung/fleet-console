@@ -42,9 +42,12 @@ func idempotency() fiber.Handler {
 	ledger := newIdemLedger()
 	return func(c fiber.Ctx) error {
 		// Session endpoints are idempotent by nature and are reached by a plain
-		// HTML form, which cannot set a header.
+		// HTML form, which cannot set a header. The forge receiver is the same case
+		// from the other direction: a forge signs its delivery with an HMAC and
+		// cannot know a board header, and its own signature already makes a replay
+		// harmless — a repeated delivery sends a wake that the next tick coalesces.
 		switch c.Path() {
-		case "/login", "/logout", "/api/session":
+		case "/login", "/logout", "/api/session", "/api/hooks/forge":
 			return c.Next()
 		}
 		switch c.Method() {

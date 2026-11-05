@@ -725,6 +725,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	lifecycle := act.NewLifecycle(eff.RigLifecycle, db, rig.NewAdapter(rigRunner), func(format string, args ...any) {
 		fmt.Fprintf(stderr, "%s\n", fmt.Sprintf(format, args...))
 	})
+	// The waker is how an HTTP delivery reaches this loop: the receiver sends, the
+	// loop selects on the channel. Built before the loop so the web server holds the
+	// same one.
+	waker := mirror.NewWaker()
+
 	go (&mirror.Mirror{
 		Store: db, Rig: rig.NewAdapter(rigRunner),
 		ProjectTimeout: mirrorTimeouts(eff),
@@ -922,8 +927,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			busy, _ := mirror.Busy(read)
 			return busy
 		},
-		// nil until #170's webhook receiver supplies a Waker.Channel().
-		nil,
+		waker.Channel(),
 	)
 
 	app, err := web.New(web.Config{
@@ -953,6 +957,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 			output, err := cmd.CombinedOutput()
 			return string(output), err
 		},
+		// The forge receiver. An empty secret leaves the route answering 404, so a box
+		// that has not configured one gains no public route on upgrade.
+		WebhookSecret: eff.WebhookSecret,
+		Waker:         waker,
 	})
 	if err != nil {
 		return err
