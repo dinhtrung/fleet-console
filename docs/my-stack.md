@@ -88,7 +88,9 @@ No LLM in dispatch. The script owns no token: every call goes through the forge 
 
 ### Ordering rules (the whole contract)
 
-1. **The work unit is a task**, never an epic (an issue with children).
+1. **The work unit is a task**, never an epic (an issue with children). **Label the container `type::epic` when
+   you create it**: the label is the only fact that says "epic" before the first child is linked, and without it a
+   tick in that window dispatches the epic body as a task (`forge.EpicLabel`).
 2. **Candidates**: open tasks whose parent epic is open, plus parentless tasks.
 3. **Blocking**: a task waits while a *related* item with a **smaller** id is open. Forge links are symmetric, so
    checking both directions deadlocks the chain — check one.

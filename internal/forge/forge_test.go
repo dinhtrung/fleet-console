@@ -748,3 +748,56 @@ func TestGitLabSubIssuesKeepsClosedChildrenAndDefaultsUnknownToOpen(t *testing.T
 		}
 	}
 }
+
+// TestGitHubEpicLabelBeatsAMissingChildList pins the race that dispatched an
+// epic as a task: the item exists, carries type::epic, and has no sub-issue
+// yet, so the summary says zero and the child list is empty.
+func TestGitHubEpicLabelBeatsAMissingChildList(t *testing.T) {
+	root := t.TempDir()
+	fixture := `[
+  {"number": 20, "title": "Epic: a container", "state": "open",
+   "html_url": "https://github.com/dinhtrung/fleet-console/issues/20",
+   "labels": [{"name": "type::epic"}],
+   "sub_issues_summary": {"total": 0}},
+  {"number": 21, "title": "a task", "state": "open",
+   "html_url": "https://github.com/dinhtrung/fleet-console/issues/21",
+   "labels": [{"name": "p2"}],
+   "sub_issues_summary": {"total": 0}}
+]`
+	if err := os.WriteFile(filepath.Join(root, "issues.json"), []byte(fixture), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	runner := &fixtureRunner{root: root, exact: map[string]string{
+		"gh api repos/dinhtrung/fleet-console/issues?state=open&per_page=100&page=1": "issues.json",
+	}}
+	adapter := NewGitHub("dinhtrung/fleet-console", runner, &Budget{Max: 100})
+	items, err := adapter.Items(context.Background(), Timeout{})
+	if err != nil {
+		t.Fatalf("Items: %v", err)
+	}
+	byNumber := map[int]Item{}
+	for _, item := range items {
+		byNumber[item.Number] = item
+	}
+	if got := byNumber[20].Kind; got != KindEpic {
+		t.Fatalf("#20 kind = %q, want epic from the label alone", got)
+	}
+	if got := byNumber[21].Kind; got != KindTask {
+		t.Fatalf("#21 kind = %q, want task", got)
+	}
+	var epicCalls, taskCalls int
+	for _, call := range runner.calls {
+		switch {
+		case strings.Contains(call, "issues/20/sub_issues"):
+			epicCalls++
+		case strings.Contains(call, "issues/21/sub_issues"):
+			taskCalls++
+		}
+	}
+	if epicCalls != 1 {
+		t.Fatalf("sub_issues calls for the label epic = %d, want exactly 1", epicCalls)
+	}
+	if taskCalls != 0 {
+		t.Fatalf("sub_issues calls for the task = %d, want 0", taskCalls)
+	}
+}

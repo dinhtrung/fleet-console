@@ -36,6 +36,12 @@ const (
 	KindTask ItemKind = "task"
 )
 
+// EpicLabel marks an item as a container in the forge itself. It is read because
+// an epic exists before its first child does: between `gh issue create` and the
+// first `addSubIssue` no sub-issue field can tell the two apart, and with `act`
+// on a tick in that window dispatches the epic as a task.
+const EpicLabel = "type::epic"
+
 // State is the forge's item state.
 const (
 	StateOpen   = "open"
