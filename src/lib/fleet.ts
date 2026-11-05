@@ -93,6 +93,30 @@ export interface EventRow {
   stdout_hash: string;
 }
 
+/** One row of the app's own event log, exactly as `GET /api/events` returns it. The audit screen
+ *  renders these fields and no others: `actor`/`kind` are exact matches and `subject` is a prefix,
+ *  because that is what the server's closed filter set means. */
+export type AuditEvent = EventRow;
+
+/** A keyset page. `next_before` is the smallest id in the page when the page is full and 0 on the
+ *  last page, so the screen offers a further page only when it is non-zero. */
+export interface AuditPage {
+  events: AuditEvent[];
+  next_before: number;
+}
+
+/** The server's closed filter set. A field the server does not know is a 400, so this type carries
+ *  only the five filters plus the keyset cursor and the page size. */
+export interface EventFilter {
+  actor?: string;
+  kind?: string;
+  subject?: string;
+  since?: string;
+  until?: string;
+  before?: number;
+  limit?: number;
+}
+
 export interface Dispatch {
   id: number;
   project_id: number;
@@ -350,7 +374,24 @@ export const getSeatTail = (session: string, lines = 24) =>
     `/api/seats/${encodeURIComponent(session)}/tail?lines=${lines}`,
   );
 
-export const getEvents = () => request<{ events: EventRow[] }>("/api/events?limit=50");
+/** The newest page of the event log, or the page before a cursor. Every filter the server accepts
+ *  is passed through as a query parameter; an empty value is omitted so "no filter" is the absence
+ *  of the parameter rather than an empty string the server would have to interpret. */
+export const listEvents = (filter: EventFilter = {}) => {
+  const params = new URLSearchParams();
+  for (const key of ["actor", "kind", "subject", "since", "until"] as const) {
+    const value = filter[key];
+    if (value) params.set(key, value);
+  }
+  if (filter.before && filter.before > 0) params.set("before", String(filter.before));
+  if (filter.limit && filter.limit > 0) params.set("limit", String(filter.limit));
+  const query = params.toString();
+  return request<AuditPage>(`/api/events${query ? `?${query}` : ""}`);
+};
+
+/** One event by id. A missing row is a 404, which the screen renders as "no such audit event"
+ *  rather than as a failed read. */
+export const getEvent = (id: number) => request<AuditEvent>(`/api/events/${id}`);
 
 export function shortTime(value?: string): string {
   if (!value) return "—";
