@@ -71,6 +71,12 @@ func (g *GitHub) Items(ctx context.Context, timeout Timeout) ([]Item, error) {
 		}
 		byNumber[issue.Number] = item
 		numbers = append(numbers, issue.Number)
+		if hasEpicLabel(labels) {
+			// The label is the only fact that says "container" before the first
+			// child is linked; the summary and the child list catch it later.
+			item.Kind = KindEpic
+			epics[issue.Number] = true
+		}
 		if issue.SubIssuesSummary != nil {
 			hasSummary[issue.Number] = true
 			if issue.SubIssuesSummary.Total > 0 {
@@ -215,6 +221,15 @@ func (g *GitHub) SubIssues(ctx context.Context, number int) ([]Item, error) {
 		})
 	}
 	return items, nil
+}
+
+func hasEpicLabel(labels []string) bool {
+	for _, label := range labels {
+		if label == EpicLabel {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *GitHub) subIssues(ctx context.Context, number int) ([]ghChild, error) {
