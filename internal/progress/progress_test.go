@@ -42,7 +42,7 @@ func testConfig() *config.Effective {
 	project := config.Project{
 		Key: "fleet-console", Name: "fleet-console", Forge: "github",
 		Repo: "dinhtrung/fleet-console", DefaultBranch: "main",
-		Rigs: []string{"fleet-console"}, ConcurrencyCap: 2,
+		Rigs: config.NamedRigs("fleet-console"), ConcurrencyCap: 2,
 	}
 	project.Paths.Main = "/home/dinhtrung/develop/fleet-console"
 	project.Paths.Worktrees = "/home/dinhtrung/develop"
@@ -460,7 +460,7 @@ func TestIdleSeatReasons(t *testing.T) {
 			project := testProject()
 			project.Rigs = []string{"rig"}
 			eff := testConfig()
-			eff.Projects[0].Rigs = []string{"rig"}
+			eff.Projects[0].Rigs = config.NamedRigs("rig")
 			read := mirror.TickResult{At: fixedNow, Projects: map[string]mirror.ProjectResult{
 				"fleet-console": {Items: tc.items, Seats: tc.seats()},
 			}}

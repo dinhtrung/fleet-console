@@ -701,7 +701,7 @@ func TestFromConfigReadsTheRow(t *testing.T) {
 	row.Forge = "github"
 	row.Repo = "o/r"
 	row.DefaultBranch = "main"
-	row.Rigs = []string{"second", "third"}
+	row.Rigs = config.NamedRigs("second", "third")
 	row.Paths.Main = "/tmp/main"
 	p := FromConfig(row)
 	if p.Rig != "second" {

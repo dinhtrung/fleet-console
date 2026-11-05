@@ -214,7 +214,7 @@ func countedDecisionCount(t *testing.T, list string) (int, bool) {
 	eff := &config.Effective{Act: true, Projects: []config.Project{{
 		Key: "fleet-console", Name: "fleet-console", Forge: "github",
 		Repo: "dinhtrung/fleet-console", DefaultBranch: "main",
-		Rigs: []string{"fleet-console"}, ConcurrencyCap: 2,
+		Rigs: config.NamedRigs("fleet-console"), ConcurrencyCap: 2,
 	}}}
 	snap := progress.Build(read, nil, project, eff, progress.Roster{Plan: &decide.Plan{}})
 	return snap.Counts.OpenDecisions, snap.Quiet()

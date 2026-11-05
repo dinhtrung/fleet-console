@@ -76,7 +76,7 @@ func ApplyOne(ctx context.Context, db *store.Store, project config.Project, sync
 	result, _, err := db.UpsertProject(ctx, store.UpsertInput{
 		Project: store.ProjectInput{
 			Key: project.Key, Name: name, ForgeKind: project.Forge, ForgeProject: project.Repo,
-			DefaultBranch: project.DefaultBranch, Rig: project.Rig, Rigs: project.Rigs, RigTemplate: project.RigTemplate,
+			DefaultBranch: project.DefaultBranch, Rig: project.Rig, Rigs: project.Rigs.Names(), RigTemplate: project.RigTemplate,
 			ConcurrencyCap: project.ConcurrencyCap, Enabled: true, OnHold: onhold, GateCmd: project.GateCmd,
 		},
 		LabelsJSON: string(labels), RepoKey: "main",
