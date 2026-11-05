@@ -12,18 +12,9 @@ import { SeatsScreen } from "./screens/SeatsScreen";
 import { ProjectsScreen } from "./screens/ProjectsScreen";
 import { CultureScreen } from "./screens/CultureScreen";
 import { TaskDrawerScreen } from "./screens/TaskDrawerScreen";
-import { UserListScreen } from "./screens/UserListScreen";
-import { UserDetailScreen } from "./screens/UserDetailScreen";
-import { RoleListScreen } from "./screens/RoleListScreen";
-import { RoleDetailScreen } from "./screens/RoleDetailScreen";
-import { OrganizationListScreen } from "./screens/OrganizationListScreen";
-import { OrganizationDetailScreen } from "./screens/OrganizationDetailScreen";
-import { SessionListScreen } from "./screens/SessionListScreen";
 import { AuditListScreen } from "./screens/AuditListScreen";
 import { AuditDetailScreen } from "./screens/AuditDetailScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
-import { ApiKeysScreen } from "./screens/ApiKeysScreen";
-import { FeatureFlagsScreen } from "./screens/FeatureFlagsScreen";
 import { Button, ErrorState, NotFoundState } from "./components/ui";
 
 /** The shell wraps every screen. The default landing surface used to be read from a workspace
@@ -80,49 +71,6 @@ const taskDrawerRoute = createRoute({
   component: TaskDrawerScreen,
 });
 
-const usersRoute = createRoute({ getParentRoute: () => rootRoute, path: "/users", component: UserListScreen });
-
-const userDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/users/$userId",
-  component: function UserDetailRoute() {
-    const { userId } = userDetailRoute.useParams();
-    return <UserDetailScreen userId={userId} />;
-  },
-});
-
-const rolesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/roles", component: RoleListScreen });
-
-const roleDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/roles/$roleId",
-  component: function RoleDetailRoute() {
-    const { roleId } = roleDetailRoute.useParams();
-    return <RoleDetailScreen roleId={roleId} />;
-  },
-});
-
-const organizationsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/organizations",
-  component: OrganizationListScreen,
-});
-
-const organizationDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/organizations/$orgId",
-  component: function OrganizationDetailRoute() {
-    const { orgId } = organizationDetailRoute.useParams();
-    return <OrganizationDetailScreen orgId={orgId} />;
-  },
-});
-
-const sessionsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/sessions",
-  component: SessionListScreen,
-});
-
 const auditRoute = createRoute({ getParentRoute: () => rootRoute, path: "/audit", component: AuditListScreen });
 
 const auditDetailRoute = createRoute({
@@ -140,18 +88,6 @@ const settingsRoute = createRoute({
   component: SettingsScreen,
 });
 
-const apiKeysRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/api-keys",
-  component: ApiKeysScreen,
-});
-
-const featureFlagsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/feature-flags",
-  component: FeatureFlagsScreen,
-});
-
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
   projectsRoute,
@@ -159,18 +95,9 @@ const routeTree = rootRoute.addChildren([
   decisionsRoute,
   seatsRoute,
   taskDrawerRoute,
-  usersRoute,
-  userDetailRoute,
-  rolesRoute,
-  roleDetailRoute,
-  organizationsRoute,
-  organizationDetailRoute,
-  sessionsRoute,
   auditRoute,
   auditDetailRoute,
   settingsRoute,
-  apiKeysRoute,
-  featureFlagsRoute,
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: false });

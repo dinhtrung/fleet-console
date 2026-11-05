@@ -55,6 +55,9 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
+      # The guard beside lint: no screen may import the mock module. A screen that reads
+      # fixtures ships fabricated data as if it were real.
+      - run: npm run check:screens
       - run: npm run build
 
   openspec:
