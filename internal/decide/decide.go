@@ -157,8 +157,12 @@ type Dispatch struct {
 
 // Result is the whole plan: deterministic for a snapshot.
 type Result struct {
-	Status     Status     `json:"status"`
+	Status Status `json:"status"`
+	// Free is the number of seats that could take work. Ready is how many items
+	// the rules found dispatchable, counted before the concurrency limit: a rig
+	// with Ready > 0 and Free == 0 has work and no seat to take it (design D1).
 	Free       int        `json:"free"`
+	Ready      int        `json:"ready"`
 	Dispatches []Dispatch `json:"dispatches"`
 	Skips      []Skip     `json:"skips"`
 	Error      string     `json:"error,omitempty"`
@@ -281,6 +285,7 @@ func Decide(s Snapshot) Result {
 		ready = append(ready, item)
 	}
 
+	result.Ready = len(ready)
 	if len(ready) == 0 {
 		result.Status = StatusNothing
 		return result

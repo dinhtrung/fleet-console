@@ -83,8 +83,11 @@ type Intent struct {
 
 // Plan is one tick's intents and the events they would write.
 type Plan struct {
-	Status  Status   `json:"status"`
-	Free    int      `json:"free"`
+	Status Status `json:"status"`
+	Free   int    `json:"free"`
+	// Ready is the dispatchable item count before the concurrency limit, the
+	// demand signal the lifecycle start rule reads (design D1).
+	Ready   int      `json:"ready"`
 	Skips   []Skip   `json:"skips"`
 	Intents []Intent `json:"intents"`
 	Events  []Event  `json:"events"`
@@ -108,7 +111,8 @@ func PlanTick(s Snapshot, now time.Time) Plan {
 	}
 
 	result := Decide(s)
-	plan.Status, plan.Free, plan.Skips, plan.Error = result.Status, result.Free, result.Skips, result.Error
+	plan.Status, plan.Free, plan.Ready = result.Status, result.Free, result.Ready
+	plan.Skips, plan.Error = result.Skips, result.Error
 	for _, dispatch := range result.Dispatches {
 		subject := fmt.Sprintf("#%d", dispatch.Number)
 		event := Event{Actor: "decide", Kind: "dispatch.create", Subject: subject, Detail: "seat " + dispatch.Seat}

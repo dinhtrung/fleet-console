@@ -215,3 +215,10 @@ func (d Deps) withDefaults(eff config.Effective) Deps {
 func specDir(home, rigName string) string {
 	return filepath.Join(home, ".openrig", "specs", "rigs", rigName)
 }
+
+// SpecPath is the rig.yaml a launch names, `<home>/.openrig/specs/rigs/<rig>/
+// rig.yaml`. It is the one convention WriteSpecDir writes and teardown archives
+// from, so a start that cannot find it is a missing spec rather than a wrong path.
+func SpecPath(home, rigName string) string {
+	return filepath.Join(specDir(home, rigName), "rig.yaml")
+}

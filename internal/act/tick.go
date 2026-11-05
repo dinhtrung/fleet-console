@@ -30,6 +30,10 @@ type TickInput struct {
 	Plan         decide.Plan
 	WorktreeRoot string
 	Now          func() time.Time
+	// LifecycleFailed names, per rig, the launch failure this tick hit: every
+	// dispatch intent on that rig is skipped with the same named reason rather
+	// than writing a worktree and a row no seat will ever claim (design D5).
+	LifecycleFailed map[string]string
 	// OnDecision receives every decision this tick raised, so the caller can
 	// put it on somebody's phone. It is called after the row exists. It cannot
 	// fail the tick: a dead transport is not a dead fleet (design.md §5), so a
@@ -216,6 +220,14 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		}
 	}
 
+	// A rig whose launch failed this tick has nothing to claim its work: name the
+	// failure once, before the dispatch loop, whatever the plan carried. The skip
+	// is the one line the operator sees, and the issue is retried next tick.
+	for _, rigName := range projectRigs(in.Project) {
+		if failure, ok := in.LifecycleFailed[rigName]; ok {
+			report.Skipped = append(report.Skipped, fmt.Sprintf("rig %s up: %s", rigName, failure))
+		}
+	}
 	for _, intent := range in.Plan.Intents {
 		if intent.Kind != decide.IntentDispatch {
 			continue
@@ -225,10 +237,19 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d is not in the mirror", intent.Item))
 			continue
 		}
+		if rigName := rigFromSeat(intent.Seat); rigName != "" {
+			if _, ok := in.LifecycleFailed[rigName]; ok {
+				continue
+			}
+		}
 		if liveRowNames(in.Rows, intent.Item) {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d has a live row", intent.Item))
 			continue
 		}
+		// A change request on this item is already work in flight. decide's
+		// branch_open_cr only sees a CR whose branch name encodes the number, so a
+		// CR on a differently named branch reaches here and must not be dispatched
+		// twice; it also counts in Result.Ready, which can start the rig.
 		if changeRequestFor(in.CRs, intent.Item) != nil {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d already has a change request", intent.Item))
 			continue
@@ -265,6 +286,24 @@ func itemFor(items []forge.Item, number int) *forge.Item {
 		}
 	}
 	return nil
+}
+
+// projectRigs is every rig a project is bound to, deduplicated in order.
+func projectRigs(project store.ProjectRow) []string {
+	rigs := project.Rigs
+	if len(rigs) == 0 && project.Rig != "" {
+		rigs = []string{project.Rig}
+	}
+	seen := make(map[string]bool, len(rigs))
+	out := make([]string, 0, len(rigs))
+	for _, name := range rigs {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
 }
 
 func changeRequestFor(requests []forge.ChangeRequest, item int) *forge.ChangeRequest {

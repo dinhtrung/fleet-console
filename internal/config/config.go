@@ -52,6 +52,9 @@ type Project struct {
 	GateCmd string            `yaml:"gate_cmd"`
 	Labels  map[string]string `yaml:"labels"`
 	OnHold  *bool             `yaml:"onhold"`
+	// Lifecycle is this project's per-project switch: `on` or `off`. An absent
+	// key inherits rig_lifecycle.enabled; anything else is refused at load.
+	Lifecycle string `yaml:"lifecycle,omitempty"`
 	// CultureFile is where this project's rig culture lives. Unset means the
 	// board derives it from the first rig; the loader resolves ~ here so the
 	// running service never has to guess at a home directory.
@@ -75,7 +78,11 @@ type File struct {
 	NotifyInterval Duration       `yaml:"notify_interval"`
 	ProjectTimeout ProjectTimeout `yaml:"project_timeout"`
 	Act            bool           `yaml:"act"`
-	Projects       []Project      `yaml:"projects"`
+	// RigLifecycle is the opt-in that lets the app stop an idle rig and start a
+	// stopped one. A pointer so "no block" is distinguishable from "block with
+	// defaults": an upgraded box keeps today's behaviour (design D9).
+	RigLifecycle *Lifecycle `yaml:"rig_lifecycle"`
+	Projects     []Project  `yaml:"projects"`
 }
 
 // ProjectTimeout is the file form of the per-project read deadline:
@@ -89,6 +96,49 @@ type ProjectTimeout struct {
 // Timeouts is the resolved per-project read deadline.
 type Timeouts struct {
 	Base, PerItem, Ceiling time.Duration
+}
+
+// Lifecycle is the rig_lifecycle file block: the opt-in, how long a rig stays
+// quiet before it is stopped, and the ceiling the poll backs off to (design D7).
+type Lifecycle struct {
+	Enabled     bool     `yaml:"enabled"`
+	IdleAfter   Duration `yaml:"idle_after"`
+	IdlePollMax Duration `yaml:"idle_poll_max"`
+}
+
+// LifecycleSettings is the resolved rig_lifecycle block.
+type LifecycleSettings struct {
+	Enabled     bool
+	IdleAfter   time.Duration
+	IdlePollMax time.Duration
+}
+
+// ProjectLifecycle is one project's effective lifecycle value and where it came
+// from: the project's own `lifecycle:` key, or the block it inherits. It is what
+// --print-config lists per project.
+type ProjectLifecycle struct {
+	Key       string `yaml:"project"`
+	Lifecycle string `yaml:"lifecycle"` // on | off
+	Source    string `yaml:"source"`    // file | inherit
+}
+
+// LifecycleOn reports whether the app manages the named project's rigs. A key the
+// file does not name inherits the block's enabled flag, so a project absent from
+// the config is not exempted by accident.
+func (e *Effective) LifecycleOn(projectKey string) bool {
+	for _, entry := range e.Lifecycles {
+		if entry.Key == projectKey {
+			return entry.Lifecycle == "on"
+		}
+	}
+	return e.RigLifecycle.Enabled
+}
+
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }
 
 // Options are the inputs to Load.
@@ -113,6 +163,8 @@ type Effective struct {
 	NotifyInterval time.Duration // digest cadence; 0 means off
 	ProjectTimeout Timeouts
 	Act            bool
+	RigLifecycle   LifecycleSettings
+	Lifecycles     []ProjectLifecycle
 	Projects       []Project
 	ConfigPath     string
 	Sources        map[string]string
@@ -120,12 +172,14 @@ type Effective struct {
 }
 
 const (
-	defaultListen   = "127.0.0.1:8787"
-	defaultDatabase = "fleet-console.db"
-	defaultRig      = "rig"
-	defaultForge    = "gh"
-	defaultGlab     = "glab"
-	defaultTick     = 15 * time.Second
+	defaultListen      = "127.0.0.1:8787"
+	defaultDatabase    = "fleet-console.db"
+	defaultRig         = "rig"
+	defaultForge       = "gh"
+	defaultGlab        = "glab"
+	defaultTick        = 15 * time.Second
+	defaultIdleAfter   = 10 * time.Minute
+	defaultIdlePollMax = 10 * time.Minute
 )
 
 // FindPath applies the documented lookup order and returns the first existing
@@ -236,6 +290,45 @@ func Load(opts Options) (*Effective, error) {
 		tick, tickSource = parsed, "flag"
 	}
 	eff.TickInterval, eff.Sources["tick_interval"] = tick, tickSource
+
+	// rig_lifecycle is file and default only: no env var, no flag (design D9).
+	// The ceiling is refused rather than clamped when it cannot be honoured, but
+	// only when the block is actually written: a box that never opts in must
+	// behave exactly as it did before, whatever its tick_interval.
+	enabled := false
+	idleAfter, idlePollMax := defaultIdleAfter, defaultIdlePollMax
+	eff.Sources["rig_lifecycle.enabled"] = "default"
+	eff.Sources["rig_lifecycle.idle_after"] = "default"
+	eff.Sources["rig_lifecycle.idle_poll_max"] = "default"
+	if file.RigLifecycle != nil {
+		enabled = file.RigLifecycle.Enabled
+		eff.Sources["rig_lifecycle.enabled"] = "file"
+		if file.RigLifecycle.IdleAfter > 0 {
+			idleAfter = time.Duration(file.RigLifecycle.IdleAfter)
+			eff.Sources["rig_lifecycle.idle_after"] = "file"
+		}
+		if file.RigLifecycle.IdlePollMax > 0 {
+			idlePollMax = time.Duration(file.RigLifecycle.IdlePollMax)
+			eff.Sources["rig_lifecycle.idle_poll_max"] = "file"
+		}
+		if idlePollMax < tick {
+			return nil, fmt.Errorf("config: rig_lifecycle.idle_poll_max %s is below tick_interval %s",
+				idlePollMax, tick)
+		}
+	}
+	eff.RigLifecycle = LifecycleSettings{Enabled: enabled, IdleAfter: idleAfter, IdlePollMax: idlePollMax}
+	eff.Lifecycles = make([]ProjectLifecycle, 0, len(file.Projects))
+	for _, project := range file.Projects {
+		if project.Lifecycle == "" {
+			eff.Lifecycles = append(eff.Lifecycles, ProjectLifecycle{
+				Key: project.Key, Lifecycle: onOff(enabled), Source: "inherit",
+			})
+			continue
+		}
+		eff.Lifecycles = append(eff.Lifecycles, ProjectLifecycle{
+			Key: project.Key, Lifecycle: project.Lifecycle, Source: "file",
+		})
+	}
 
 	// notify_interval is the optional digest cadence. Zero means off, which is
 	// the default: an unattended run should not start talking on its own.
@@ -391,10 +484,16 @@ func (e *Effective) Print() ([]byte, error) {
 			PerItem string `yaml:"per_item"`
 			Ceiling string `yaml:"ceiling"`
 		} `yaml:"project_timeout"`
-		Act      bool              `yaml:"act"`
-		Projects []Project         `yaml:"projects,omitempty"`
-		Sources  map[string]string `yaml:"sources"`
-		Warnings []string          `yaml:"warnings,omitempty"`
+		Act          bool `yaml:"act"`
+		RigLifecycle struct {
+			Enabled     bool   `yaml:"enabled"`
+			IdleAfter   string `yaml:"idle_after"`
+			IdlePollMax string `yaml:"idle_poll_max"`
+		} `yaml:"rig_lifecycle"`
+		Lifecycles []ProjectLifecycle `yaml:"lifecycles,omitempty"`
+		Projects   []Project          `yaml:"projects,omitempty"`
+		Sources    map[string]string  `yaml:"sources"`
+		Warnings   []string           `yaml:"warnings,omitempty"`
 	}
 	out := view{
 		Config: e.ConfigPath, Listen: e.Listen, Database: e.Database, TokenFile: e.TokenFile,
@@ -405,6 +504,10 @@ func (e *Effective) Print() ([]byte, error) {
 	out.Timeout.Base = e.ProjectTimeout.Base.String()
 	out.Timeout.PerItem = e.ProjectTimeout.PerItem.String()
 	out.Timeout.Ceiling = e.ProjectTimeout.Ceiling.String()
+	out.RigLifecycle.Enabled = e.RigLifecycle.Enabled
+	out.RigLifecycle.IdleAfter = e.RigLifecycle.IdleAfter.String()
+	out.RigLifecycle.IdlePollMax = e.RigLifecycle.IdlePollMax.String()
+	out.Lifecycles = e.Lifecycles
 	if out.Config == "" {
 		out.Config = "(none)"
 	}
@@ -487,6 +590,7 @@ func ValidateProject(p *Project, dir, home string) error {
 	p.RepoURL = strings.TrimSpace(p.RepoURL)
 	p.Name = strings.TrimSpace(p.Name)
 	p.DefaultBranch = strings.TrimSpace(p.DefaultBranch)
+	p.Lifecycle = strings.TrimSpace(p.Lifecycle)
 
 	switch {
 	case p.Key == "":
@@ -541,6 +645,11 @@ func ValidateProject(p *Project, dir, home string) error {
 		p.Runtime = canonical
 	default:
 		add("runtime", "runtime %q is not one of %s", strings.TrimSpace(p.Runtime), rig.RuntimesText)
+	}
+	switch p.Lifecycle {
+	case "", "on", "off":
+	default:
+		add("lifecycle", "lifecycle must be on or off, not %q", p.Lifecycle)
 	}
 	if p.RigTemplate == "" {
 		p.RigTemplate = "default"

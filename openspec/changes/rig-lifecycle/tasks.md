@@ -19,16 +19,16 @@
 
 ## 1. Config and the demand signal (builder 1)
 
-- [ ] 1.1 `internal/config/config.go`: add the `rig_lifecycle` block to the file shape and the effective settings
+- [x] 1.1 `internal/config/config.go`: add the `rig_lifecycle` block to the file shape and the effective settings
       with defaults `enabled: false`, `idle_after: 10m`, `idle_poll_max: 10m`; refuse `idle_poll_max <
       tick_interval` at load, naming both values and the key. File and default only — no env var, no flag.
       `--print-config` prints the three keys with their sources (`config.go` already renders `Sources`).
       Evidence: config tests for the defaults, for the block from a file, and for the refusal, quoted in the PR.
-- [ ] 1.2 Per-project `lifecycle: on|off`: decode strictly (an unknown value is an error, not "on"), store on
+- [x] 1.2 Per-project `lifecycle: on|off`: decode strictly (an unknown value is an error, not "on"), store on
       `config.Project`, and resolve the effective value in `--print-config`. A project without the key inherits
       `rig_lifecycle.enabled`.
       Evidence: two tests — a project that opts out and one that inherits — plus the printed line.
-- [ ] 1.3 `internal/decide/decide.go`: add `Result.Ready int`, set to `len(ready)` **before** the concurrency limit
+- [x] 1.3 `internal/decide/decide.go`: add `Result.Ready int`, set to `len(ready)` **before** the concurrency limit
       is applied. Nothing else in `Decide` changes — the dispatch rules and every existing skip reason stay as they
       are, which is what `internal/decide/*_test.go` already pins.
       Evidence: one test with three ready items and one free seat asserting `Ready=3, Free=1, len(Dispatches)=1`;
@@ -36,12 +36,12 @@
 
 ## 2. The pure decision (builder 1)
 
-- [ ] 2.1 `internal/act/lifecycle.go`: `LifecycleInput` (per rig: bound projects, each with fresh-read, ready
+- [x] 2.1 `internal/act/lifecycle.go`: `LifecycleInput` (per rig: bound projects, each with fresh-read, ready
       count, live rows; the running seat count; the projects' lifecycle setting; `idle_after`; the tick time and
       the previous quiet stamps) and `DecideLifecycle(in) []LifecycleAction` with actions `start` (rig, spec path)
       and `stop` (rig). Pure: no I/O, no clock, no globals, so a table test owns the whole matrix.
       Evidence: `go test ./internal/act -run Lifecycle` with the case names.
-- [ ] 2.2 The table must cover, as separate cases: start on `Ready>0 && running==0`; no start when running>0; no
+- [x] 2.2 The table must cover, as separate cases: start on `Ready>0 && running==0`; no start when running>0; no
       start when the project opted out; no start when the read is stale; start on a claimable row with no ready
       item; stop after the window; no stop one tick before the window; no stop when a live row is addressed to a
       seat on the rig; no stop with a stale read; no stop with `enabled=false`; two projects sharing one rig, one
@@ -50,21 +50,21 @@
 
 ## 3. Executing it in the tick (builder 1, after 1.3 and 2.1)
 
-- [ ] 3.1 One small interface over the adapter (`Up(ctx, spec)`, `Down(ctx, name)`) plus the seat count the tick
+- [x] 3.1 One small interface over the adapter (`Up(ctx, spec)`, `Down(ctx, name)`) plus the seat count the tick
       already reads, so `internal/act` stays testable without a real rig. Wire it in `cmd/fleet-console/main.go`
       where `rig.NewAdapter` is already constructed.
-- [ ] 3.2 Start runs **before** any dispatch write for that rig. A failed `Up` skips each dispatch on that rig with
+- [x] 3.2 Start runs **before** any dispatch write for that rig. A failed `Up` skips each dispatch on that rig with
       `act-skip: <key>: rig <rig> up: <err>` and creates no worktree and no queue row. Put the guard at the top of
       the dispatch loop in `internal/act/actions.go` (or `tick.go` where the loop is driven), not inside `ExecGit`.
       Evidence: a fake rig that fails `Up` and a fake actions recorder asserting zero worktree and zero
       `queue create` calls.
-- [ ] 3.3 Stop runs after the dispatch phase, so a tick that both merges the last item and finds the window elapsed
+- [x] 3.3 Stop runs after the dispatch phase, so a tick that both merges the last item and finds the window elapsed
       stops on the same tick rather than the next. One log line
       `rig-lifecycle: <rig> stopped — quiet <duration>` and one `rig.stopped` audit event; `rig-lifecycle: <rig>
       started — <reason>` and `rig.started` for a start. A failure writes `rig-lifecycle: <rig> up failed: <err>`
       once per change (a `mirror.note`-shaped map), and no success audit event.
-- [ ] 3.4 The tick test asserts zero `sendMessage` calls for both actions.
-- [ ] 3.5 The spec path is `~/.openrig/specs/rigs/<rig>/rig.yaml`, the same convention `internal/preflight`
+- [x] 3.4 The tick test asserts zero `sendMessage` calls for both actions.
+- [x] 3.5 The spec path is `~/.openrig/specs/rigs/<rig>/rig.yaml`, the same convention `internal/preflight`
       already uses (`specDir`). A missing file is a start failure with that path in the message; never invent one.
 
 ## 4. The cadence (builder 2, blocked by 1.1)
