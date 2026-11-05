@@ -1,9 +1,4 @@
-/** The domain the panel administers. Every value here is authored synthetic data: no real
- *  person, company or measurement appears anywhere in this project. */
-
 export type UserStatus = "active" | "invited" | "suspended" | "deactivated";
-
-export const USER_STATUSES: UserStatus[] = ["active", "invited", "suspended", "deactivated"];
 
 export interface User {
   id: string;
@@ -135,23 +130,6 @@ export const FLAG_ENVIRONMENTS = ["production", "staging", "development"];
 
 export const FLAG_STATES: FlagState[] = ["on", "off", "gradual"];
 
-export interface ApiKeyInput {
-  name: string;
-  scopes: string[];
-  environment: ApiEnvironment;
-}
-
-export interface FeatureFlagInput {
-  key: string;
-  name: string;
-  description: string;
-  state: FlagState;
-  rollout: number;
-  environments: string[];
-  ownerId: string;
-}
-
-
 export interface Identity {
   userId: string;
   name: string;
@@ -180,15 +158,6 @@ export interface Page<T> {
   total: number;
   page: number;
   pageSize: number;
-}
-
-export interface DashboardSummary {
-  period: { from: string; to: string };
-  users: { total: number; active: number; invited: number; suspended: number; delta: number };
-  sessions: { total: number; other: number; delta: number };
-  organizations: { total: number; delta: number };
-  events: { total: number; delta: number };
-  recent: AuditEvent[];
 }
 
 export class ApiError extends Error {

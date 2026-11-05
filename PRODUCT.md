@@ -53,6 +53,28 @@ no open epic, nothing in flight, pending or on hold, and no decision waiting on 
 decision escalation is never muted: an open decision is by definition not quiet. `--notify-report` sends on demand
 even when the board is quiet, because an explicit request from the operator is not an unsolicited trigger.
 
+## Surfaces
+
+Seven screens, every one reading the service's API. The rail is Board, Decisions, Seats, Projects, Culture, Audit
+and Settings.
+
+- **Board** `/` — the queue: what is running, where, what is blocked and why.
+- **Decisions** `/decisions` — what is waiting on the operator, with its SLA.
+- **Seats** `/seats` — who is working and on what.
+- **Projects** `/projects` — the projects the app drives and their settings.
+- **Culture** `/culture` — the rig's culture document and guidance.
+- **Audit** `/audit` — the app's own event log, newest first, filterable by actor, kind and subject.
+- **Settings** `/settings` — the settings surface's writable keys, with the restart each one needs.
+
+Nine scaffold URLs are gone with no replacement, because their surfaces had no service to read: `/users`,
+`/users/:id`, `/roles`, `/roles/:id`, `/organizations`, `/organizations/:id`, `/sessions`, `/api-keys`,
+`/feature-flags`. Ten screen files were deleted to get there — Dashboard had no URL of its own, because `/` renders
+the board. An operator who bookmarked one of the nine gets the board's not-found, not a mock.
+
+Identity is still the scaffold's. The seven screens read real data, but who you are — the session, its roles and its
+permission set — still comes from the mock module in `src/mock`, and `src/auth/session.tsx` is the only consumer of
+it. That module stays until identity has a service to read, so "signed in as" is not yet a real fact.
+
 ## Who it is for
 
 The person who owns the fleets: they need one screen that answers what is running where, what is blocked and why,

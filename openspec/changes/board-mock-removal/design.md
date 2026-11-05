@@ -23,8 +23,11 @@ The rail gains `{ to: "/audit", label: "Audit", permission: "audit.read" }` and
 but only after `audit-surface` and `settings-surface` have merged, which is why this task is blocked by both. Adding
 a link to a screen that still reads mocks is the exact failure this change removes.
 
-Permissions are added where `src/access/access.tsx` declares them; a permission the module does not know fails
-closed (the item is hidden), which is the safe direction.
+Permission **ids** are declared in the permission registry (`src/mock/permissions.ts` while identity is still the
+scaffold's); `src/access/access.tsx` is the mechanism that *reads* a set — `useAccess()`/`Gate` answer `can()` against
+whatever the identity carries, and declare nothing themselves. A permission the registry does not know fails closed
+(the item is hidden), which is the safe direction. `audit.read` and `settings.write` already existed there, so this
+change adds rail items and no ids.
 
 ## D4. The guard is a grep, and it runs in CI
 

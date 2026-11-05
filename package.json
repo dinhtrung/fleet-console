@@ -11,7 +11,8 @@
     "gate:spec": "openspec validate --all --strict",
     "gate:design": "IMP=${IMPECCABLE:-$HOME/.hermes/skills/impeccable/scripts/impeccable}; $IMP detect --json dist index.html",
     "gate": "npm run typecheck && npm run lint && npm run gate:spec && npm run build && npm run gate:design",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:screens": "node scripts/check-no-mock-screens.mjs"
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",

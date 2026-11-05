@@ -32,6 +32,10 @@ const NAV: { group: string; items: NavItem[] }[] = [
       { to: "/seats", label: "Seats", permission: "dashboard.read" },
       { to: "/projects", label: "Projects", permission: "dashboard.read" },
       { to: "/culture", label: "Culture", permission: "dashboard.read" },
+      // Audit and Settings join the rail only because both screens now read the real API. A link to a
+      // screen still backed by fixtures is the failure this change removes (design D3).
+      { to: "/audit", label: "Audit", permission: "audit.read" },
+      { to: "/settings", label: "Settings", permission: "settings.write" },
     ],
   },
 ];
