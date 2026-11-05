@@ -268,7 +268,10 @@ function AuditTable({ rows }: { rows: AuditEvent[] }) {
 }
 
 /** The date input gives a bare `YYYY-MM-DD`; the server's closed set wants an RFC3339 instant. A
- *  bare date is read as the whole day: `since` starts at its first instant, `until` at its last. */
+ *  bare date is read as the whole day, so `until` must reach the day's last instant. `at` is written
+ *  RFC3339Nano, so `T23:59:59Z` stops a full second short and silently hides events in the
+ *  sub-second tail between .000000001 and .999999999. Nine fractional digits is the most RFC3339Nano
+ *  can express, so that is the day's last instant. */
 function toInstant(date: string, edge: "start" | "end"): string {
-  return edge === "start" ? `${date}T00:00:00Z` : `${date}T23:59:59Z`;
+  return edge === "start" ? `${date}T00:00:00Z` : `${date}T23:59:59.999999999Z`;
 }
