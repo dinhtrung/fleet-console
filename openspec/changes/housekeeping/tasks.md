@@ -11,14 +11,14 @@
 
 ## 1. Selection and execution (builder 1)
 
-- [ ] 1.1 `internal/housekeeping`: `Candidate{Item int; Path, Branch string; Dirty bool; HasOpenCR, LiveDispatch,
+- [x] 1.1 `internal/housekeeping`: `Candidate{Item int; Path, Branch string; Dirty bool; HasOpenCR, LiveDispatch,
       LiveRow bool}` and `Select(candidates) []Decision` — pure, with a reason per kept candidate.
       Evidence: a table test with one case per keep condition and one removable case.
-- [ ] 1.2 `Execute(ctx, decisions, git)` — scoped to the root, `wt-<key>-<n>` only, symlink skip, `git worktree
+- [x] 1.2 `Execute(ctx, decisions, git)` — scoped to the root, `wt-<key>-<n>` only, symlink skip, `git worktree
       remove` without `--force`, then `git worktree prune`. A git refusal is a keep with git's reason.
       Evidence: a fake git runner recording argv; a symlink case that records no removal; a dirty case that records
       no removal.
-- [ ] 1.3 Collect the four facts from the tick's own read (open CRs, dispatch rows, queue rows) and
+- [x] 1.3 Collect the four facts from the tick's own read (open CRs, dispatch rows, queue rows) and
       `git status --porcelain`; a stale forge read returns "do nothing" with `forge-stale`.
       Evidence: tick-level test — one open CR keeps its worktree, one closed item's clean worktree is removed, a
       stale read removes nothing.
