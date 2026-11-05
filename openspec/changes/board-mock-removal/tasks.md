@@ -19,7 +19,12 @@
 
 ## 2. Rail
 
-- [x] 2.1 `src/access/access.tsx`: declare `audit.read` and `settings.write`.
+- [x] 2.1 The two ids the rail needs are declared where permissions live, `src/mock/permissions.ts`
+      (`audit.read` at :29, `settings.write` at :36, both pre-existing — this PR does not add them and does not
+      touch `src/access/access.tsx`, which is the `useAccess()`/`Gate` mechanism that *reads* a permission set and
+      declares nothing). Moving the registry out of the mock is not this task: `src/auth/session.tsx` still imports
+      `permissionUnion` and `ROLE_TEMPLATES` from it, and the brief keeps that module. The rail items that consume the
+      ids are 2.2.
 - [x] 2.2 `src/shell/AppShell.tsx`: add the two nav items.
 - [x] 2.3 Evidence: a screenshot of the rail with seven items and one of `/audit` open from it.
 

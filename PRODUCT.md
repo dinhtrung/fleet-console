@@ -50,9 +50,10 @@ and Settings.
 - **Audit** `/audit` — the app's own event log, newest first, filterable by actor, kind and subject.
 - **Settings** `/settings` — the settings surface's writable keys, with the restart each one needs.
 
-Nine scaffold URLs are gone with no replacement, because their surfaces had no service to read: `/dashboard`,
-`/users`, `/users/:id`, `/roles`, `/roles/:id`, `/organizations`, `/organizations/:id`, `/sessions`, `/api-keys`,
-`/feature-flags`. An operator who bookmarked one gets the board's not-found, not a mock.
+Nine scaffold URLs are gone with no replacement, because their surfaces had no service to read: `/users`,
+`/users/:id`, `/roles`, `/roles/:id`, `/organizations`, `/organizations/:id`, `/sessions`, `/api-keys`,
+`/feature-flags`. Ten screen files were deleted to get there — Dashboard had no URL of its own, because `/` renders
+the board. An operator who bookmarked one of the nine gets the board's not-found, not a mock.
 
 Identity is still the scaffold's. The seven screens read real data, but who you are — the session, its roles and its
 permission set — still comes from the mock module in `src/mock`, and `src/auth/session.tsx` is the only consumer of
