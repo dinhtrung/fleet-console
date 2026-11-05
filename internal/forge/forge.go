@@ -297,7 +297,11 @@ func ParseCloses(body string) int {
 	return number
 }
 
-// DocsOnly reports whether every changed path is documentation.
+// DocsOnly reports whether every changed path is documentation. An openspec
+// change set counts whatever its extension: archiving one moves spec.md files
+// beside .openspec.yaml metadata, and a forge builds no jobs for those paths,
+// so requiring checks on it wedges the item with "checks are not green: no
+// checks" instead of merging an accepted, text-only change.
 func DocsOnly(paths []string) bool {
 	if len(paths) == 0 {
 		return false
@@ -306,6 +310,7 @@ func DocsOnly(paths []string) bool {
 		lower := strings.ToLower(path)
 		if !(strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".mdx") ||
 			strings.HasSuffix(lower, ".rst") || strings.HasSuffix(lower, ".txt") ||
+			strings.HasPrefix(lower, "openspec/") ||
 			docsPattern.MatchString(lower)) {
 			return false
 		}
