@@ -135,6 +135,65 @@ func TestForgeHookRefusesBadSignatures(t *testing.T) {
 	}
 }
 
+// The raw-body proof: the HMAC is over the bytes as received, not over a re-encode of the
+// decoded payload. A handler that decoded first and hashed the re-marshalled value would reject a
+// legitimate delivery whose bytes differ from its canonical form — so the discriminating case is a
+// delivery signed over its own non-canonical bytes.
+func TestForgeHookHashesTheRawBody(t *testing.T) {
+	app, waker, lines := hookApp(t, hookSecret)
+
+	// Same JSON object as deliveryBody, different bytes: key order differs.
+	reordered := []byte(`{"repository":{"full_name":"dinhtrung/fleet-console"},"issue":{"title":"webhook","number":170},"action":"opened"}`)
+	if bytes.Equal(reordered, deliveryBody) {
+		t.Fatal("the reordered body is byte-identical; this test proves nothing")
+	}
+	// The canonical form a decode-then-marshal handler would hash. It must differ from the bytes
+	// sent, or this test cannot tell the two handlers apart.
+	var decoded any
+	if err := json.Unmarshal(reordered, &decoded); err != nil {
+		t.Fatalf("unmarshal reordered: %v", err)
+	}
+	canonical, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatalf("re-marshal: %v", err)
+	}
+	if bytes.Equal(canonical, reordered) {
+		t.Fatalf("re-marshalling reproduced the sent bytes (%s); key order is not being tested", canonical)
+	}
+
+	// 1. Signed over the bytes actually sent. A handler that hashes what it received accepts; a
+	//    handler that hashes the canonical form would compute a different digest and refuse. This
+	//    is the assertion that distinguishes them.
+	raw := post(t, app, reordered, map[string]string{
+		SignatureHeader: sign(reordered, hookSecret),
+	})
+	if raw.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: the delivery is signed over the bytes that were sent", raw.StatusCode)
+	}
+	if got := len(waker.Channel()); got != 1 {
+		t.Fatalf("pending wakes = %d, want 1", got)
+	}
+
+	// 2. Signed over the canonical form instead, while sending the reordered bytes: the digest
+	//    covers bytes the server never received, so it must be refused.
+	app2, waker2, lines2 := hookApp(t, hookSecret)
+	mismatch := post(t, app2, reordered, map[string]string{
+		SignatureHeader: sign(canonical, hookSecret),
+	})
+	if mismatch.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401: the signature covers bytes that were not sent", mismatch.StatusCode)
+	}
+	if got := len(waker2.Channel()); got != 0 {
+		t.Fatalf("pending wakes = %d, want 0", got)
+	}
+	if len(*lines2) != 0 {
+		t.Fatalf("log lines = %v, want none", *lines2)
+	}
+	if len(*lines) != 1 {
+		t.Fatalf("accepted delivery log lines = %d, want 1", len(*lines))
+	}
+}
+
 // With no secret configured the route answers 404 and reads no body.
 func TestForgeHookOffWhenNotConfigured(t *testing.T) {
 	app, waker, lines := hookApp(t, "")
