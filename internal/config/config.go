@@ -126,6 +126,8 @@ func EditableKey(key string) (bool, string) {
 	switch key {
 	case "listen", "database", "token", "token_file", "rig_binary", "gh_binary", "glab_binary":
 		return false, fmt.Sprintf("%s needs the operator's hand: the running process reads it once at boot", key)
+	case "decision_notes", "decision_answerers":
+		return false, fmt.Sprintf("%s is read once when the notifier is built at boot; edit it in the file", key)
 	case "project_timeout":
 		return false, fmt.Sprintf("%s is per-project tuning; edit it in the file", key)
 	case "projects":
