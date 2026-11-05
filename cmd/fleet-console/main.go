@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -128,6 +129,47 @@ func worktreeRoot(eff *config.Effective, project store.ProjectRow, source mirror
 		return filepath.Dir(source.RepoPath)
 	}
 	return ""
+}
+
+// lifecycleFacts is one tick's lifecycle input, taken from the reads the tick
+// already performed: no second forge read, no second rig read. Ready is the
+// plan's count before the concurrency limit, Fresh is the project's own forge
+// read, and Managed is the project's effective `lifecycle:` value.
+func lifecycleFacts(rows []store.ProjectRow, reads map[int64]mirror.ProjectResult, plans map[string]decide.Plan, eff *config.Effective) []act.LifecycleProjectFacts {
+	facts := make([]act.LifecycleProjectFacts, 0, len(rows))
+	for _, project := range rows {
+		projectRead := reads[project.ID]
+		facts = append(facts, act.LifecycleProjectFacts{
+			Key:     project.Key,
+			Rigs:    project.Rigs,
+			Managed: eff.LifecycleOn(project.Key),
+			Fresh:   !projectRead.ForgeStale && projectRead.ForgeError == "",
+			Ready:   plans[project.Key].Ready,
+			Rows:    projectRead.Rows,
+			Seats:   projectRead.Seats,
+		})
+	}
+	return facts
+}
+
+// filterSeatsFor keeps a project's rig seats in the configured order, the same
+// selection the mirror's own filter makes, for the re-plan after a launch.
+func filterSeatsFor(seats []rig.Seat, rigs []string) []rig.Seat {
+	if len(rigs) == 0 {
+		return seats
+	}
+	order := make(map[string]int, len(rigs))
+	for index, name := range rigs {
+		order[name] = index
+	}
+	out := make([]rig.Seat, 0, len(seats))
+	for _, seat := range seats {
+		if _, ok := order[seat.Rig]; ok {
+			out = append(out, seat)
+		}
+	}
+	sort.SliceStable(out, func(a, b int) bool { return order[out[a].Rig] < order[out[b].Rig] })
+	return out
 }
 
 func runTick(ctx context.Context, db *store.Store, out, errOut io.Writer, runner forge.Runner, rigRunner rig.ExecRunner, timeouts mirror.TimeoutSettings) error {
@@ -462,6 +504,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return specs, err
 	}
 	specByKey := map[string]mirror.Project{}
+
+	// The lifecycle's memory is the running process: a quiet window is not
+	// persisted, so a restart simply gives every rig a fresh idle_after
+	// (design D6). With the block absent the coordinator decides nothing.
+	lifecycle := act.NewLifecycle(eff.RigLifecycle, db, rig.NewAdapter(rigRunner), func(format string, args ...any) {
+		fmt.Fprintf(stderr, "%s\n", fmt.Sprintf(format, args...))
+	})
 	go (&mirror.Mirror{
 		Store: db, Rig: rig.NewAdapter(rigRunner),
 		ProjectTimeout: mirrorTimeouts(eff),
@@ -493,8 +542,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 			for _, source := range specs {
 				specByKey[source.Key] = source
 			}
+			// The plans are built for every project first, so the lifecycle sees
+			// the whole tick's demand before it decides anything: a start for one
+			// rig must not depend on the loop order (design D1).
+			plans := make(map[string]decide.Plan, len(rows))
+			reads := make(map[int64]mirror.ProjectResult, len(rows))
+			// The progress report reads the dispatch rows the plan was built from,
+			// so the same read serves both.
+			dispatchRows := make(map[string][]store.DispatchRow, len(rows))
 			for _, project := range rows {
 				projectRead := read.Projects[project.Key]
+				reads[project.ID] = projectRead
 				// D4: reconcile the app's dispatch rows against the rig before
 				// planning. A reconciled item must not be dispatched again in the
 				// same tick.
@@ -520,10 +578,46 @@ func run(args []string, stdout, stderr io.Writer) error {
 					snapshot.Dispatched = append(snapshot.Dispatched, item)
 				}
 				plan := decide.PlanTick(snapshot, read.At)
+				plans[project.Key] = plan
+				dispatchRows[project.Key] = dispatches
 				fmt.Fprintf(stderr, "mirror: %s status=%s intents=%d\n", project.Key, plan.Status, len(plan.Intents))
-				if !apply || gateErr != nil {
-					continue
+			}
+			if !apply || gateErr != nil {
+				return
+			}
+			// Start before any dispatch write, so a rig is up before its worktree
+			// and its row exist (design D5). The facts come from the reads above:
+			// a project's fresh flag, its plan's Ready, and the rows and seats the
+			// tick already has, with no extra forge or rig call.
+			lifecycleActions := lifecycle.Decide(lifecycleFacts(rows, reads, plans, eff), !read.RigStale, read.At)
+			lifecycleFailed := lifecycle.Start(ctx, lifecycleActions)
+			// The rig's roster and queue were read before the launch, so a rig that
+			// just came up would plan against a stale fleet and reach the next tick
+			// with a row no running seat ever sees. Re-read the roster once and
+			// re-plan against it, only when a launch happened (spec: "the row is
+			// created for a seat the launch started").
+			if len(lifecycleActions) > 0 {
+				if fresh, seatsErr := rig.NewAdapter(rigRunner).Seats(ctx); seatsErr == nil {
+					for _, project := range rows {
+						projectRead := reads[project.ID]
+						projectRead.Seats = filterSeatsFor(fresh, project.Rigs)
+						reads[project.ID] = projectRead
+						dispatches, err := db.DispatchesForProject(ctx, project.ID)
+						if err != nil {
+							continue
+						}
+						verdicts, err := db.VerdictsForProject(ctx, project.ID)
+						if err != nil {
+							continue
+						}
+						snapshot := mirror.BuildSnapshot(project, projectRead, dispatches, verdicts)
+						plans[project.Key] = decide.PlanTick(snapshot, read.At)
+					}
 				}
+			}
+			for _, project := range rows {
+				plan := plans[project.Key]
+				projectRead := reads[project.ID]
 				source, ok := specByKey[project.Key]
 				if !ok || source.Forge == nil {
 					continue
@@ -535,6 +629,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 					Rig: rig.NewAdapter(rigRunner), Git: gitRunner, Gate: gate, Apply: true,
 					Items: projectRead.Items, CRs: projectRead.CRs, Rows: projectRead.Rows,
 					Plan: plan, WorktreeRoot: worktreeRoot(eff, project, source),
+					LifecycleFailed: lifecycleFailed,
 					// A raised decision reaches the phone from here: the tick
 					// knows the row exists, and the notifier owns the transport.
 					OnDecision: func(raised act.DecisionRaised) {
@@ -558,7 +653,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 				// A failed send never fails the tick and never blocks a merge.
 				if len(report.Merges) > 0 || digest.allow(read.At) {
 					seats, seatsErr := rig.NewAdapter(rigRunner).Seats(ctx)
-					snapshot := progress.Build(read, dispatches, project, eff, progress.Roster{
+					snapshot := progress.Build(read, dispatchRows[project.Key], project, eff, progress.Roster{
 						Seats: seats, Err: seatsErr, Plan: &plan,
 					})
 					result, sendErr := notify.sendProgress(ctx, snapshot, read.At)
@@ -572,6 +667,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 					}
 				}
 			}
+			// The stop runs after the dispatch phase, so a tick that merges the
+			// last item and finds the window elapsed stops in the same tick (3.3).
+			lifecycle.Stop(ctx, lifecycleActions)
 		},
 	)
 

@@ -395,6 +395,7 @@ type queueStub struct {
 	item        *rig.QueueItem
 	created     *rig.CreateRequest
 	createCalls int
+	sendCalls   int
 	rows        []rig.QueueRow
 	shows       map[string]*rig.QueueItem
 }
@@ -429,7 +430,7 @@ func (q *queueStub) QueueHandoff(context.Context, string, rig.HandoffRequest) (*
 func (q *queueStub) QueueUpdate(context.Context, string, rig.UpdateRequest) (*rig.QueueItem, error) {
 	return q.item, nil
 }
-func (q *queueStub) Send(context.Context, string, string) error { return nil }
+func (q *queueStub) Send(context.Context, string, string) error { q.sendCalls++; return nil }
 
 func TestTwoProjectsDispatchIsolatedWorktrees(t *testing.T) {
 	ctx := context.Background()
