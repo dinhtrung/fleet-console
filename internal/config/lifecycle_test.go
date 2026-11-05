@@ -13,7 +13,9 @@ func TestLifecycleDefaultsWhenNoBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	want := LifecycleSettings{Enabled: false, IdleAfter: 10 * time.Minute, IdlePollMax: 10 * time.Minute}
+	// Written false is the contract the poll cadence reads: no block, no backoff,
+	// so this box keeps polling at tick_interval exactly as it did before.
+	want := LifecycleSettings{Written: false, Enabled: false, IdleAfter: 10 * time.Minute, IdlePollMax: 10 * time.Minute}
 	if eff.RigLifecycle != want {
 		t.Fatalf("rig_lifecycle = %+v, want %+v", eff.RigLifecycle, want)
 	}
@@ -31,7 +33,7 @@ func TestLifecycleBlockFromFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	want := LifecycleSettings{Enabled: true, IdleAfter: 20 * time.Minute, IdlePollMax: 8 * time.Minute}
+	want := LifecycleSettings{Written: true, Enabled: true, IdleAfter: 20 * time.Minute, IdlePollMax: 8 * time.Minute}
 	if eff.RigLifecycle != want {
 		t.Fatalf("rig_lifecycle = %+v, want %+v", eff.RigLifecycle, want)
 	}

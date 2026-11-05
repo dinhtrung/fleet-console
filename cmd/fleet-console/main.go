@@ -152,6 +152,23 @@ func lifecycleFacts(rows []store.ProjectRow, reads map[int64]mirror.ProjectResul
 	return facts
 }
 
+// pollCadence is the poll's backoff, or the fixed tick_interval when the
+// operator never wrote the rig_lifecycle block. The spec's "an existing
+// configuration is unchanged" scenario rests on this: a block-less box must keep
+// polling at tick_interval, not at the block's 10m default.
+//
+// The block's own default idle_poll_max is 10m against a 15s tick_interval, so
+// cadence-off and cadence-on-but-default differ by forty times. That gap is why
+// Written exists rather than testing Enabled.
+func pollCadence(eff *config.Effective) mirror.Cadence {
+	if !eff.RigLifecycle.Written {
+		// Max == Base makes the loop's wait constant without special-casing the
+		// cadence type: Next still runs, and it always returns Base.
+		return mirror.Cadence{Base: eff.TickInterval, Max: eff.TickInterval}
+	}
+	return mirror.Cadence{Base: eff.TickInterval, Max: eff.RigLifecycle.IdlePollMax}
+}
+
 // filterSeatsFor keeps a project's rig seats in the configured order, the same
 // selection the mirror's own filter makes, for the re-plan after a launch.
 func filterSeatsFor(seats []rig.Seat, rigs []string) []rig.Seat {
@@ -520,8 +537,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}).Loop(
 		ctx,
 		sources,
-		eff.TickInterval, jitter,
-		func(read mirror.TickResult) {
+		pollCadence(eff), jitter,
+		func(read mirror.TickResult) bool {
 			// While the gate is closed, re-probe: a boot-time refusal is often just
 			// the daemon not being up yet, and compat must not be the one read that
 			// stays frozen for the life of the process. current() logs the reopen
@@ -537,7 +554,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 			}
 			rows, err := db.Projects(ctx)
 			if err != nil {
-				return
+				// A failed store read is as blind as a failed forge read.
+				return true
 			}
 			for _, source := range specs {
 				specByKey[source.Key] = source
@@ -583,7 +601,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 				fmt.Fprintf(stderr, "mirror: %s status=%s intents=%d\n", project.Key, plan.Status, len(plan.Intents))
 			}
 			if !apply || gateErr != nil {
-				return
+				// A closed gate and a dry run both skip the act phase, but neither
+				// makes the fleet busy: the cadence describes what the read found,
+				// and that verdict was already computed. Backing off here would
+				// freeze the poll for an act:false box, which is exactly the
+				// behaviour the spec forbids.
+				busy, _ := mirror.Busy(read)
+				return busy
 			}
 			// Start before any dispatch write, so a rig is up before its worktree
 			// and its row exist (design D5). The facts come from the reads above:
@@ -670,6 +694,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 			// The stop runs after the dispatch phase, so a tick that merges the
 			// last item and finds the window elapsed stops in the same tick (3.3).
 			lifecycle.Stop(ctx, lifecycleActions)
+			// D7: the verdict comes from the read this tick already did. A failed
+			// dispatch or merge does not make the fleet busy; only the read does,
+			// so the cadence stays a property of what the app can see.
+			busy, _ := mirror.Busy(read)
+			return busy
 		},
 	)
 
