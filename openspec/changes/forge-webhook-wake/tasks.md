@@ -11,12 +11,12 @@
 
 ## 1. Wake channel and cadence (builder 1)
 
-- [ ] 1.1 `internal/mirror`: `Loop` takes `wake <-chan struct{}`; the select gains the wake arm; a wake resets the
+- [x] 1.1 `internal/mirror`: `Loop` takes `wake <-chan struct{}`; the select gains the wake arm; a wake resets the
       cadence to base exactly as a busy tick does. A nil channel means "no receiver", so every existing caller and
       test compiles unchanged.
       Evidence: a loop test with a fake tick source asserting the tick runs before the timer, and that the next wait
       is `tick_interval` after a wake from the ceiling.
-- [ ] 1.2 Coalescing lives in the caller: a `Waker` with a capacity-1 channel and `func (w *Waker) Wake() bool`
+- [x] 1.2 Coalescing lives in the caller: a `Waker` with a capacity-1 channel and `func (w *Waker) Wake() bool`
       that never blocks and reports whether one was already pending.
       Evidence: unit test — two wakes, one pending, second returns false; after consumption the next returns true.
 
