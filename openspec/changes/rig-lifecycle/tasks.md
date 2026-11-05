@@ -84,11 +84,11 @@
 
 ## 5. Docs (builder 3, blocked by 3 and 4)
 
-- [ ] 5.1 `PRODUCT.md` and `docs/my-stack.md`: what lifecycle does, the exact config block, the latency trade of
+- [x] 5.1 `PRODUCT.md` and `docs/my-stack.md`: what lifecycle does, the exact config block, the latency trade of
       `idle_poll_max`, the two log lines, and that a human-blocked row does not hold a rig open.
-- [ ] 5.2 One operator paragraph: how to turn it off globally and how to keep one project warm
+- [x] 5.2 One operator paragraph: how to turn it off globally and how to keep one project warm
       (`lifecycle: off`), with the restart (`systemctl --user restart fleet-console`) that applies it.
-- [ ] 5.3 Do not restate the requirements as prose; link `openspec/changes/rig-lifecycle/`. No screenshot.
+- [x] 5.3 Do not restate the requirements as prose; link `openspec/changes/rig-lifecycle/`. No screenshot.
 
 ## 6. Gate (whoever is last)
 

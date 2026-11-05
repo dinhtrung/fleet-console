@@ -19,6 +19,22 @@ repositories: it mirrors the forge and the rig, decides what is ready by a writt
 seats, collects review verdicts, merges on four deterministic facts, and keeps every human obligation as a record
 with an SLA.
 
+## The rig lifecycle
+
+A rig costs seats whether or not it has work. So the app starts a project's rig when work arrives and stops it once
+the rig has sat idle for the configured window — `rig_lifecycle`, off by default so an upgrade changes nothing. A rig
+is stopped only when nothing it owns needs a seat, and a row blocked on a person does not count: that rig would idle
+for as long as the operator takes. A start lands before its dispatch intent, so no row ever names a seat that does
+not exist. Each start and stop writes one log line and one audit event and sends no message, because housekeeping is
+neither work nor a decision.
+
+The poll backs off with the fleet: each quiet tick doubles the wait up to `idle_poll_max`, and the first busy one
+returns it to `tick_interval`. The trade is explicit — the ceiling is the longest an arriving item waits to be seen,
+so it should be set to what the operator will tolerate, not the longest they can. A failing forge read is not
+idleness: the wait stays at `tick_interval` while reads fail. Two prefixes carry the whole story in the log:
+`rig-lifecycle:` for every start and stop, and `mirror: cadence` for every change of the poll's wait. Requirements:
+`openspec/changes/rig-lifecycle/`.
+
 ## What the app merges
 
 A change merges only on four deterministic facts, re-read at the moment of the merge: an `ACCEPT` verdict at the
