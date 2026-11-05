@@ -360,6 +360,7 @@ func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []
 		Project: projectFields{
 			Key: project.Key, Forge: decide.Forge(project.ForgeKind), Enabled: project.Enabled,
 			OnHold: project.OnHold, ConcurrencyCap: project.ConcurrencyCap,
+			Rigs: decideRigRefs(project.RigTiers),
 		},
 		ForgeOK: !result.ForgeStale,
 	}
@@ -450,6 +451,24 @@ func parseTime(raw string) time.Time {
 // while still producing its exact types.
 type decideSnapshot = decide.Snapshot
 type projectFields = decide.Project
+
+// decideRigRefs converts the store's persisted tier list into the plan's own shape. An empty list
+// means the project declares no tiers, and the plan keeps the flat behaviour.
+func decideRigRefs(tiers []store.RigTier) []decide.RigRef {
+	if len(tiers) == 0 {
+		return nil
+	}
+	out := make([]decide.RigRef, 0, len(tiers))
+	for _, tier := range tiers {
+		spill := tier.Spill
+		if spill == "" {
+			spill = decide.SpillOnFull
+		}
+		out = append(out, decide.RigRef{Name: tier.Name, Tier: tier.Tier, Spill: spill})
+	}
+	return out
+}
+
 type itemFields = decide.Item
 type linkFields = decide.Link
 type rowFields = decide.Row
