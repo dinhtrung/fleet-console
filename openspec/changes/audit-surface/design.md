@@ -19,8 +19,10 @@ server silently ignores tells the operator "nothing matched" when the truth is "
 understand". `limit` keeps its existing 1..500 clamp.
 
 `subject` is a prefix match (`#157`, `fleet-console`, `fleet-console#157`) so one parameter answers both "this
-item" and "this project". Timestamps compare as text: `at` is written RFC3339 UTC, and that ordering is the
-column's own ordering.
+item" and "this project". `since` and `until` compare **instants**, not text: `at` is written RFC3339Nano, whose
+text order disagrees with instant order whenever the fractional seconds differ in length — as strings
+`"…10:00:01Z"` sorts *after* `"…10:00:01.5Z"`, so a text `since` would keep a row an instant bound excludes. The
+store compares with `julianday(at)`, which reads both spellings as the instants they are.
 
 ## D3. Detail is one row, not a second query language
 

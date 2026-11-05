@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // ProjectRow is one project registry row.
@@ -250,19 +251,126 @@ func (s *Store) EventsForItem(ctx context.Context, number, limit int) ([]EventRo
 	return scanEvents(rows)
 }
 
-// RecentEvents returns the newest audit rows.
-func (s *Store) RecentEvents(ctx context.Context, limit int) ([]EventRow, error) {
+// EventFilter narrows an audit read. Every field is optional: a zero value
+// means "no filter". Since and Until are compared as instants, not as text:
+// `at` is written RFC3339Nano, whose text order disagrees with instant order
+// when the fractional seconds differ in length ("...23Z" vs "...23.5Z").
+// Before is the keyset cursor — only rows with a smaller id are returned, so a
+// page stays stable while the writer appends.
+type EventFilter struct {
+	Actor         string
+	Kind          string
+	SubjectPrefix string
+	Since         string
+	Until         string
+	Before        int64
+	Limit         int
+}
+
+// EventPage is one page of the audit log and the cursor for the next one.
+// NextBefore is the smallest id on a full page and 0 on the last page — the key
+// is always present, so "no further page" is a value the caller reads, not a
+// field it has to notice is missing.
+type EventPage struct {
+	Events     []EventRow `json:"events"`
+	NextBefore int64      `json:"next_before"`
+}
+
+// Events reads the audit log newest first, paged by keyset on id DESC.
+func (s *Store) Events(ctx context.Context, filter EventFilter) (EventPage, error) {
+	limit := filter.Limit
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, at, actor, kind, subject, detail, exit_code, COALESCE(stdout_hash, '')
-		FROM event ORDER BY id DESC LIMIT ?`, limit)
+	if limit > 500 {
+		limit = 500
+	}
+
+	query := `SELECT id, at, actor, kind, subject, detail, exit_code, COALESCE(stdout_hash, '') FROM event`
+	var conditions []string
+	var args []any
+	if filter.Before > 0 {
+		conditions = append(conditions, "id < ?")
+		args = append(args, filter.Before)
+	}
+	if filter.Actor != "" {
+		conditions = append(conditions, "actor = ?")
+		args = append(args, filter.Actor)
+	}
+	if filter.Kind != "" {
+		conditions = append(conditions, "kind = ?")
+		args = append(args, filter.Kind)
+	}
+	if filter.SubjectPrefix != "" {
+		conditions = append(conditions, `subject LIKE ? ESCAPE '\'`)
+		args = append(args, escapeLike(filter.SubjectPrefix)+"%")
+	}
+	if filter.Since != "" {
+		conditions = append(conditions, "julianday(at) >= julianday(?)")
+		args = append(args, filter.Since)
+	}
+	if filter.Until != "" {
+		conditions = append(conditions, "julianday(at) <= julianday(?)")
+		args = append(args, filter.Until)
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY id DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("store: events: %w", err)
+		return EventPage{}, fmt.Errorf("store: events: %w", err)
 	}
 	defer rows.Close()
-	return scanEvents(rows)
+	events, err := scanEvents(rows)
+	if err != nil {
+		return EventPage{}, err
+	}
+	if events == nil {
+		// An empty page is an empty list, never JSON null: the screen renders
+		// "no events match" from a list, not from a missing field.
+		events = []EventRow{}
+	}
+	page := EventPage{Events: events}
+	if len(events) == limit {
+		page.NextBefore = events[len(events)-1].ID
+	}
+	return page, nil
+}
+
+// escapeLike makes a value safe as a LIKE prefix: the escape character itself
+// first, then the two wildcards.
+func escapeLike(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, "%", `\%`)
+	return strings.ReplaceAll(value, "_", `\_`)
+}
+
+// RecentEvents returns the newest audit rows. It is the unfiltered first page.
+func (s *Store) RecentEvents(ctx context.Context, limit int) ([]EventRow, error) {
+	page, err := s.Events(ctx, EventFilter{Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	return page.Events, nil
+}
+
+// EventByID returns one audit row, or nil when no row has that id.
+func (s *Store) EventByID(ctx context.Context, id int64) (*EventRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, at, actor, kind, subject, detail, exit_code, COALESCE(stdout_hash, '')
+		FROM event WHERE id = ?`, id)
+	if err != nil {
+		return nil, fmt.Errorf("store: event %d: %w", id, err)
+	}
+	defer rows.Close()
+	events, err := scanEvents(rows)
+	if err != nil || len(events) == 0 {
+		return nil, err
+	}
+	return &events[0], nil
 }
 
 func scanEvents(rows *sql.Rows) ([]EventRow, error) {
