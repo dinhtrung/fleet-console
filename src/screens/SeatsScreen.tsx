@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getSeatTail, getSeats, shortTime, type Seat } from "../lib/fleet";
+import { getSeats, seatTail, shortTime, type Seat } from "../lib/fleet";
 import {
   Badge,
   EmptyState,
@@ -19,7 +19,7 @@ export function SeatsScreen() {
   const seats = useQuery({ queryKey: ["seats"], queryFn: getSeats, refetchInterval: 10000 });
   const tail = useQuery({
     queryKey: ["seat-tail", selected?.session],
-    queryFn: () => getSeatTail(selected!.session, 24),
+    queryFn: () => seatTail(selected!.session, 24),
     enabled: selected !== null,
   });
 
