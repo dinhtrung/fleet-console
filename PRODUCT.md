@@ -98,14 +98,17 @@ finds a terminal row and does nothing. A late reply after the board answered wri
 as `decision.reply_ignored`. The board remains the full surface: `/decisions` lists what is waiting and answers it
 with a click, whether or not the notes are configured.
 
-**A bad reply earns one correction, never a loop.** A comment that starts with the prefix but cannot be applied —
-the decision is already closed, or the item has two open decisions and the reply names neither — earns exactly one
-note saying so, once per comment id. Re-reading the same comment posts nothing, so a persistent typo cannot become
-a loop.
+**The two refusals behave differently, and neither loops.** A comment that starts with the prefix on a row that is
+already closed resolves nothing and **posts nothing**: the row is terminal, so the thread gets no "you replied too
+late" note — `decision.reply_ignored` records the comment in the audit log and that is all. A comment that starts
+with the prefix but is **ambiguous** (two open decisions and no id named) does earn one correction listing the ids
+to choose from. Either way it is once per comment id: re-reading the same comment posts nothing, so a persistent
+typo cannot become a loop.
 
 The audit log names each step: `decision.noted` when the question was posted, `decision.answered` with the comment
-id when a reply resolved it, `decision.reply_ignored` for a correction, and `decision.note_failed` when the forge
-refused the note — that last one is retried on a later tick and never holds back the phone message.
+id when a reply resolved it, `decision.reply_ignored` for a refusal (whether or not a correction was posted), and
+`decision.note_failed` when the forge refused the note — that last one is retried on a later tick and never holds
+back the phone message.
 
 `decision_notes` is **off until it is enabled**, because a note is a write on somebody else's item. With it off,
 no note is posted, no comment is read for an answer, and the escalation and the board behave exactly as they did
