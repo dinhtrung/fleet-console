@@ -345,7 +345,9 @@ export const postVerdict = (number: number, verdict: "accept" | "reject", reason
 
 export const getSeats = () => request<{ seats: Seat[] }>("/api/seats");
 
-export const getSeatTail = (session: string, lines = 24) =>
+/** The pane tail for one seat. The session contains `@`, so the path segment is escaped;
+ *  `lines` is passed through untouched because the route owns the 1..200 clamp. */
+export const seatTail = (session: string, lines = 24) =>
   request<{ session: string; lines: number; tail: string }>(
     `/api/seats/${encodeURIComponent(session)}/tail?lines=${lines}`,
   );

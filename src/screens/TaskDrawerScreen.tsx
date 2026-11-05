@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
-import { getItem, postVerdict, shortTime } from "../lib/fleet";
+import { getItem, postVerdict, seatTail, shortTime } from "../lib/fleet";
 import {
   Badge,
   Button,
@@ -17,6 +17,62 @@ import {
   useToast,
 } from "../components/ui";
 import { PageHeader } from "../shell/PageHeader";
+
+/** The transcript panel: the dispatch seat's pane, read once when the operator opens it.
+ *  It never polls — a timer here would spawn a `rig capture` per open drawer — and it renders
+ *  the bytes as preformatted text, because the pane is terminal output, not markdown. */
+function TranscriptPanel({ seat }: { seat: string }) {
+  const [open, setOpen] = useState(false);
+  const [lines, setLines] = useState(40);
+  const tail = useQuery({
+    queryKey: ["seat-tail", seat, lines],
+    queryFn: () => seatTail(seat, lines),
+    enabled: open,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+
+  if (!open) {
+    return (
+      <div className="border-t border-rule px-3 py-2">
+        <Button variant="quiet" size="sm" onClick={() => setOpen(true)}>
+          Read the seat&apos;s pane
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t border-rule px-3 py-2">
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <p className="label text-ink-muted">Pane transcript — {lines} lines</p>
+        {lines < 200 ? (
+          <Button variant="quiet" size="sm" onClick={() => setLines(200)}>
+            Ask for more
+          </Button>
+        ) : null}
+        <Button variant="quiet" size="sm" onClick={() => setOpen(false)}>
+          Hide
+        </Button>
+      </div>
+      {tail.isLoading ? (
+        <LoadingRows rows={4} />
+      ) : tail.error ? (
+        <ErrorState
+          title="The seat could not be read"
+          error={tail.error}
+          onRetry={() => void tail.refetch()}
+        />
+      ) : tail.data?.tail.trim() ? (
+        <pre className="max-h-[24rem] overflow-auto border border-rule bg-ground/40 p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-ink">
+          {tail.data.tail}
+        </pre>
+      ) : (
+        <p className="px-1 py-2 text-[0.6875rem] text-ink-muted">The pane is empty.</p>
+      )}
+    </div>
+  );
+}
 
 function CheckList({ checks }: { checks: { name: string; conclusion: string }[] }) {
   if (checks.length === 0) return <p className="text-[0.6875rem] text-ink-muted">No checks recorded.</p>;
@@ -148,6 +204,7 @@ export function TaskDrawerScreen() {
           ) : (
             <EmptyState title="No dispatch" body="This task has never been handed to a seat." />
           )}
+          {dispatch?.seat ? <TranscriptPanel seat={dispatch.seat} /> : null}
         </Panel>
 
         <Panel>

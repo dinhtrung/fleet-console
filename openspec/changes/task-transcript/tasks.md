@@ -9,10 +9,10 @@
 
 ## 1. The panel
 
-- [ ] 1.1 `src/lib/fleet.ts`: `seatTail(session: string, lines: number)` returning `{session, lines, tail}`, with
+- [x] 1.1 `src/lib/fleet.ts`: `seatTail(session: string, lines: number)` returning `{session, lines, tail}`, with
       the session `encodeURIComponent`-escaped because it contains `@`.
-- [ ] 1.2 `TaskDrawerScreen.tsx`: the transcript section inside the dispatch panel, `enabled` only when expanded and
+- [x] 1.2 `TaskDrawerScreen.tsx`: the transcript section inside the dispatch panel, `enabled` only when expanded and
       a seat exists, `staleTime: Infinity`, 40 → 200 lines, `<pre className="whitespace-pre-wrap">`.
-- [ ] 1.3 The three states: empty pane, 502 with retry, and no panel without a dispatch.
-- [ ] 1.4 Evidence: `npm run build` output and a screenshot of the drawer with a real tail from the running rig on a
+- [x] 1.3 The three states: empty pane, 502 with retry, and no panel without a dispatch.
+- [x] 1.4 Evidence: `npm run build` output and a screenshot of the drawer with a real tail from the running rig on a
       disposable instance (`act: false`, spare port), plus one screenshot of the no-dispatch state.
