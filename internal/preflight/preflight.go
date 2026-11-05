@@ -119,7 +119,7 @@ type Project struct {
 func FromConfig(p config.Project) Project {
 	rigName := strings.TrimSpace(p.Rig)
 	if rigName == "" && len(p.Rigs) > 0 {
-		rigName = strings.TrimSpace(p.Rigs[0])
+		rigName = strings.TrimSpace(p.Rigs[0].Name)
 	}
 	return Project{
 		Key:           p.Key,

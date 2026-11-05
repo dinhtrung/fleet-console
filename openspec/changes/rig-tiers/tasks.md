@@ -10,12 +10,12 @@
 
 ## 1. Declaration (builder 1)
 
-- [ ] 1.1 `internal/config`: `RigRef{Name string; Tier int; Spill string}` with a union `UnmarshalYAML`; defaults
+- [x] 1.1 `internal/config`: `RigRef{Name string; Tier int; Spill string}` with a union `UnmarshalYAML`; defaults
       `tier 0`, `spill on-full`; validation for a duplicate name, a negative tier and an unknown trigger;
       `--print-config` renders the resolved form.
       Evidence: tests for the scalar form, the mapping form, the defaults, the three refusals, and a config file
       that round-trips through `configfile.UpsertProject`.
-- [ ] 1.2 The back-compat test: `rigs: [a, b]` resolves to two tier-0 entries and the resolved project is equal to
+- [x] 1.2 The back-compat test: `rigs: [a, b]` resolves to two tier-0 entries and the resolved project is equal to
       what `main` produces today for the same file (field-by-field).
 
 ## 2. The fill order (builder 1, after 1)

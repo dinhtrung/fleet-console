@@ -78,7 +78,7 @@ func cultureTarget(ctx context.Context, st *store.Store, configPath, key string)
 		return culture.Target{Source: culture.SourceNotConfigured}, config.Project{Key: key}, nil
 	}
 	target := culture.Resolve(
-		culture.Project{CultureFile: project.CultureFile, Rigs: project.Rigs},
+		culture.Project{CultureFile: project.CultureFile, Rigs: project.Rigs.Names()},
 		culture.SpecsDir(""),
 	)
 	return target, project, nil

@@ -37,16 +37,16 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 
 // Project is one project registry entry from the file.
 type Project struct {
-	Key            string   `yaml:"key"`
-	Name           string   `yaml:"name"`
-	Forge          string   `yaml:"forge"`
-	Repo           string   `yaml:"repo"`
-	RepoURL        string   `yaml:"repo_url"`
-	DefaultBranch  string   `yaml:"default_branch"`
-	Rig            string   `yaml:"rig,omitempty"`
-	Rigs           []string `yaml:"rigs"`
-	RigTemplate    string   `yaml:"rig_template"`
-	ConcurrencyCap int      `yaml:"concurrency_cap"`
+	Key            string  `yaml:"key"`
+	Name           string  `yaml:"name"`
+	Forge          string  `yaml:"forge"`
+	Repo           string  `yaml:"repo"`
+	RepoURL        string  `yaml:"repo_url"`
+	DefaultBranch  string  `yaml:"default_branch"`
+	Rig            string  `yaml:"rig,omitempty"`
+	Rigs           RigRefs `yaml:"rigs"`
+	RigTemplate    string  `yaml:"rig_template"`
+	ConcurrencyCap int     `yaml:"concurrency_cap"`
 	// Runtime is which agent runs this project's seats. One of pi, omp, codex
 	// or claude; stored lowercase; omp when absent.
 	Runtime string            `yaml:"runtime"`
@@ -709,24 +709,39 @@ func ValidateProject(p *Project, dir, home string) error {
 	if p.Rig != "" && p.Rigs != nil {
 		add("rigs", "rig and rigs are mutually exclusive")
 	} else if p.Rig != "" {
-		p.Rigs = []string{strings.TrimSpace(p.Rig)}
+		// The single-rig spelling is the tier-0, on-full form: the same rig with
+		// the defaults the union decode gives a bare string.
+		p.Rigs = RigRefs{{Name: strings.TrimSpace(p.Rig), Tier: 0, Spill: SpillOnFull}}
 	}
 	if len(p.Rigs) == 0 {
 		add("rigs", "rig or rigs is required")
 	}
 	seen := make(map[string]bool, len(p.Rigs))
-	for index, name := range p.Rigs {
-		name = strings.TrimSpace(name)
-		if name == "" {
+	for index := range p.Rigs {
+		ref := &p.Rigs[index]
+		ref.Name = strings.TrimSpace(ref.Name)
+		if ref.Name == "" {
 			add("rigs", "rigs[%d] must be non-empty", index)
 			continue
 		}
-		if seen[name] {
-			add("rigs", "rigs[%d] duplicates rig %q", index, name)
+		if seen[ref.Name] {
+			// Two entries naming one rig would count its seats twice.
+			add("rigs", "rigs[%d] duplicates rig %q", index, ref.Name)
 			continue
 		}
-		seen[name] = true
-		p.Rigs[index] = name
+		seen[ref.Name] = true
+		// A tier is a position, so a negative one has no meaning.
+		if ref.Tier < 0 {
+			add("rigs", "rigs[%d] (%s) has a negative tier %d", index, ref.Name, ref.Tier)
+		}
+		// An unknown trigger would silently become "never" if accepted, so name
+		// the value the file actually carried.
+		if ref.Spill == "" {
+			ref.Spill = SpillOnFull
+		}
+		if !validSpill(ref.Spill) {
+			add("rigs", "rigs[%d] (%s) has unknown spill %q; want one of %s", index, ref.Name, ref.Spill, SpillNames())
+		}
 	}
 	p.Rig = ""
 	if p.ConcurrencyCap < 0 {
@@ -834,7 +849,8 @@ func validateProjects(file *File, dir, home string) error {
 			return fmt.Errorf("duplicate project key %q", project.Key)
 		}
 		keys[project.Key] = true
-		for _, name := range project.Rigs {
+		for _, ref := range project.Rigs {
+			name := ref.Name
 			if owner, ok := owners[name]; ok {
 				return &ValidationError{Errors: []FieldError{{
 					Field:   "rigs",

@@ -255,7 +255,7 @@ func projectBlock(project store.ProjectRow, cfg config.Project, eff *config.Effe
 		block.DefaultBranch = cfg.DefaultBranch
 	}
 	if len(block.Rigs) == 0 {
-		block.Rigs = append([]string(nil), cfg.Rigs...)
+		block.Rigs = cfg.Rigs.Names()
 	}
 	block.Forge = strings.ToLower(strings.TrimSpace(block.Forge))
 	block.RepoURL = repoURL(block.Forge, block.Repo, cfg.RepoURL)
