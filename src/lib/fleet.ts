@@ -475,3 +475,67 @@ export async function putCulture(
     throw error;
   }
 }
+
+/* ------------------------------------------------------------------ settings */
+
+/** One key the settings surface refuses, with the server's reason. Rendering it editable would be a
+ *  bug: the route answers 400 for it. */
+export interface ReadOnlyKey {
+  key: string;
+  reason: string;
+}
+
+/** GET /api/config. `settings` carries only what PUT accepts; `source` says where each value came
+ *  from (flag, environment, file or default); `hash` is the file bytes this read came from and must
+ *  be sent back on save. */
+export interface SettingsSnapshot {
+  settings: Record<string, string>;
+  source: Record<string, string>;
+  read_only: ReadOnlyKey[];
+  hash: string;
+}
+
+/** PUT /api/config. `saved: false` means the file already held these values, so the same shape as
+ *  "unchanged" from --apply-config. `restart_required` names the unit command's consequence without
+ *  running it. */
+export interface SettingsWriteResult {
+  saved: boolean;
+  changed: string[];
+  restart_required: boolean;
+  settings: Record<string, string>;
+  source: Record<string, string>;
+  hash: string;
+}
+
+/** A `409` from the settings write: the file changed since the screen loaded it. The screen must
+ *  reload rather than retry, because a retry with the old hash would be refused again. Its own type
+ *  so the screen cannot mistake it for a validation refusal. */
+export class SettingsConflict extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SettingsConflict";
+  }
+}
+
+export function isSettingsConflict(error: unknown): error is SettingsConflict {
+  return error instanceof SettingsConflict;
+}
+
+export const getSettings = () => request<SettingsSnapshot>("/api/config");
+
+/** Saves the given keys. `hash` is the hash `getSettings` returned; a stale one rejects with
+ *  `SettingsConflict`. A key absent from `values` is left alone, so a save writes only what the
+ *  operator touched. */
+export async function putSettings(values: Record<string, string>, hash: string): Promise<SettingsWriteResult> {
+  try {
+    return await request<SettingsWriteResult>("/api/config", {
+      method: "PUT",
+      body: JSON.stringify({ values, hash }),
+    });
+  } catch (error) {
+    if (isApiError(error) && error.status === 409) {
+      throw new SettingsConflict(error.message);
+    }
+    throw error;
+  }
+}

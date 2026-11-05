@@ -25,10 +25,12 @@
 
 ## 2. Screen (builder 2, blocked by 1)
 
-- [ ] 2.1 `src/lib/fleet.ts`: `getSettings`, `putSettings` (sends the hash the read returned).
-- [ ] 2.2 `SettingsScreen.tsx`: real fields with source badges, read-only rows visibly disabled with the reason, the
+- [x] 2.1 `src/lib/fleet.ts`: `getSettings`, `putSettings` (sends the hash the read returned).
+- [x] 2.2 `SettingsScreen.tsx`: real fields with source badges, read-only rows visibly disabled with the reason, the
       restart banner, the conflict state (409 ⇒ reload), and no `../mock` import.
-- [ ] 2.3 `src/mock/api.ts`: delete `getSettings`, `updateSettings`, `resetDatabase` and the workspace-settings type
-      when nothing else reads them.
-- [ ] 2.4 Evidence: build output plus a screenshot of the saved/restart banner against a throwaway config file and
+- [x] 2.3 `src/mock/api.ts`: delete `getSettings`, `updateSettings`, `resetDatabase` and the workspace-settings type
+      when nothing else reads them. (`getSettings` and `updateSettings` are deleted. `resetDatabase` stays:
+      `BoardControls`, the shell's dev seam, still reads it. The workspace-settings type stays: the mock's own
+      seed and its user-creation default still read it.)
+- [x] 2.4 Evidence: build output plus a screenshot of the saved/restart banner against a throwaway config file and
       `act: false` on a spare port.

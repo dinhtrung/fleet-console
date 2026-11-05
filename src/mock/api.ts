@@ -32,7 +32,6 @@ import {
   type Session,
   type User,
   type UserStatus,
-  type WorkspaceSettings,
 } from "./types";
 
 const STORAGE_KEY = "fleet-console.db";
@@ -412,11 +411,6 @@ export async function listSessions(query: ListQuery = {}): Promise<Page<Session 
   return paginate(sorted, query);
 }
 
-
-export async function getSettings(): Promise<WorkspaceSettings> {
-  await gate();
-  return { ...readStore().settings };
-}
 
 export async function dashboardSummary(orgId?: string): Promise<DashboardSummary> {
   await gate();
@@ -853,48 +847,6 @@ export async function revokeOtherSessions(): Promise<{ revoked: number }> {
       changes: [{ field: "active sessions", before: String(others.length + 1), after: "1" }],
     });
     return { revoked: others.length };
-  });
-}
-
-export async function updateSettings(input: Partial<WorkspaceSettings>): Promise<WorkspaceSettings> {
-  await gate();
-  return mutate((db) => {
-    const next = { ...db.settings };
-    const changes: FieldChange[] = [];
-    if (input.name !== undefined && input.name.trim() !== db.settings.name) {
-      if (input.name.trim().length < 2) throw new ApiError("conflict", "The workspace needs a name of at least two characters.");
-      changes.push({ field: "name", before: db.settings.name, after: input.name.trim() });
-      next.name = input.name.trim();
-    }
-    if (input.slug !== undefined && input.slug !== db.settings.slug) {
-      const slug = input.slug.trim();
-      if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug) || slug.length < 3) {
-        throw new ApiError("conflict", `“${slug}” is not a valid slug. Use lowercase letters, numbers and single hyphens.`);
-      }
-      if (db.organizations.some((o) => o.slug === slug)) {
-        throw new ApiError("conflict", `The slug “${slug}” is already used by an organization.`);
-      }
-      changes.push({ field: "slug", before: db.settings.slug, after: slug });
-      next.slug = slug;
-    }
-    if (input.defaultUserStatus !== undefined && input.defaultUserStatus !== db.settings.defaultUserStatus) {
-      changes.push({ field: "default user status", before: db.settings.defaultUserStatus, after: input.defaultUserStatus });
-      next.defaultUserStatus = input.defaultUserStatus;
-    }
-    if (input.defaultLanding !== undefined && input.defaultLanding !== db.settings.defaultLanding) {
-      changes.push({ field: "default landing", before: db.settings.defaultLanding, after: input.defaultLanding });
-      next.defaultLanding = input.defaultLanding;
-    }
-    if (changes.length === 0) return db.settings;
-    db.settings = next;
-    appendEvent(db, {
-      action: "settings.updated",
-      targetType: "settings",
-      targetId: "workspace",
-      targetLabel: "Workspace settings",
-      changes: diff(changes),
-    });
-    return next;
   });
 }
 
