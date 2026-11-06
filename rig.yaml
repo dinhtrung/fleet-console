@@ -1,89 +1,37 @@
-# fleet-console rig — opens on homebox with `rig up ./rig.yaml`.
-#
-# Three OMP (Oh My Pi) seats for the fleet-console repository itself:
-#   - 2 flash builders  → implement + check a bounded change end to end
-#   - 1 pro reviewer    → judges the candidate before it is merged
-#
-# Seats run via the OpenRig RPC runner on the OpenRouter.ai free endpoint for
-# code generation.  Every seat carries DEEPSEK_API_KEY in its environment so the
-# provider map can resolve the Deepseek models; the key is read from the
-# daemon's environment at launch (never checked into this file).
-#
-# Copy to a checkout of https://github.com/dinhtrung/fleet-console and run:
-#   rig spec validate ./rig.yaml --json
-#   rig specs sync && rig up ./rig.yaml --non-interruptive --json
 version: "0.2"
 name: fleet-console
-summary: >
-  A three-seat agent team for the fleet-console repository itself: two flash
-  builders that implement and check a bounded change, and one pro reviewer that
-  judges the candidate before it is merged. Seats run Oh My Pi (OMP) through the
-  OpenRig RPC runner on the OpenRouter.ai free code-generation endpoint, and
-  each seat needs DEEPSEK_API_KEY for the provider map.
-
-culture_file: CULTURE.md
-
-env:
-  # Launch environment for every seat. Dereferenced from the daemon's own env
-  # at `rig up` time; the value must be a non-empty string and is passed to the
-  # OMP runner so the DeepSeek provider key is present on the seat.
-  DEEPSEK_API_KEY: "${DEEPSEK_API_KEY}"
-
+permission_policy: builtin:yolo
+non_interruptive: true
 pods:
   - id: dev
-    label: Project
-    summary: Implementation and review team for the fleet-console repository.
+    label: Issues
     members:
-      - id: build
-        agent_ref: "local:agents/development/implementer"
+      - id: build-1
+        agent_ref: local:./agents/development/implementer
         profile: default
         runtime: omp
-        effort: low
-        cwd: "${HOME}/develop/fleet-console"
-        env:
-          DEEPSEK_API_KEY: "${DEEPSEK_API_KEY}"
-        startup:
-          files:
-            - path: guidance/fleet-first-move.md
-              delivery_hint: send_text
-              required: true
-      - id: build2
-        agent_ref: "local:agents/development/implementer"
+        cwd: "."
+        model: litellm/coder
+        restore_policy: resume_if_possible
+      - id: build-2
+        agent_ref: local:./agents/development/implementer
         profile: default
         runtime: omp
-        effort: low
-        cwd: "${HOME}/develop/fleet-console"
-        env:
-          DEEPSEK_API_KEY: "${DEEPSEK_API_KEY}"
-        startup:
-          files:
-            - path: guidance/fleet-first-move.md
-              delivery_hint: send_text
-              required: true
+        cwd: "."
+        model: litellm/coder
+        restore_policy: resume_if_possible
       - id: review
-        agent_ref: "local:agents/development/qa"
+        agent_ref: local:./agents/development/qa
         profile: default
-        runtime:        # OpenRouter multi-provider slug for DeepSeek V4.1 Flash.
-        effort: medium
-        cwd: "${HOME}/develop/fleet-console"
-        env:
-          DEEPSEK_API_KEY: "${DEEPSEK_API_KEY}"
-        startup:
-          files:
-            - path: guidance/review-charter.md
-              delivery_hint: send_text
-              required: true
+        runtime: omp
+        cwd: "."
+        model: litellm/coder
+        restore_policy: resume_if_possible
     edges:
       - kind: delegates_to
-        from: build
+        from: build-1
         to: review
       - kind: delegates_to
-        from: build2
+        from: build-2
         to: review
-
-# Cross-pod edges: none — all seats live in one pod.
 edges: []
-
-# Scoped team launch allowances; builtin:auto = Claude bypass-equivalent for
-# the builder seats, always-ask for the reviewer seat.
-permission_policy: builtin:auto
