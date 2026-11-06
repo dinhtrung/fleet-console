@@ -38,10 +38,8 @@ pods:
         agent_ref: "local:agents/development/implementer"
         profile: default
         runtime: omp
-        # OpenRouter multi-provider slug for DeepSeek V4.1 Flash.
-        model: "openrouter/deepseek/deepseek-v4.1-flash"
         effort: low
-        cwd: "/home/hermes/develop/fleet-console"
+        cwd: "${HOME}/develop/fleet-console"
         env:
           DEEPSEK_API_KEY: "${DEEPSEK_API_KEY}"
         startup:
@@ -53,9 +51,8 @@ pods:
         agent_ref: "local:agents/development/implementer"
         profile: default
         runtime: omp
-        model: "openrouter/deepseek/deepseek-v4.1-flash"
         effort: low
-        cwd: "/home/hermes/develop/fleet-console"
+        cwd: "${HOME}/develop/fleet-console"
         env:
           DEEPSEK_API_KEY: "${DEEPSEK_API_KEY}"
         startup:
@@ -66,11 +63,9 @@ pods:
       - id: review
         agent_ref: "local:agents/development/qa"
         profile: default
-        runtime: omp
-        # Pro reviewer seat; premium model through the same OpenRouter pool.
-        model: "openrouter/anthropic/claude-opus-4-6"
+        runtime:        # OpenRouter multi-provider slug for DeepSeek V4.1 Flash.
         effort: medium
-        cwd: "/home/hermes/develop/fleet-console"
+        cwd: "${HOME}/develop/fleet-console"
         env:
           DEEPSEK_API_KEY: "${DEEPSEK_API_KEY}"
         startup:
