@@ -1,0 +1,21 @@
+name: implementer
+version: "1.0"
+description: Implementation builder role for the fleet-console project.
+defaults:
+  runtime: omp
+imports:
+  - ref: local:../../agents/shared
+profiles:
+  default:
+    uses:
+      skills: []
+      guidance: []
+      subagents: []
+      plugins: []
+      runtime_resources: []
+    startup:
+      files:
+        - path: guidance/fleet-first-move.md
+          orientation: role
+          delivery_hint: send_text
+          required: true

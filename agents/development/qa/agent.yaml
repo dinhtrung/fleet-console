@@ -1,0 +1,21 @@
+name: qa
+version: "1.0"
+description: Independent review role for the fleet-console project.
+defaults:
+  runtime: omp
+imports:
+  - ref: local:../../agents/shared
+profiles:
+  default:
+    uses:
+      skills: []
+      guidance: []
+      subagents: []
+      plugins: []
+      runtime_resources: []
+    startup:
+      files:
+        - path: guidance/review-charter.md
+          orientation: role
+          delivery_hint: send_text
+          required: true

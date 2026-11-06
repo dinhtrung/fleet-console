@@ -1,0 +1,3 @@
+name: shared
+version: "1.0"
+description: Shared defaults used by the fleet-console development roles.
