@@ -42,6 +42,10 @@ type fakeGit struct {
 	worktrees int
 	reused    bool
 	err       error
+	// worktreePaths and branches record what the dispatcher asked for, so a test can assert the
+	// worktree layout and the branch without running git.
+	worktreePaths []string
+	branches      []string
 }
 
 func (g *fakeGit) Fetch(context.Context) error { g.fetched++; return g.err }
@@ -51,8 +55,10 @@ func (g *fakeGit) BaseSHA(context.Context) (string, error) {
 	}
 	return "base-sha", nil
 }
-func (g *fakeGit) WorktreeAddOrReuse(context.Context, string, string, string) (bool, error) {
+func (g *fakeGit) WorktreeAddOrReuse(_ context.Context, worktree, branch, _ string) (bool, error) {
 	g.worktrees++
+	g.worktreePaths = append(g.worktreePaths, worktree)
+	g.branches = append(g.branches, branch)
 	return g.reused, g.err
 }
 
@@ -395,6 +401,7 @@ type queueStub struct {
 	item        *rig.QueueItem
 	created     *rig.CreateRequest
 	createCalls int
+	sendCalls   int
 	rows        []rig.QueueRow
 	shows       map[string]*rig.QueueItem
 }
@@ -429,7 +436,7 @@ func (q *queueStub) QueueHandoff(context.Context, string, rig.HandoffRequest) (*
 func (q *queueStub) QueueUpdate(context.Context, string, rig.UpdateRequest) (*rig.QueueItem, error) {
 	return q.item, nil
 }
-func (q *queueStub) Send(context.Context, string, string) error { return nil }
+func (q *queueStub) Send(context.Context, string, string) error { q.sendCalls++; return nil }
 
 func TestTwoProjectsDispatchIsolatedWorktrees(t *testing.T) {
 	ctx := context.Background()

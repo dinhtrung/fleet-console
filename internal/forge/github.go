@@ -71,6 +71,12 @@ func (g *GitHub) Items(ctx context.Context, timeout Timeout) ([]Item, error) {
 		}
 		byNumber[issue.Number] = item
 		numbers = append(numbers, issue.Number)
+		if hasEpicLabel(labels) {
+			// The label is the only fact that says "container" before the first
+			// child is linked; the summary and the child list catch it later.
+			item.Kind = KindEpic
+			epics[issue.Number] = true
+		}
 		if issue.SubIssuesSummary != nil {
 			hasSummary[issue.Number] = true
 			if issue.SubIssuesSummary.Total > 0 {
@@ -217,6 +223,15 @@ func (g *GitHub) SubIssues(ctx context.Context, number int) ([]Item, error) {
 	return items, nil
 }
 
+func hasEpicLabel(labels []string) bool {
+	for _, label := range labels {
+		if label == EpicLabel {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *GitHub) subIssues(ctx context.Context, number int) ([]ghChild, error) {
 	path := fmt.Sprintf("repos/%s/issues/%d/sub_issues", g.slug, number)
 	raw, err := g.cli.api(ctx, path)
@@ -260,6 +275,7 @@ type ghPull struct {
 	MergedAt  *string `json:"merged_at"`
 	Head      struct {
 		SHA string `json:"sha"`
+		Ref string `json:"ref"`
 	} `json:"head"`
 }
 
@@ -289,7 +305,7 @@ func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 			// checks and its mergeable flag are dead weight the tick must not pay for.
 			requests = append(requests, ChangeRequest{
 				Number: pull.Number, State: pull.State, Merged: pull.MergedAt != nil,
-				HeadSHA: pull.Head.SHA, Draft: pull.Draft, Body: pull.Body,
+				HeadSHA: pull.Head.SHA, Branch: pull.Head.Ref, Draft: pull.Draft, Body: pull.Body,
 				ClosesItem: ParseCloses(pull.Body), URL: pull.HTMLURL,
 			})
 			continue
@@ -320,7 +336,7 @@ func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 		}
 		requests = append(requests, ChangeRequest{
 			Number: pull.Number, State: pull.State, Merged: pull.MergedAt != nil,
-			HeadSHA: pull.Head.SHA, Draft: pull.Draft,
+			HeadSHA: pull.Head.SHA, Branch: pull.Head.Ref, Draft: pull.Draft,
 			Mergeable: mergeable, Body: pull.Body, ClosesItem: ParseCloses(pull.Body),
 			Checks: checks, DocsOnly: DocsOnly(paths), URL: pull.HTMLURL,
 		})
@@ -413,13 +429,18 @@ func (g *GitHub) Notes(ctx context.Context, number int) ([]Comment, error) {
 		ID        int64  `json:"id"`
 		Body      string `json:"body"`
 		CreatedAt string `json:"created_at"`
+		User      struct {
+			Login string `json:"login"`
+		} `json:"user"`
 	}
 	if err := json.Unmarshal(raw, &batch); err != nil {
 		return nil, fmt.Errorf("forge: decode GitHub comments: %w", err)
 	}
 	out := make([]Comment, 0, len(batch))
 	for _, note := range batch {
-		out = append(out, Comment{ID: fmt.Sprint(note.ID), Body: note.Body, CreatedAt: note.CreatedAt})
+		out = append(out, Comment{
+			ID: fmt.Sprint(note.ID), Body: note.Body, CreatedAt: note.CreatedAt, Author: note.User.Login,
+		})
 	}
 	return out, nil
 }

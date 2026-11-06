@@ -1,29 +1,22 @@
-/** Settings: the workspace, your own profile, the density and the one destructive door.
+/** Settings: the service's configuration, as the service actually resolved it.
  *
- *  One form, one save — and it will not let an edit vanish quietly: leaving with unsaved changes
- *  is blocked, cancelling asks first, and the destructive zone sits apart from everything else
- *  behind a typed confirmation. A slug the service refuses is reported next to the slug field, not
- *  swallowed. */
+ *  Every value here comes from `GET /api/config`, which reads the same effective configuration
+ *  `--print-config` prints. So the screen cannot show a setting the process is not using, and a
+ *  read-only key is refused rather than merely greyed. A save sends back the hash the read carried;
+ *  a stale one is a conflict that reloads instead of overwriting the operator's edit.
+ *
+ *  A saved change needs a restart to take effect, because the process reads its configuration once
+ *  at boot. The screen states the command; it never restarts the service itself. */
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useBlocker } from "@tanstack/react-router";
-import { RotateCcw, TriangleAlert } from "lucide-react";
-import { getSettings, resetDatabase, updateSettings, updateUser } from "../mock/api";
-import { USER_STATUSES, isApiError } from "../mock/types";
-import type { UserStatus, WorkspaceSettings } from "../mock/types";
-import { useAuth } from "../auth/session";
-import { RequirePermission } from "../components/RequirePermission";
+import { TriangleAlert } from "lucide-react";
+import { getSettings, isSettingsConflict, putSettings } from "../lib/fleet";
+import type { SettingsSnapshot } from "../lib/fleet";
 import { PageHeader } from "../shell/PageHeader";
 import {
+  Badge,
   Button,
-  ConfirmDialog,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
   ErrorState,
   FieldRow,
   LoadingRows,
@@ -33,127 +26,68 @@ import {
   TextInput,
   useToast,
 } from "../components/ui";
-import { isSlug } from "../lib/format";
 
-/* ------------------------------------------------------------------ local preferences */
-
-type Density = "comfortable" | "compact";
-
-const DENSITY_KEY = "fleet-console.density";
-
-const DENSITY_OPTIONS: { value: Density; label: string }[] = [
-  { value: "comfortable", label: "Comfortable" },
-  { value: "compact", label: "Compact" },
+/** The six keys the route accepts. A value the server does not list is never rendered. */
+const EDITABLE: { key: string; label: string; hint: string; kind: "bool" | "duration" }[] = [
+  {
+    key: "tick_interval",
+    label: "Poll interval",
+    hint: "How often a busy fleet is polled. A duration such as 15s or 2m.",
+    kind: "duration",
+  },
+  {
+    key: "notify_interval",
+    label: "Notice interval",
+    hint: "How often the operator is told about work. A duration such as 30m.",
+    kind: "duration",
+  },
+  {
+    key: "act",
+    label: "Act",
+    hint: "Whether the loop may write to the forge, the rig and git. false is a dry run.",
+    kind: "bool",
+  },
+  {
+    key: "rig_lifecycle.enabled",
+    label: "Rig lifecycle",
+    hint: "Whether the app starts a rig when work arrives and stops it when the rig goes idle.",
+    kind: "bool",
+  },
+  {
+    key: "rig_lifecycle.idle_after",
+    label: "Stop a rig after",
+    hint: "How long a rig may sit with no work before it is stopped. A duration such as 10m.",
+    kind: "duration",
+  },
+  {
+    key: "rig_lifecycle.idle_poll_max",
+    label: "Idle poll ceiling",
+    hint: "The longest the poll may back off while the fleet is idle. Refused when below the poll interval.",
+    kind: "duration",
+  },
 ];
 
-function readDensity(): Density {
-  try {
-    return localStorage.getItem(DENSITY_KEY) === "compact" ? "compact" : "comfortable";
-  } catch {
-    return "comfortable";
-  }
-}
-
-/** Density is a personal preference with no service endpoint, so it is stored in this browser and
- *  announced on the document for the board's styles to pick up. */
-function writeDensity(density: Density): void {
-  try {
-    localStorage.setItem(DENSITY_KEY, density);
-  } catch {
-    // storage unavailable: the preference still applies for this session
-  }
-  document.documentElement.dataset.density = density;
-}
-
-const STATUS_LABELS: Record<UserStatus, string> = {
-  active: "Active",
-  invited: "Invited",
-  suspended: "Suspended",
-  deactivated: "Deactivated",
-};
-
-const STATUS_OPTIONS: { value: UserStatus; label: string }[] = USER_STATUSES.map((value) => ({
-  value,
-  label: STATUS_LABELS[value],
-}));
-
-const LANDING_OPTIONS: { value: WorkspaceSettings["defaultLanding"]; label: string }[] = [
-  { value: "dashboard", label: "Overview" },
-  { value: "users", label: "Users" },
-  { value: "sessions", label: "Sessions" },
-  { value: "audit", label: "Audit record" },
+const BOOL_OPTIONS = [
+  { value: "true", label: "true" },
+  { value: "false", label: "false" },
 ];
 
-const MAX_DISPLAY_NAME = 64;
+const RESTART_COMMAND = "systemctl --user restart fleet-console";
 
-/* ------------------------------------------------------------------ the form model */
-
-interface Draft {
-  name: string;
-  slug: string;
-  defaultUserStatus: UserStatus;
-  defaultLanding: WorkspaceSettings["defaultLanding"];
-  displayName: string;
-  density: Density;
-}
-
-interface FieldErrors {
-  name?: string;
-  slug?: string;
-  displayName?: string;
-}
-
-function seedDraft(settings: WorkspaceSettings, displayName: string): Draft {
-  return {
-    name: settings.name,
-    slug: settings.slug,
-    defaultUserStatus: settings.defaultUserStatus,
-    defaultLanding: settings.defaultLanding,
-    displayName,
-    density: readDensity(),
-  };
-}
-
-function editedFields(draft: Draft, baseline: Draft): Partial<Record<keyof Draft, true>> {
-  const changed: Partial<Record<keyof Draft, true>> = {};
-  if (draft.name.trim() !== baseline.name) changed.name = true;
-  if (draft.slug.trim() !== baseline.slug) changed.slug = true;
-  if (draft.defaultUserStatus !== baseline.defaultUserStatus) changed.defaultUserStatus = true;
-  if (draft.defaultLanding !== baseline.defaultLanding) changed.defaultLanding = true;
-  if (draft.displayName.trim() !== baseline.displayName) changed.displayName = true;
-  if (draft.density !== baseline.density) changed.density = true;
-  return changed;
-}
-
-/** The rules the surface checks before it asks the service: an empty or over-long display name and
- *  a malformed slug never leave the form. A duplicate slug is the service's to refuse, and its
- *  message lands on the field. */
-function validate(draft: Draft, baseline: Draft): FieldErrors {
-  const errors: FieldErrors = {};
-  if (draft.name.trim().length < 2) errors.name = "The workspace needs a name of at least two characters.";
-  const slug = draft.slug.trim();
-  if (slug !== baseline.slug && !isSlug(slug)) {
-    errors.slug =
-      "Use lowercase letters, numbers and single hyphens, three to forty-eight characters (for example fleet-console).";
-  }
-  const displayName = draft.displayName.trim();
-  if (displayName.length === 0) errors.displayName = "A display name is required.";
-  else if (displayName.length > MAX_DISPLAY_NAME) {
-    errors.displayName = `Keep the display name to ${MAX_DISPLAY_NAME} characters or fewer.`;
-  }
-  return errors;
-}
-
-export function SettingsScreen() {
+/** The source badge: where a value came from. `environment` and `flag` outrank the file, so naming
+ *  the source is how an operator knows why an edit to the file did not change what they see. */
+function SourceBadge({ source }: { source?: string }) {
+  if (!source) return null;
+  const tone = source === "file" ? "quiet" : source === "default" ? "quiet" : "tint";
   return (
-    <RequirePermission permission="settings.write" what="Workspace settings" title="Settings">
-      <SettingsBoard />
-    </RequirePermission>
+    <Badge tone={tone} mono title={`This value came from the ${source}`}>
+      {source}
+    </Badge>
   );
 }
 
-function SettingsBoard() {
-  const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettings });
+export function SettingsScreen() {
+  const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettings, staleTime: 0 });
 
   if (!settingsQuery.data) {
     return (
@@ -164,7 +98,7 @@ function SettingsBoard() {
             {settingsQuery.isError ? (
               <ErrorState error={settingsQuery.error} onRetry={() => void settingsQuery.refetch()} />
             ) : (
-              <LoadingRows rows={5} />
+              <LoadingRows rows={6} />
             )}
           </Panel>
         </div>
@@ -172,270 +106,237 @@ function SettingsBoard() {
     );
   }
 
-  // Mounting the form against the loaded settings seeds its state directly — no effect, so an
-  // edit is never clobbered by a refresh underneath it.
-  return <SettingsForm settings={settingsQuery.data} />;
+  // Mounting the form against the loaded snapshot seeds its state directly — no effect, so a
+  // refresh underneath never clobbers an edit in progress.
+  return <SettingsForm snapshot={settingsQuery.data} />;
 }
 
-function SettingsForm({ settings }: { settings: WorkspaceSettings }) {
-  const { identity, switchTo } = useAuth();
+interface SettingsFormProps {
+  snapshot: SettingsSnapshot;
+}
+
+function SettingsForm({ snapshot }: SettingsFormProps) {
   const toast = useToast();
   const queryClient = useQueryClient();
+  const formId = useId();
 
-  const displayName = identity?.name ?? "";
-  const [draft, setDraft] = useState<Draft>(() => seedDraft(settings, displayName));
-  const [baseline, setBaseline] = useState<Draft>(() => seedDraft(settings, displayName));
-  const [errors, setErrors] = useState<FieldErrors>({});
+  const [values, setValues] = useState<Record<string, string>>(snapshot.settings);
+  const [baseline, setBaseline] = useState<Record<string, string>>(snapshot.settings);
   const [saving, setSaving] = useState(false);
-  const [discardOpen, setDiscardOpen] = useState(false);
-  const [resetOpen, setResetOpen] = useState(false);
+  const [saved, setSaved] = useState<null | { changed: string[]; restart: boolean }>(null);
+  const [conflict, setConflict] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const dirty = Object.keys(editedFields(draft, baseline)).length > 0;
+  const dirtyKeys = EDITABLE.map((f) => f.key).filter((key) => (values[key] ?? "") !== (baseline[key] ?? ""));
+  const dirty = dirtyKeys.length > 0;
 
-  // Leaving the surface with edits pending warns first; a reload or a closed tab is caught too.
-  const blocker = useBlocker({
-    disabled: !dirty,
-    enableBeforeUnload: dirty,
-    withResolver: true,
-    shouldBlockFn: () => dirty,
-  });
 
   const onSave = async () => {
-    const nextErrors = validate(draft, baseline);
-    setErrors(nextErrors);
-    if (Object.keys(nextErrors).length > 0) return;
-
-    const changed = editedFields(draft, baseline);
+    if (!dirty) return;
     setSaving(true);
+    setError(null);
+    setConflict(null);
+    setSaved(null);
+    const body: Record<string, string> = {};
+    for (const key of dirtyKeys) body[key] = values[key];
     try {
-      if (changed.name || changed.slug || changed.defaultUserStatus || changed.defaultLanding) {
-        const patch: Partial<WorkspaceSettings> = {};
-        if (changed.name) patch.name = draft.name.trim();
-        if (changed.slug) patch.slug = draft.slug.trim();
-        if (changed.defaultUserStatus) patch.defaultUserStatus = draft.defaultUserStatus;
-        if (changed.defaultLanding) patch.defaultLanding = draft.defaultLanding;
-        try {
-          await updateSettings(patch);
-        } catch (error) {
-          const message = isApiError(error) ? error.message : "The change was refused.";
-          // A duplicate, empty or malformed slug comes back as a conflict: it lands on the field.
-          const field: keyof FieldErrors = /slug/i.test(message) ? "slug" : "name";
-          setErrors({ [field]: message });
-          toast.problem("Workspace settings refused", message);
-          return;
-        }
+      const result = await putSettings(body, snapshot.hash);
+      setBaseline(values);
+      setSaved({ changed: result.changed, restart: result.restart_required });
+      if (result.saved) {
+        toast.done(
+          "Configuration saved",
+          result.restart_required ? "Restart the service to apply it." : "The file already held these values.",
+        );
+      } else {
+        toast.done("No change", "The file already held these values.");
       }
-
-      if (changed.displayName && identity) {
-        try {
-          await updateUser(identity.userId, { name: draft.displayName.trim() });
-          // Re-apply the identity so the rail shows the new name without a reload.
-          await switchTo(identity.userId);
-        } catch (error) {
-          const message = isApiError(error) ? error.message : "The display name was refused.";
-          setErrors({ displayName: message });
-          toast.problem("Display name refused", message);
-          return;
-        }
+      // The save answers with the new hash and the values after the write, so a second save from
+      // this screen is a real read-modify-write rather than a stale one.
+      await queryClient.invalidateQueries({ queryKey: ["settings"] });
+    } catch (err) {
+      if (isSettingsConflict(err)) {
+        // A 409 means the file moved. Reloading is the only correct next step: retrying with the
+        // old hash would be refused again, and forcing the write would discard the other edit.
+        setConflict(err.message);
+        toast.problem("The file changed on disk", "Reload the settings and try again.");
+      } else {
+        const message = err instanceof Error ? err.message : "The change was refused.";
+        setError(message);
+        toast.problem("Configuration refused", message);
       }
-
-      if (changed.density) writeDensity(draft.density);
-
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["settings"] }),
-        queryClient.invalidateQueries({ queryKey: ["users"] }),
-        queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["audit"] }),
-        ...(identity ? [queryClient.invalidateQueries({ queryKey: ["user", identity.userId] })] : []),
-      ]);
-
-      setBaseline(draft);
-      setErrors({});
-      toast.done("Settings saved", "The workspace, your profile and the audit record now show the change.");
     } finally {
       setSaving(false);
     }
   };
 
-  const confirmDiscard = () => {
-    setDraft({ ...baseline });
-    setErrors({});
-    setDiscardOpen(false);
-  };
-
-  const confirmReset = async () => {
-    resetDatabase();
-    setResetOpen(false);
-    await queryClient.invalidateQueries();
+  const onReload = async () => {
+    setConflict(null);
+    setError(null);
+    setSaved(null);
     const fresh = await getSettings();
-    const reseeded = seedDraft(fresh, identity?.name ?? "");
-    setDraft(reseeded);
-    setBaseline(reseeded);
-    setErrors({});
-    toast.done("Board reset to its seed", "Every change made in this browser was discarded.");
+    queryClient.setQueryData(["settings"], fresh);
+    setValues(fresh.settings);
+    setBaseline(fresh.settings);
   };
 
   return (
     <>
       <PageHeader
         title="Settings"
-        description="The workspace configuration, your own profile and preferences, and a separated zone for actions that cannot be undone."
+        description="The configuration the service is running with, where each value came from, and the keys it refuses to change."
         crumbs={[{ label: "Board", to: "/" }, { label: "Settings" }]}
       />
 
-      <form
-        className="mx-auto flex max-w-3xl flex-col gap-3 px-3 py-3 sm:px-5"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void onSave();
-        }}
-      >
-        <Panel>
-          <PanelHead
-            title="Workspace"
-            description="The name and identifier the board is built on, and the defaults applied to new records."
-          />
-          <div className="grid gap-3 px-3 py-3 sm:grid-cols-2">
-            <TextInput
-              label="Workspace name"
-              value={draft.name}
-              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-              error={errors.name}
-              autoComplete="off"
-            />
-            <TextInput
-              label="Identifier slug"
-              value={draft.slug}
-              onChange={(event) => setDraft({ ...draft, slug: event.target.value })}
-              error={errors.slug}
-              hint="Lowercase letters, numbers and single hyphens; used in links."
-              autoComplete="off"
-            />
-            <SelectInput
-              label="Default status for new users"
-              value={draft.defaultUserStatus}
-              onChange={(event) => setDraft({ ...draft, defaultUserStatus: event.target.value as UserStatus })}
-              options={STATUS_OPTIONS}
-            />
-            <SelectInput
-              label="Default landing surface"
-              value={draft.defaultLanding}
-              onChange={(event) =>
-                setDraft({ ...draft, defaultLanding: event.target.value as WorkspaceSettings["defaultLanding"] })
-              }
-              options={LANDING_OPTIONS}
-            />
-          </div>
-        </Panel>
-
-        <Panel>
-          <PanelHead title="Your profile" description="How you are named on the board. Your email address is fixed." />
-          <div className="grid gap-3 px-3 py-3 sm:grid-cols-2">
-            <TextInput
-              label="Display name"
-              value={draft.displayName}
-              onChange={(event) => setDraft({ ...draft, displayName: event.target.value })}
-              error={errors.displayName}
-              hint={`${MAX_DISPLAY_NAME} characters or fewer.`}
-              autoComplete="off"
-            />
-            <FieldRow label="Signed in as">{identity?.email ?? "—"}</FieldRow>
-            <SelectInput
-              label="Display density"
-              value={draft.density}
-              onChange={(event) => setDraft({ ...draft, density: event.target.value as Density })}
-              options={DENSITY_OPTIONS}
-              hint="Stored as a personal preference and applied on the next load."
-            />
-          </div>
-        </Panel>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="submit" variant="primary" busy={saving} disabled={!dirty}>
-            Save changes
-          </Button>
-          <Button variant="outline" onClick={() => setDiscardOpen(true)} disabled={!dirty}>
-            Cancel
-          </Button>
-          <p role="status" aria-live="polite" className="text-[0.6875rem] text-ink-muted">
-            {dirty ? "Unsaved changes." : "No unsaved changes — save and cancel are unavailable."}
-          </p>
-        </div>
-      </form>
-
-      <section className="mx-auto max-w-3xl px-3 pb-6 sm:px-5">
-        <div className="flex items-center gap-2 border-t border-rule-strong pt-4">
-          <TriangleAlert size={14} aria-hidden="true" className="text-attention" />
-          <h2 className="label text-ink-muted">Destructive zone</h2>
-        </div>
-        <p className="mt-1 max-w-[60ch] text-[0.6875rem] text-ink-muted">
-          Kept apart from the settings above. An action here cannot be undone and demands a typed confirmation.
-        </p>
-        <Panel className="mt-3">
-          <div className="flex flex-wrap items-center gap-3 px-3 py-3">
-            <span className="min-w-[16rem] flex-1">
-              <span className="block text-body font-semibold text-ink">Reset the board to its seed</span>
-              <span className="block text-[0.6875rem] text-ink-muted">
-                Discards every user, role, organization, session and audit event in this browser and writes the
-                deterministic seed back.
+      <div className="mx-auto flex max-w-3xl flex-col gap-3 px-3 py-3 sm:px-5">
+        {conflict ? (
+          <Panel>
+            <div className="flex flex-wrap items-start gap-3 px-3 py-3" role="alert">
+              <TriangleAlert size={14} aria-hidden="true" className="mt-0.5 text-attention" />
+              <span className="min-w-[16rem] flex-1">
+                <span className="block text-body font-semibold text-ink">The file changed since this page loaded</span>
+                <span className="block text-[0.6875rem] text-ink-muted">
+                  {conflict} Reloading shows the current values; your unsaved edits are discarded, so copy anything you
+                  want to keep first.
+                </span>
               </span>
-            </span>
-            <Button
-              variant="attention"
-              icon={<RotateCcw size={13} aria-hidden="true" />}
-              onClick={() => setResetOpen(true)}
-            >
-              Reset the board…
-            </Button>
-          </div>
-        </Panel>
-      </section>
+              <Button variant="primary" onClick={() => void onReload()}>
+                Reload settings
+              </Button>
+            </div>
+          </Panel>
+        ) : null}
 
-      <ConfirmDialog
-        open={discardOpen}
-        onClose={() => setDiscardOpen(false)}
-        onConfirm={confirmDiscard}
-        title="Discard unsaved changes?"
-        description="The workspace and profile fields go back to their last saved values. Nothing on the board changes."
-        confirmLabel="Discard changes"
-      />
+        {saved ? (
+          <Panel>
+            <div className="px-3 py-3" role="status" aria-live="polite">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-body font-semibold text-ink">
+                  {saved.changed.length > 0 ? "Saved" : "No change"}
+                </span>
+                {saved.changed.map((key) => (
+                  <Badge key={key} mono tone="quiet">
+                    {key}
+                  </Badge>
+                ))}
+              </div>
+              {saved.restart ? (
+                <p className="mt-2 max-w-[62ch] text-[0.6875rem] text-ink-muted">
+                  The service reads its configuration once at boot, so this needs a restart to take effect. Run:
+                </p>
+              ) : (
+                <p className="mt-2 max-w-[62ch] text-[0.6875rem] text-ink-muted">
+                  These values already matched the file; its bytes are unchanged.
+                </p>
+              )}
+              {saved.restart ? (
+                <pre className="mt-2 overflow-x-auto rounded-chip border border-rule bg-surface px-2 py-1.5 font-mono text-[0.6875rem] text-ink">
+                  {RESTART_COMMAND}
+                </pre>
+              ) : null}
+            </div>
+          </Panel>
+        ) : null}
 
-      <ConfirmDialog
-        open={resetOpen}
-        onClose={() => setResetOpen(false)}
-        onConfirm={() => void confirmReset()}
-        title="Reset the board to its seed?"
-        description="Every record and the whole audit trail in this browser are discarded and the deterministic seed is written back. This cannot be undone."
-        confirmLabel="Reset the board"
-        requireTyped={baseline.slug}
-        typedLabel={`Type ${baseline.slug} to confirm`}
-      />
+        {error ? (
+          <Panel>
+            <div className="px-3 py-3" role="alert">
+              <span className="block text-body font-semibold text-ink">The change was refused</span>
+              <span className="block text-[0.6875rem] text-ink-muted">{error}</span>
+            </div>
+          </Panel>
+        ) : null}
 
-      {blocker.status === "blocked" ? (
-        <Dialog
-          open
-          onOpenChange={(next) => {
-            if (!next) blocker.reset?.();
+        <form
+          id={formId}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onSave();
           }}
         >
-          <DialogContent className="sm:max-w-sm">
-            <DialogHeader>
-              <DialogTitle>Leave settings without saving?</DialogTitle>
-              <DialogDescription>
-                You have unsaved changes. Leaving now discards them; stay here to keep editing.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button variant="quiet" onClick={() => blocker.reset?.()}>
-                Stay on settings
-              </Button>
-              <Button variant="attention" onClick={() => blocker.proceed?.()}>
-                Discard and leave
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      ) : null}
+          <Panel>
+            <PanelHead
+              title="Configuration"
+              description="Each value shows where it came from. A key the service refuses is listed below, disabled and with the reason."
+            />
+            <div className="grid gap-3 px-3 py-3 sm:grid-cols-2">
+              {EDITABLE.map((field) => {
+                const value = values[field.key] ?? "";
+                const source = snapshot.source[field.key];
+                if (field.kind === "bool") {
+                  return (
+                    <div key={field.key} className="flex flex-col gap-1">
+                      <SelectInput
+                        label={field.label}
+                        value={value === "true" ? "true" : "false"}
+                        onChange={(event) => setValues({ ...values, [field.key]: event.target.value })}
+                        options={BOOL_OPTIONS}
+                        hint={field.hint}
+                        disabled={saving}
+                      />
+                      <span className="flex items-center gap-1.5 text-[0.6875rem] text-ink-muted">
+                        <SourceBadge source={source} />
+                        <span className="font-mono">{field.key}</span>
+                      </span>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={field.key} className="flex flex-col gap-1">
+                    <TextInput
+                      label={field.label}
+                      value={value}
+                      onChange={(event) => setValues({ ...values, [field.key]: event.target.value })}
+                      hint={field.hint}
+                      disabled={saving}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <span className="flex items-center gap-1.5 text-[0.6875rem] text-ink-muted">
+                      <SourceBadge source={source} />
+                      <span className="font-mono">{field.key}</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </Panel>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button type="submit" variant="primary" busy={saving} disabled={!dirty || Boolean(conflict)}>
+              Save configuration
+            </Button>
+            <Button variant="outline" onClick={() => setValues(baseline)} disabled={!dirty || saving}>
+              Discard changes
+            </Button>
+            <p role="status" aria-live="polite" className="text-[0.6875rem] text-ink-muted">
+              {dirty ? `Unsaved changes to ${dirtyKeys.length} key${dirtyKeys.length === 1 ? "" : "s"}.` : "No unsaved changes."}
+            </p>
+          </div>
+        </form>
+
+        <Panel>
+          <PanelHead
+            title="Read-only"
+            description="Keys the settings surface refuses to change. Each is set in the file or the service's environment, and each explains why it cannot be edited here."
+          />
+          <div className="grid gap-2 px-3 py-3 sm:grid-cols-2">
+            {snapshot.read_only.length === 0 ? (
+              <FieldRow label="Nothing refused">Every key the file declares is editable from this screen.</FieldRow>
+            ) : (
+              snapshot.read_only.map((entry) => (
+                <FieldRow key={entry.key} label={entry.key}>
+                  <span className="block text-ink-muted">{entry.reason}</span>
+                </FieldRow>
+              ))
+            )}
+          </div>
+          <p className="px-3 pb-3 text-[0.6875rem] text-ink-muted">
+            A read-only key is disabled here rather than hidden, so you can see the setting exists and why it is not
+            yours to change from this screen. Edit it in the file, then restart the service.
+          </p>
+        </Panel>
+      </div>
     </>
   );
 }

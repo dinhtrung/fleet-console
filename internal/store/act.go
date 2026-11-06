@@ -86,23 +86,37 @@ func (s *Store) Dispatch(ctx context.Context, id int64) (*DispatchRow, error) {
 }
 
 // NewVerdict is one reviewer verdict to record.
+//
+// DispatchID is 0 for an adopted change request: the app never dispatched the
+// item, so there is no row to point at (design D2 — no synthetic dispatch).
+// ProjectID and ItemNumber name the item either way, and both are required: item
+// numbers are unique only within a project.
 type NewVerdict struct {
 	DispatchID int64
+	ProjectID  int64
+	ItemNumber int
 	SHA        string
 	Decision   string
 	Source     string
 	At         time.Time
 }
 
-// AddVerdict inserts a verdict.
+// AddVerdict inserts a verdict. A zero DispatchID is stored as NULL: a verdict
+// with no dispatch is adoption's normal case, not a missing value.
 func (s *Store) AddVerdict(ctx context.Context, v NewVerdict) (int64, error) {
 	at := v.At
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
+	var dispatchID any
+	if v.DispatchID != 0 {
+		dispatchID = v.DispatchID
+	}
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO verdict (dispatch_id, sha, decision, source, at) VALUES (?, ?, ?, ?, ?)`,
-		v.DispatchID, v.SHA, v.Decision, v.Source, at.UTC().Format(time.RFC3339Nano))
+		INSERT INTO verdict (dispatch_id, project_id, item_number, sha, decision, source, at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		dispatchID, v.ProjectID, v.ItemNumber, v.SHA, v.Decision, v.Source,
+		at.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return 0, fmt.Errorf("store: add verdict: %w", err)
 	}

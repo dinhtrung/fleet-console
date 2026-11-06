@@ -142,7 +142,7 @@ func TestApplyOneIsIdempotent(t *testing.T) {
 	st := testStore(t)
 	project := config.Project{
 		Key: "new-proj", Name: "New", Forge: "github", Repo: "o/new",
-		Rigs: []string{"rig-a"}, ConcurrencyCap: 2, DefaultBranch: "main",
+		Rigs: config.NamedRigs("rig-a"), ConcurrencyCap: 2, DefaultBranch: "main",
 		Labels: map[string]string{"status::ongoing": "in flight"},
 	}
 	project.Paths.Main = "/srv/new"

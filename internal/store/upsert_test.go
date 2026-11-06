@@ -132,3 +132,48 @@ func TestProjectRigsRoundTrip(t *testing.T) {
 		t.Fatalf("rigs after update = %+v", projects[0].Rigs)
 	}
 }
+
+// A project that declares a tier or a non-default trigger persists an object form in
+// rigs_json. decodeRigs must read all the names back from it: it is what the mirror
+// filters rows and seats with, so collapsing to one name silently hides work queued on
+// the project's later rigs. This is the round-trip the object form had no test for.
+func TestProjectRigTiersRoundTripKeepsEveryName(t *testing.T) {
+	ctx := context.Background()
+	st := upsertStore(t)
+	in := baseUpsert()
+	in.Project.Rig = ""
+	in.Project.Rigs = []string{"primary"}
+	in.Project.RigTiers = []RigTier{
+		{Name: "primary", Tier: 0, Spill: "on-full"},
+		{Name: "standby", Tier: 1, Spill: "on-unavailable"},
+		{Name: "cold", Tier: 2, Spill: "never"},
+	}
+	if _, id, err := st.UpsertProject(ctx, in); err != nil || id == 0 {
+		t.Fatalf("create: %v", err)
+	}
+	projects, err := st.Projects(ctx)
+	if err != nil {
+		t.Fatalf("projects: %v", err)
+	}
+	if len(projects) != 1 {
+		t.Fatalf("projects = %d, want 1", len(projects))
+	}
+	got := projects[0]
+	// The names, in declaration order, must survive the object form.
+	want := []string{"primary", "standby", "cold"}
+	if len(got.Rigs) != len(want) {
+		t.Fatalf("Rigs = %v, want %v: the object form collapsed the list", got.Rigs, want)
+	}
+	for i, name := range want {
+		if got.Rigs[i] != name {
+			t.Fatalf("Rigs = %v, want %v in order", got.Rigs, want)
+		}
+	}
+	// The tiers ride along, so the two views of the same column agree.
+	if len(got.RigTiers) != len(want) {
+		t.Fatalf("RigTiers = %+v, want %d entries", got.RigTiers, len(want))
+	}
+	if got.RigTiers[1].Tier != 1 || got.RigTiers[1].Spill != "on-unavailable" {
+		t.Fatalf("RigTiers[1] = %+v, want tier 1 on-unavailable", got.RigTiers[1])
+	}
+}

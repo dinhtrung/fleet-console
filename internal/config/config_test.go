@@ -275,7 +275,7 @@ func TestRigsListAndSingleRigForms(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(eff.Projects) != 1 || len(eff.Projects[0].Rigs) != 2 || eff.Projects[0].Rigs[0] != "rig-a" || eff.Projects[0].Rigs[1] != "rig-b" {
+	if len(eff.Projects) != 1 || len(eff.Projects[0].Rigs) != 2 || eff.Projects[0].Rigs[0].Name != "rig-a" || eff.Projects[0].Rigs[1].Name != "rig-b" {
 		t.Fatalf("rigs = %+v", eff.Projects)
 	}
 	printed, err := eff.Print()
@@ -291,7 +291,7 @@ func TestRigsListAndSingleRigForms(t *testing.T) {
 	if err != nil {
 		t.Fatalf("single: %v", err)
 	}
-	if len(eff.Projects[0].Rigs) != 1 || eff.Projects[0].Rigs[0] != "rig-a" {
+	if len(eff.Projects[0].Rigs) != 1 || eff.Projects[0].Rigs[0].Name != "rig-a" {
 		t.Fatalf("single rigs = %+v", eff.Projects[0].Rigs)
 	}
 	if eff.Projects[0].Rig != "" {

@@ -49,6 +49,7 @@ func (e *UnattributableVerdictError) Is(target error) bool { return target == Er
 // CapturedVerdict is the verdict stored from a reviewer note.
 type CapturedVerdict struct {
 	VerdictID int64
+	Item      int // the item the verdict is about, not the change request number
 	SHA       string
 	Decision  string
 	Source    string
@@ -112,7 +113,10 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 // storeVerdict records the decision once. A tick re-reads the same notes, so the
 // same verdict must not be added twice.
 func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, noteID, sha, decision string) (*CapturedVerdict, error) {
-	existing, err := a.Store.Verdicts(ctx, dispatchID)
+	// A verdict with no dispatch belongs to the item of one project: adoption's
+	// case. Reading it back unscoped would find another project's row for the same
+	// item number and mistake it for this one.
+	existing, err := a.verdictsFor(ctx, dispatchID, item)
 	if err != nil {
 		return nil, err
 	}
@@ -122,8 +126,8 @@ func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, 
 		}
 	}
 	verdictID, err := a.Store.AddVerdict(ctx, store.NewVerdict{
-		DispatchID: dispatchID, SHA: sha, Decision: decision,
-		Source: "note " + noteID, At: a.now(),
+		DispatchID: dispatchID, ProjectID: a.ProjectID, ItemNumber: item,
+		SHA: sha, Decision: decision, Source: "note " + noteID, At: a.now(),
 	})
 	if err != nil {
 		return nil, err
@@ -132,7 +136,20 @@ func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, 
 		fmt.Sprintf("%s %s from note %s", decision, sha, noteID)); err != nil {
 		return nil, err
 	}
-	return &CapturedVerdict{VerdictID: verdictID, SHA: sha, Decision: decision, Source: "note " + noteID, NoteID: noteID}, nil
+	return &CapturedVerdict{
+		VerdictID: verdictID, Item: item, SHA: sha, Decision: decision,
+		Source: "note " + noteID, NoteID: noteID,
+	}, nil
+}
+
+// verdictsFor reads the verdicts that already exist for this change, keyed the
+// way the merge will read them: by dispatch when there is one, by item when the
+// change request was adopted without a dispatch.
+func (a *Actions) verdictsFor(ctx context.Context, dispatchID int64, item int) ([]store.VerdictRow, error) {
+	if dispatchID != 0 {
+		return a.Store.Verdicts(ctx, dispatchID)
+	}
+	return a.Store.VerdictsForItem(ctx, a.ProjectID, item)
 }
 
 // CaptureFromForge reads the change request's notes and stores the verdict.

@@ -30,6 +30,10 @@ type TickInput struct {
 	Plan         decide.Plan
 	WorktreeRoot string
 	Now          func() time.Time
+	// LifecycleFailed names, per rig, the launch failure this tick hit: every
+	// dispatch intent on that rig is skipped with the same named reason rather
+	// than writing a worktree and a row no seat will ever claim (design D5).
+	LifecycleFailed map[string]string
 	// OnDecision receives every decision this tick raised, so the caller can
 	// put it on somebody's phone. It is called after the row exists. It cannot
 	// fail the tick: a dead transport is not a dead fleet (design.md §5), so a
@@ -84,7 +88,10 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	if in.Store == nil || in.Forge == nil || in.Rig == nil || in.Git == nil {
 		return report, fmt.Errorf("act tick: store, forge, rig and git are required")
 	}
-	actions := &Actions{Store: in.Store, Forge: in.Forge, Rig: in.Rig, Git: in.Git, Now: in.Now}
+	actions := &Actions{
+		Store: in.Store, Forge: in.Forge, Rig: in.Rig, Git: in.Git, Now: in.Now,
+		ProjectID: in.Project.ID,
+	}
 
 	// Verdict capture and the merge watchdog run before new dispatches: a merged
 	// task frees its seat, and the same tick must not re-dispatch it.
@@ -121,14 +128,16 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		if item == 0 {
 			continue
 		}
-		dispatch, ok := latest[item]
-		if !ok {
-			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d: change request #%d closes no dispatch", item, request.Number))
-			continue
+		// Capture first, decide second (design D3): the verdict is a fact about the
+		// change request, and it must be recorded whether or not this tick merges.
+		// A dispatch id of 0 is adoption's case — the item has no row, and the
+		// verdict is keyed by item so a later merge can find it.
+		dispatch, hasDispatch := latest[item]
+		var dispatchID int64
+		if hasDispatch {
+			dispatchID = dispatch.ID
 		}
-		// The verdict is posted on the change request, under the change request's own
-		// number; item is only for the report and the store.
-		captured, err := actions.CaptureFromForge(ctx, dispatch.ID, item, request.Number, request.HeadSHA)
+		captured, err := actions.CaptureFromForge(ctx, dispatchID, item, request.Number, request.HeadSHA)
 		if err != nil {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d verdict: %v", item, err))
 			continue
@@ -136,7 +145,24 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		if captured != nil {
 			report.Verdicts = append(report.Verdicts, *captured)
 		}
-		merged, err := actions.Merge(ctx, dispatch.ID, item)
+		var merged *MergeResult
+		switch {
+		case hasDispatch && request.Branch != "" && request.Branch != dispatch.Branch:
+			// Two branches close one item: the dispatch is one and this change
+			// request is the other. Which work survives is a human decision, so
+			// refuse and name both, exactly as the adoption arm does (design D4).
+			report.Skipped = append(report.Skipped, fmt.Sprintf(
+				"#%d merge waiting: refusing merge: live dispatch on %s and change request #%d is on %s",
+				item, dispatch.Branch, request.Number, request.Branch))
+			continue
+		case hasDispatch:
+			merged, err = actions.Merge(ctx, dispatch.ID, item)
+		default:
+			// No row: adopt the change request when it is the one the app would
+			// have produced (design D1). The guards are in MergeAdopted, so a
+			// refusal here names the missing fact rather than the missing row.
+			merged, err = actions.MergeAdopted(ctx, in.Project.ID, item, request)
+		}
 		if err != nil {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d merge waiting: %v", item, err))
 			continue
@@ -160,8 +186,23 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	// not closed twice.
 	actions.sweepEpics(ctx, in, &report, rolled)
 
+	// The plan is built before this tick runs, so its "no verdict" judgment is a
+	// prediction about a state the tick itself changes: the merge loop above
+	// captures verdicts from the same notes the plan read. Paging the owner for a
+	// decision they answered before the row reached them is the failure this guard
+	// exists for (#142).
+	capturedItems := make(map[int]bool, len(report.Verdicts))
+	for _, captured := range report.Verdicts {
+		capturedItems[captured.Item] = true
+	}
+
 	for _, intent := range in.Plan.Intents {
 		if intent.Kind != decide.IntentRaiseDecision {
+			continue
+		}
+		if capturedItems[intent.Item] {
+			report.Skipped = append(report.Skipped, fmt.Sprintf(
+				"#%d decision skipped: this tick captured the verdict the plan called missing", intent.Item))
 			continue
 		}
 		result, err := actions.RaiseDecision(ctx, in.Project, intent.Item, intent.Text, intent.Event.Kind, in.WorktreeRoot)
@@ -179,6 +220,14 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		}
 	}
 
+	// A rig whose launch failed this tick has nothing to claim its work: name the
+	// failure once, before the dispatch loop, whatever the plan carried. The skip
+	// is the one line the operator sees, and the issue is retried next tick.
+	for _, rigName := range projectRigs(in.Project) {
+		if failure, ok := in.LifecycleFailed[rigName]; ok {
+			report.Skipped = append(report.Skipped, fmt.Sprintf("rig %s up: %s", rigName, failure))
+		}
+	}
 	for _, intent := range in.Plan.Intents {
 		if intent.Kind != decide.IntentDispatch {
 			continue
@@ -188,10 +237,19 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d is not in the mirror", intent.Item))
 			continue
 		}
+		if rigName := rigFromSeat(intent.Seat); rigName != "" {
+			if _, ok := in.LifecycleFailed[rigName]; ok {
+				continue
+			}
+		}
 		if liveRowNames(in.Rows, intent.Item) {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d has a live row", intent.Item))
 			continue
 		}
+		// A change request on this item is already work in flight. decide's
+		// branch_open_cr only sees a CR whose branch name encodes the number, so a
+		// CR on a differently named branch reaches here and must not be dispatched
+		// twice; it also counts in Result.Ready, which can start the rig.
 		if changeRequestFor(in.CRs, intent.Item) != nil {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d already has a change request", intent.Item))
 			continue
@@ -230,8 +288,32 @@ func itemFor(items []forge.Item, number int) *forge.Item {
 	return nil
 }
 
+// projectRigs is every rig a project is bound to, deduplicated in order.
+func projectRigs(project store.ProjectRow) []string {
+	rigs := project.Rigs
+	if len(rigs) == 0 && project.Rig != "" {
+		rigs = []string{project.Rig}
+	}
+	seen := make(map[string]bool, len(rigs))
+	out := make([]string, 0, len(rigs))
+	for _, name := range rigs {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
 func changeRequestFor(requests []forge.ChangeRequest, item int) *forge.ChangeRequest {
 	for index := range requests {
+		// A closed or merged change request can never merge again. It must not block
+		// a re-dispatch: a rejected attempt leaves its PR closed, and the item is
+		// free work for the next builder.
+		if requests[index].Merged || strings.EqualFold(requests[index].State, "closed") {
+			continue
+		}
 		if requests[index].ClosesItem == item || forge.ParseCloses(requests[index].Body) == item {
 			return &requests[index]
 		}

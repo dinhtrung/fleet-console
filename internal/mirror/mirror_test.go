@@ -151,12 +151,15 @@ func TestLoopTicksAndStops(t *testing.T) {
 	go func() {
 		m.Loop(ctx,
 			func(context.Context) ([]Project, error) { return []Project{{ID: id, Key: "app", Forge: fake}}, nil },
-			5*time.Millisecond, time.Millisecond,
-			func(TickResult) {
+			Cadence{Base: 5 * time.Millisecond, Max: 5 * time.Millisecond}, time.Millisecond,
+			func(TickResult) bool {
+				// Busy: an open item, so the wait stays at the base and the
+				// second tick arrives promptly.
 				if atomic.AddInt32(&ticks, 1) >= 2 {
 					cancel()
 				}
-			})
+				return true
+			}, nil)
 		close(done)
 	}()
 	select {
@@ -412,5 +415,61 @@ func TestFailedSeatReadNamesNoGhostRig(t *testing.T) {
 	warnings := read.Projects["app"].RigWarnings
 	if len(warnings) != 1 || warnings[0] != "rig-b" {
 		t.Fatalf("warnings = %v, want [rig-b]", warnings)
+	}
+}
+
+// The safety net the object form defeated. A project that declares tiers persists an
+// object form in rigs_json; if the name list collapses to the first entry, the mirror's
+// own filters drop every row and seat on the later rigs, and missingRigs cannot name a
+// rig that is not in the list. This drives a real database round-trip and then the real
+// filters, so it fails if the two views of the column ever disagree again.
+func TestTierRigsSurviveTheRoundTripAndTheFilters(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	id, err := st.CreateProject(ctx, store.ProjectInput{
+		Key: "app", Name: "app", ForgeKind: "github", ForgeProject: "o/r",
+		Rig: "primary", Rigs: []string{"primary"},
+		RigTiers: []store.RigTier{
+			{Name: "primary", Tier: 0, Spill: "on-full"},
+			{Name: "standby", Tier: 1, Spill: "on-unavailable"},
+			{Name: "cold", Tier: 2, Spill: "never"},
+		},
+		ConcurrencyCap: 2, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	projects, err := st.Projects(ctx)
+	if err != nil {
+		t.Fatalf("projects: %v", err)
+	}
+	if len(projects) != 1 || projects[0].ID != id {
+		t.Fatalf("projects = %+v, want the one created", projects)
+	}
+	project := projects[0]
+
+	if len(project.Rigs) != 3 {
+		t.Fatalf("Rigs = %v, want all three names from the object form", project.Rigs)
+	}
+	want := []string{"primary", "standby", "cold"}
+	for i, name := range want {
+		if project.Rigs[i] != name {
+			t.Fatalf("Rigs = %v, want %v in declaration order", project.Rigs, want)
+		}
+	}
+
+	// The mirror's filters use that list. Only a tier-0 seat is running, so both
+	// later rigs must be reported missing, and a row on a later rig must survive.
+	seats := []rig.Seat{{Rig: "primary", Session: "build@primary"}}
+	if missing := missingRigs(project.Rigs, seats); len(missing) != 2 {
+		t.Fatalf("missingRigs = %v, want standby and cold named", missing)
+	}
+	rows := []rig.QueueRow{
+		{ID: "q1", Destination: "build@primary"},
+		{ID: "q2", Destination: "build@standby"},
+		{ID: "q9", Destination: "build@elsewhere"},
+	}
+	if got := filterRows(rows, project.Rigs); len(got) != 2 {
+		t.Fatalf("filterRows = %d rows, want 2: a tier-1 row was dropped or a foreign one kept", len(got))
 	}
 }

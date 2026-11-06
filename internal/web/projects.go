@@ -17,6 +17,18 @@ import (
 
 // ProjectRequest is the body of POST /api/projects: the shape the file uses,
 // snake_case as the YAML tags spell it.
+// rigRefsFromNames is the API's boundary: the projects route publishes and accepts
+// rigs as plain names, so a name arriving over the wire becomes the tier-0,
+// on-full entry that the union decode gives a bare string. Tiers are configured in
+// the file until a later task widens this contract.
+func rigRefsFromNames(names []string) config.RigRefs {
+	out := make(config.RigRefs, 0, len(names))
+	for _, name := range names {
+		out = append(out, config.RigRef{Name: name, Tier: 0, Spill: config.SpillOnFull})
+	}
+	return out
+}
+
 type ProjectRequest struct {
 	Key            string            `json:"key"`
 	Name           string            `json:"name"`
@@ -120,7 +132,7 @@ func createProject(st *store.Store, configPath string, write func(string, config
 			Forge:          req.Forge,
 			Repo:           req.Repo,
 			DefaultBranch:  req.DefaultBranch,
-			Rigs:           req.Rigs,
+			Rigs:           rigRefsFromNames(req.Rigs),
 			RigTemplate:    req.RigTemplate,
 			ConcurrencyCap: req.ConcurrencyCap,
 			GateCmd:        req.GateCmd,
@@ -150,7 +162,7 @@ func createProject(st *store.Store, configPath string, write func(string, config
 			Forge:          project.Forge,
 			Repo:           project.Repo,
 			DefaultBranch:  project.DefaultBranch,
-			Rigs:           project.Rigs,
+			Rigs:           project.Rigs.Names(),
 			RigTemplate:    project.RigTemplate,
 			ConcurrencyCap: project.ConcurrencyCap,
 			GateCmd:        project.GateCmd,
@@ -281,7 +293,7 @@ func projectResponse(project config.Project, source string) ProjectResponse {
 		Forge:          project.Forge,
 		Repo:           project.Repo,
 		DefaultBranch:  project.DefaultBranch,
-		Rigs:           project.Rigs,
+		Rigs:           project.Rigs.Names(),
 		RigTemplate:    project.RigTemplate,
 		ConcurrencyCap: project.ConcurrencyCap,
 		GateCmd:        project.GateCmd,

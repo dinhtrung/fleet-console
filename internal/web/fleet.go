@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/gofiber/fiber/v3"
@@ -23,6 +24,10 @@ type Fleet struct {
 	Hub    *Hub
 	Now    func() time.Time
 	Compat func(ctx context.Context) rig.Report
+	// ForgeFor resolves a project's forge for the one write path the board
+	// owns: a human approve/reject posts a note on the change request. Every
+	// other write stays in the act loop.
+	ForgeFor func(ctx context.Context, project store.ProjectRow) (forge.Forge, error)
 }
 
 type boardItem struct {
@@ -149,6 +154,54 @@ func (f *Fleet) forgeHeads(ctx context.Context, projectID int64) (map[int]string
 		}
 	}
 	return heads, nil
+}
+
+// forgeChange returns the newest open change request that closes this item, read
+// from the mirror's forge snapshot. The item drawer used to take the pull request
+// from a pr: label, and nothing writes that label on an item the act loop did not
+// dispatch - so a hand-built or adopted pull request left the drawer saying "no
+// change request" while the pull request was open, with no way to judge it.
+func (f *Fleet) forgeChange(ctx context.Context, projectID int64, number int) *changeRequest {
+	raw, _, err := f.Store.GetSnapshot(ctx, projectID, "forge")
+	if err != nil || len(raw) == 0 {
+		return nil
+	}
+	var snapshot struct {
+		CRs []struct {
+			Number     int    `json:"number"`
+			ClosesItem int    `json:"closes_item"`
+			Merged     bool   `json:"merged"`
+			State      string `json:"state"`
+			Checks     []struct {
+				Name       string `json:"name"`
+				Conclusion string `json:"conclusion"`
+			} `json:"checks"`
+		} `json:"change_requests"`
+	}
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return nil
+	}
+	var best *changeRequest
+	for _, cr := range snapshot.CRs {
+		// The mirror stores every change request the forge read returned, closed
+		// ones included. Skip a closed request as well as a merged one: a closed
+		// pull request is not something the operator can judge, and the verdict
+		// POST refuses it with 409. openChangeRequest (verdict.go) is the twin
+		// predicate and already skips StateClosed; the drawer must agree with it,
+		// or the drawer offers a button the POST rejects.
+		if cr.Merged || cr.State == string(forge.StateClosed) || cr.ClosesItem != number {
+			continue
+		}
+		if best != nil && cr.Number <= best.Number {
+			continue
+		}
+		judged := changeRequest{Number: cr.Number}
+		for _, check := range cr.Checks {
+			judged.Checks = append(judged.Checks, checkOut{Name: check.Name, Conclusion: check.Conclusion})
+		}
+		best = &judged
+	}
+	return best
 }
 
 // Board assembles projects, counts and one reason per task from stored facts.
@@ -402,6 +455,26 @@ func (f *Fleet) Item(c fiber.Ctx) error {
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
+		// The snapshot is the authority: every mirror tick rewrites it, while the
+		// pr: label is a write the act loop only makes after it dispatched the item
+		// itself - so an adopted pull request has no label and used to read as "no
+		// change request" with nothing to judge.
+		if judged := f.forgeChange(ctx, p.ID, number); judged != nil {
+			detail.Change = judged
+		} else if pr := labelValue(labels, "pr:"); pr != "" {
+			if n, err := strconv.Atoi(pr); err == nil {
+				cr := changeRequest{Number: n}
+				for _, l := range labels {
+					if strings.HasPrefix(l, "check:") {
+						parts := strings.SplitN(strings.TrimPrefix(l, "check:"), "=", 2)
+						if len(parts) == 2 {
+							cr.Checks = append(cr.Checks, checkOut{Name: parts[0], Conclusion: parts[1]})
+						}
+					}
+				}
+				detail.Change = &cr
+			}
+		}
 		if len(dispatches) > 0 {
 			d := dispatches[0]
 			detail.Dispatch = &d
@@ -409,20 +482,6 @@ func (f *Fleet) Item(c fiber.Ctx) error {
 			if d.BriefPath != "" {
 				if data, err := readCapped(d.BriefPath, 8192); err == nil {
 					detail.Brief = data
-				}
-			}
-			if pr := labelValue(labels, "pr:"); pr != "" {
-				if n, err := strconv.Atoi(pr); err == nil {
-					cr := changeRequest{Number: n}
-					for _, l := range labels {
-						if strings.HasPrefix(l, "check:") {
-							parts := strings.SplitN(strings.TrimPrefix(l, "check:"), "=", 2)
-							if len(parts) == 2 {
-								cr.Checks = append(cr.Checks, checkOut{Name: parts[0], Conclusion: parts[1]})
-							}
-						}
-					}
-					detail.Change = &cr
 				}
 			}
 			verdicts, err := f.Store.Verdicts(ctx, d.ID)
@@ -476,10 +535,6 @@ type decisionOut struct {
 	Questions   []rig.HumanQuestion `json:"questions,omitempty"`
 }
 
-func humanDecision(destination string) bool {
-	return strings.Contains(destination, "human@") || strings.HasSuffix(destination, "@external")
-}
-
 // Decisions reads obligations waiting on a person from the rig, oldest first.
 func (f *Fleet) Decisions(c fiber.Ctx) error {
 	if f.Rig == nil {
@@ -491,19 +546,21 @@ func (f *Fleet) Decisions(c fiber.Ctx) error {
 	}
 	out := make([]decisionOut, 0)
 	for _, row := range rows {
+		// A cheap pre-filter only: `rig queue list` may omit blockedOn, so a
+		// blocked row's fate is decided by QueueShow below. The authoritative
+		// check is rig.WaitsOnHuman on the resolved item — the same rule the
+		// quiet predicate asks, so served and counted are one answer (#143).
 		if row.State != "pending" && row.State != "blocked" {
 			continue
 		}
-		// A pending human row is an obligation the moment it is created; a blocked
-		// row also counts when its blocker is a human seat, whatever its destination.
-		if row.State == "pending" && !humanDecision(row.Destination) {
+		if row.State == "pending" && !rig.HumanDecision(row.Destination) {
 			continue
 		}
 		item, err := f.Rig.QueueShow(c.Context(), row.ID)
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
-		if !humanDecision(item.Destination) && !(item.State == "blocked" && humanDecision(item.BlockedOn)) {
+		if !rig.WaitsOnHuman(item.State, item.Destination, item.BlockedOn) {
 			continue
 		}
 		d := decisionOut{
@@ -621,17 +678,81 @@ func (f *Fleet) SeatTail(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"session": session, "lines": lines, "tail": tail})
 }
 
-// Events returns the newest audit rows.
+// allowedEventFilters is the closed set of /api/events query parameters. A name
+// outside it is refused, never ignored: a silently dropped filter answers
+// "nothing matched" for a question the operator did ask.
+var allowedEventFilters = map[string]bool{
+	"actor": true, "kind": true, "subject": true,
+	"since": true, "until": true, "limit": true, "before": true,
+}
+
+// Events returns one page of the audit log, newest first.
 func (f *Fleet) Events(c fiber.Ctx) error {
-	limit := 50
-	if raw := c.Query("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 500 {
-			limit = n
+	// Every parameter is validated before the store is touched, so a refused
+	// request costs no query.
+	for name := range c.Queries() {
+		if !allowedEventFilters[name] {
+			return fiber.NewError(fiber.StatusBadRequest, "unsupported filter: "+name)
 		}
 	}
-	events, err := f.Store.RecentEvents(c.Context(), limit)
+
+	filter := store.EventFilter{
+		Actor:         c.Query("actor"),
+		Kind:          c.Query("kind"),
+		SubjectPrefix: c.Query("subject"),
+		Limit:         50,
+	}
+	// limit keeps its existing clamp: an unusable value falls back to the default
+	// rather than refusing the read the operator is already looking at.
+	if raw := c.Query("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 500 {
+			filter.Limit = n
+		}
+	}
+	if raw := c.Query("before"); raw != "" {
+		before, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || before <= 0 {
+			return fiber.NewError(fiber.StatusBadRequest, "unsupported filter: before")
+		}
+		filter.Before = before
+	}
+	for _, name := range []string{"since", "until"} {
+		raw := c.Query(name)
+		if raw == "" {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "unsupported filter: "+name)
+		}
+		// Normalized to UTC RFC3339Nano: the store compares the column with
+		// julianday, and one spelling of the bound keeps that comparison exact.
+		if name == "since" {
+			filter.Since = at.UTC().Format(time.RFC3339Nano)
+		} else {
+			filter.Until = at.UTC().Format(time.RFC3339Nano)
+		}
+	}
+
+	page, err := f.Store.Events(c.Context(), filter)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 	}
-	return c.JSON(fiber.Map{"events": events})
+	return c.JSON(page)
+}
+
+// Event returns one audit row by id, with its exit code and stdout hash.
+func (f *Fleet) Event(c fiber.Ctx) error {
+	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
+	if err != nil || id <= 0 {
+		return fiber.NewError(fiber.StatusNotFound, "event not found")
+	}
+	event, err := f.Store.EventByID(c.Context(), id)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+	}
+	if event == nil {
+		return fiber.NewError(fiber.StatusNotFound, "event not found")
+	}
+	return c.JSON(event)
 }

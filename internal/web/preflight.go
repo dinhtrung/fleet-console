@@ -344,7 +344,7 @@ func (s setupRig) Up(ctx context.Context, specPath string) error {
 func setupInput(eff config.Effective, project config.Project) setup.Input {
 	rigName := strings.TrimSpace(project.Rig)
 	if rigName == "" && len(project.Rigs) > 0 {
-		rigName = strings.TrimSpace(project.Rigs[0])
+		rigName = strings.TrimSpace(project.Rigs[0].Name)
 	}
 	builders := project.ConcurrencyCap
 	if builders < 1 {

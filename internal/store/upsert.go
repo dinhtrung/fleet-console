@@ -85,12 +85,16 @@ func (s *Store) UpsertProject(ctx context.Context, in UpsertInput) (UpsertResult
 	if len(rigs) > 0 {
 		firstRig = rigs[0]
 	}
+	rigsJSON := encodeRigs(rigs)
+	if len(in.Project.RigTiers) > 0 {
+		rigsJSON = encodeRigTiers(in.Project.RigTiers)
+	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE project SET name = ?, forge_kind = ?, forge_project = ?, default_branch = ?,
 		       rig = ?, rigs_json = ?, rig_template = ?, concurrency_cap = ?, enabled = 1, onhold = ?, gate_cmd = ?, labels_json = ?
 		WHERE id = ?`,
 		in.Project.Name, in.Project.ForgeKind, in.Project.ForgeProject, in.Project.DefaultBranch,
-		firstRig, encodeRigs(rigs), in.Project.RigTemplate, in.Project.ConcurrencyCap, boolInt(onhold),
+		firstRig, rigsJSON, in.Project.RigTemplate, in.Project.ConcurrencyCap, boolInt(onhold),
 		nullString(in.Project.GateCmd), in.LabelsJSON, existing.ID)
 	if err != nil {
 		return "", 0, fmt.Errorf("store: upsert project: %w", err)
@@ -131,11 +135,18 @@ func (s *Store) createProjectWithLabels(ctx context.Context, in ProjectInput, la
 	if len(rigs) > 0 {
 		firstRig = rigs[0]
 	}
+	// A project that declares tiers persists them, not the bare names: the create
+	// path is the one an --apply-config on a fresh box takes, so dropping them here
+	// would leave the first tick planning against a flat list.
+	rigsJSON := encodeRigs(rigs)
+	if len(in.RigTiers) > 0 {
+		rigsJSON = encodeRigTiers(in.RigTiers)
+	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO project (key, name, forge_kind, forge_project, default_branch, rig, rigs_json, rig_template,
 		                     concurrency_cap, enabled, onhold, gate_cmd, labels_json)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		in.Key, in.Name, in.ForgeKind, in.ForgeProject, in.DefaultBranch, firstRig, encodeRigs(rigs), in.RigTemplate,
+		in.Key, in.Name, in.ForgeKind, in.ForgeProject, in.DefaultBranch, firstRig, rigsJSON, in.RigTemplate,
 		in.ConcurrencyCap, boolInt(true), boolInt(in.OnHold), nullString(in.GateCmd), labelsJSON)
 	if err != nil {
 		return 0, fmt.Errorf("store: create project: %w", err)

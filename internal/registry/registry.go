@@ -76,7 +76,7 @@ func ApplyOne(ctx context.Context, db *store.Store, project config.Project, sync
 	result, _, err := db.UpsertProject(ctx, store.UpsertInput{
 		Project: store.ProjectInput{
 			Key: project.Key, Name: name, ForgeKind: project.Forge, ForgeProject: project.Repo,
-			DefaultBranch: project.DefaultBranch, Rig: project.Rig, Rigs: project.Rigs, RigTemplate: project.RigTemplate,
+			DefaultBranch: project.DefaultBranch, Rig: project.Rig, Rigs: project.Rigs.Names(), RigTiers: rigTiers(project.Rigs), RigTemplate: project.RigTemplate,
 			ConcurrencyCap: project.ConcurrencyCap, Enabled: true, OnHold: onhold, GateCmd: project.GateCmd,
 		},
 		LabelsJSON: string(labels), RepoKey: "main",
@@ -84,6 +84,16 @@ func ApplyOne(ctx context.Context, db *store.Store, project config.Project, sync
 		SyncOnHold: syncOnHold,
 	})
 	return result, err
+}
+
+// rigTiers converts the config's declared list into the store's persisted form. The two carry the
+// same three fields; the conversion exists so the store does not import config.
+func rigTiers(refs config.RigRefs) []store.RigTier {
+	out := make([]store.RigTier, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, store.RigTier{Name: ref.Name, Tier: ref.Tier, Spill: ref.Spill})
+	}
+	return out
 }
 
 // Prune deletes every project absent from the config. It refuses before

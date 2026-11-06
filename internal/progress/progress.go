@@ -93,8 +93,22 @@ type Epic struct {
 }
 
 // Counts is the true size of each bucket, independent of the rendered caps.
+// OpenDecisions is the count of queue rows waiting on a human, the same rows
+// idleReason quotes, so the quiet predicate and the idle line cannot disagree.
 type Counts struct {
-	InFlight, Pending, OnHold, Epics int
+	InFlight, Pending, OnHold, Epics, OpenDecisions int
+}
+
+// Quiet reports whether the board holds nothing the operator has to see: no
+// open epic, nothing in flight, pending or on hold, and no decision waiting.
+// It reads Counts only — never the truncated slices, never the rendered text —
+// so a list cut for rendering can never make a busy board look quiet.
+func (s Snapshot) Quiet() bool {
+	return s.Counts.Epics == 0 &&
+		s.Counts.InFlight == 0 &&
+		s.Counts.Pending == 0 &&
+		s.Counts.OnHold == 0 &&
+		s.Counts.OpenDecisions == 0
 }
 
 // Roster is the rig read plus the two tick facts the idle rules quote but the
@@ -192,10 +206,11 @@ func Build(read mirror.TickResult, rows []store.DispatchRow, project store.Proje
 
 	snapshot.Rig = rigBlock
 	snapshot.Counts = Counts{
-		InFlight: len(snapshot.InFlight),
-		Pending:  len(snapshot.Pending),
-		OnHold:   len(snapshot.OnHold),
-		Epics:    len(snapshot.Epics),
+		InFlight:      len(snapshot.InFlight),
+		Pending:       len(snapshot.Pending),
+		OnHold:        len(snapshot.OnHold),
+		Epics:         len(snapshot.Epics),
+		OpenDecisions: len(openDecisions(projectRead.Rows)),
 	}
 	if snapshot.Rig.Idle = len(snapshot.InFlight) == 0 && snapshot.Rig.Busy == 0; snapshot.Rig.Idle {
 		if why := idleReason(snapshot.Project, snapshot.Rig, projectRead, roster); why != "" {
@@ -240,7 +255,7 @@ func projectBlock(project store.ProjectRow, cfg config.Project, eff *config.Effe
 		block.DefaultBranch = cfg.DefaultBranch
 	}
 	if len(block.Rigs) == 0 {
-		block.Rigs = append([]string(nil), cfg.Rigs...)
+		block.Rigs = cfg.Rigs.Names()
 	}
 	block.Forge = strings.ToLower(strings.TrimSpace(block.Forge))
 	block.RepoURL = repoURL(block.Forge, block.Repo, cfg.RepoURL)
@@ -669,14 +684,18 @@ type decisionRow struct {
 	body    string
 }
 
+// openDecisions lists the rows waiting on a person. It asks rig.WaitsOnHuman —
+// the same rule the board's /api/decisions and the mirror's row filter use — so
+// the count and the notice cannot disagree with what the operator is asked.
+//
+// Counting only rows whose destination is human missed the usual decision shape
+// (a blocked row on an agent seat with a human blocker); counting only that
+// shape missed a pending row addressed to a person. Both are real; one rule
+// covers all of them (issue #143).
 func openDecisions(rows []rig.QueueRow) []decisionRow {
 	var out []decisionRow
 	for _, row := range rows {
-		state := strings.ToLower(strings.TrimSpace(row.State))
-		if state != "pending" && state != "blocked" {
-			continue
-		}
-		if !humanDestination(row.Destination) {
+		if !rig.WaitsOnHuman(row.State, row.Destination, row.BlockedOn) {
 			continue
 		}
 		out = append(out, decisionRow{summary: row.Summary, body: row.Body})
@@ -704,10 +723,6 @@ func decisionItems(rows []decisionRow) string {
 		parts = append(parts, fmt.Sprintf("#%d", number))
 	}
 	return strings.Join(parts, ", ")
-}
-
-func humanDestination(destination string) bool {
-	return strings.Contains(destination, "human@") || strings.HasSuffix(destination, "@external")
 }
 
 func openWork(items []forge.Item) int {

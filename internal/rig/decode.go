@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // QueueRow is one queue item from `rig queue list -A -a --json`.
@@ -12,6 +13,10 @@ type QueueRow struct {
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
 	State       string `json:"state"`
+	// BlockedOn names what a blocked row waits on: a human seat, another qitem,
+	// or a typed gate. `rig queue list` carries it, and it is the only field that
+	// distinguishes a row parked on a person from one parked on a peer's work.
+	BlockedOn   string `json:"blocked_on"`
 	PickupState string `json:"pickup_state"`
 	Summary     string `json:"summary,omitempty"`
 	CreatedAt   string `json:"created_at,omitempty"`
@@ -58,6 +63,7 @@ type queueRowWire struct {
 	Source      string `json:"sourceSession"`
 	Destination string `json:"destinationSession"`
 	State       string `json:"state"`
+	BlockedOn   string `json:"blockedOn"`
 	Summary     string `json:"summary"`
 	CreatedAt   string `json:"tsCreated"`
 	LastNudge   string `json:"lastNudgeAttempt"`
@@ -116,6 +122,7 @@ func ParseQueueList(data []byte, unknown func(key string)) ([]QueueRow, error) {
 			Source:      wire.Source,
 			Destination: wire.Destination,
 			State:       wire.State,
+			BlockedOn:   wire.BlockedOn,
 			PickupState: wire.Pickup.State,
 			Summary:     wire.Summary,
 			CreatedAt:   wire.CreatedAt,
@@ -207,4 +214,38 @@ func ParseSeats(data []byte, unknown func(key string)) ([]Seat, error) {
 		seats = append(seats, seat)
 	}
 	return seats, nil
+}
+
+// HumanDecision reports whether an address names a person rather than a seat:
+// an operator or advisor (`human@`), or an external party.
+func HumanDecision(address string) bool {
+	return strings.Contains(address, "human@") || strings.HasSuffix(address, "@external")
+}
+
+// WaitsOnHuman reports whether a queue row is an obligation on a person, given
+// its state, destination and blocker. It is the one rule behind
+// /api/decisions, the mirror's row filter and the quiet predicate, so those
+// three can never disagree about what the operator owes.
+//
+// Three shapes, all real:
+//
+//   - pending, addressed to a person — an obligation the moment it exists
+//     (internal/act/adopt.go creates this for an ambiguous dispatch);
+//   - blocked, whose blocker is a person, whatever its destination — the usual
+//     decision shape: the person answers, an agent seat holds the row;
+//   - blocked, addressed to a person, with no blocker.
+//
+// It takes the three fields rather than a QueueRow because the board resolves
+// each row through QueueShow, which yields a QueueItem. A second copy of this
+// rule is how the count and the notice drift apart (issue #143, and the review
+// that caught the first fix missing two shapes).
+func WaitsOnHuman(state, destination, blockedOn string) bool {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "pending":
+		return HumanDecision(destination)
+	case "blocked":
+		return HumanDecision(destination) || HumanDecision(blockedOn)
+	default:
+		return false
+	}
 }

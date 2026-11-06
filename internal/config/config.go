@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -36,22 +37,25 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 
 // Project is one project registry entry from the file.
 type Project struct {
-	Key            string   `yaml:"key"`
-	Name           string   `yaml:"name"`
-	Forge          string   `yaml:"forge"`
-	Repo           string   `yaml:"repo"`
-	RepoURL        string   `yaml:"repo_url"`
-	DefaultBranch  string   `yaml:"default_branch"`
-	Rig            string   `yaml:"rig,omitempty"`
-	Rigs           []string `yaml:"rigs"`
-	RigTemplate    string   `yaml:"rig_template"`
-	ConcurrencyCap int      `yaml:"concurrency_cap"`
+	Key            string  `yaml:"key"`
+	Name           string  `yaml:"name"`
+	Forge          string  `yaml:"forge"`
+	Repo           string  `yaml:"repo"`
+	RepoURL        string  `yaml:"repo_url"`
+	DefaultBranch  string  `yaml:"default_branch"`
+	Rig            string  `yaml:"rig,omitempty"`
+	Rigs           RigRefs `yaml:"rigs"`
+	RigTemplate    string  `yaml:"rig_template"`
+	ConcurrencyCap int     `yaml:"concurrency_cap"`
 	// Runtime is which agent runs this project's seats. One of pi, omp, codex
 	// or claude; stored lowercase; omp when absent.
 	Runtime string            `yaml:"runtime"`
 	GateCmd string            `yaml:"gate_cmd"`
 	Labels  map[string]string `yaml:"labels"`
 	OnHold  *bool             `yaml:"onhold"`
+	// Lifecycle is this project's per-project switch: `on` or `off`. An absent
+	// key inherits rig_lifecycle.enabled; anything else is refused at load.
+	Lifecycle string `yaml:"lifecycle,omitempty"`
 	// CultureFile is where this project's rig culture lives. Unset means the
 	// board derives it from the first rig; the loader resolves ~ here so the
 	// running service never has to guess at a home directory.
@@ -64,18 +68,98 @@ type Project struct {
 
 // File is the YAML shape. KnownFields rejects anything else.
 type File struct {
-	Listen         string         `yaml:"listen"`
-	Database       string         `yaml:"database"`
-	Token          string         `yaml:"token"`
-	TokenFile      string         `yaml:"token_file"`
-	RigBinary      string         `yaml:"rig_binary"`
-	GhBinary       string         `yaml:"gh_binary"`
-	GlabBinary     string         `yaml:"glab_binary"`
-	TickInterval   Duration       `yaml:"tick_interval"`
-	NotifyInterval Duration       `yaml:"notify_interval"`
-	ProjectTimeout ProjectTimeout `yaml:"project_timeout"`
-	Act            bool           `yaml:"act"`
-	Projects       []Project      `yaml:"projects"`
+	Listen    string `yaml:"listen"`
+	Database  string `yaml:"database"`
+	Token     string `yaml:"token"`
+	TokenFile string `yaml:"token_file"`
+	// WebhookSecretFile is the HMAC secret the forge delivery route verifies
+	// against. A file next to the token, never inline: config files get copied
+	// into tickets (design D3). Empty means the route is not registered.
+	WebhookSecretFile string   `yaml:"webhook_secret_file"`
+	RigBinary         string   `yaml:"rig_binary"`
+	GhBinary          string   `yaml:"gh_binary"`
+	GlabBinary        string   `yaml:"glab_binary"`
+	TickInterval      Duration `yaml:"tick_interval"`
+	NotifyInterval    Duration `yaml:"notify_interval"`
+	// HousekeepingInterval is the reclaim sweep's cadence. Zero means off, the
+	// default: a box that never opted in must not start deleting worktrees.
+	HousekeepingInterval Duration       `yaml:"housekeeping_interval"`
+	ProjectTimeout       ProjectTimeout `yaml:"project_timeout"`
+	Act                  bool           `yaml:"act"`
+	// DecisionNotes turns on writing a decision's question as a comment on its
+	// item. Default false: a note is an external side effect on somebody's item,
+	// and an upgraded binary must not start writing there by itself (design D8).
+	DecisionNotes bool `yaml:"decision_notes"`
+	// DecisionAnswerers lists the logins whose comments may answer a decision.
+	// Empty means the owner of the project's repository slug (design D4).
+	DecisionAnswerers []string `yaml:"decision_answerers"`
+	// RigLifecycle is the opt-in that lets the app stop an idle rig and start a
+	// stopped one. A pointer so "no block" is distinguishable from "block with
+	// defaults": an upgraded box keeps today's behaviour (design D9).
+	RigLifecycle *Lifecycle `yaml:"rig_lifecycle"`
+	Projects     []Project  `yaml:"projects"`
+}
+
+// The settings surface writes only what the file can safely change while the
+// app runs. Every other key describes where the app lives — its socket, its
+// database, its credentials, the project registry — and needs the operator's
+// hand or a different route. The classification lives here, beside File, so a
+// key added to File without a decision fails the completeness test instead of
+// becoming silently writable (design D2).
+//
+// EditableRigLifecycle is writable as a block; its fields are addressed as
+// rig_lifecycle.<field> so a write can name one without replacing the block.
+const EditableRigLifecycle = "rig_lifecycle"
+
+// lifecycleFields are the rig_lifecycle block's writable fields.
+var lifecycleFields = []string{"enabled", "idle_after", "idle_poll_max"}
+
+// EditableKey reports whether the settings surface may write key. The second
+// return value is the refusal sentence, empty when the key is writable. A key
+// File does not declare is never writable.
+func EditableKey(key string) (bool, string) {
+	switch key {
+	case "tick_interval", "notify_interval", "housekeeping_interval", "act", EditableRigLifecycle:
+		return true, ""
+	}
+	if field, ok := strings.CutPrefix(key, EditableRigLifecycle+"."); ok {
+		for _, known := range lifecycleFields {
+			if field == known {
+				return true, ""
+			}
+		}
+		return false, fmt.Sprintf("%s is not a rig_lifecycle field", key)
+	}
+	switch key {
+	case "listen", "database", "token", "token_file", "rig_binary", "gh_binary", "glab_binary":
+		return false, fmt.Sprintf("%s needs the operator's hand: the running process reads it once at boot", key)
+	case "webhook_secret_file":
+		// The secret is read once at boot and lives in memory; the settings screen must
+		// not write a credential, and a running process would keep the old one anyway.
+		return false, "webhook_secret_file is read once at boot and names a credential; edit it in the file"
+	case "decision_notes", "decision_answerers":
+		return false, fmt.Sprintf("%s is read once when the notifier is built at boot; edit it in the file", key)
+	case "project_timeout":
+		return false, fmt.Sprintf("%s is per-project tuning; edit it in the file", key)
+	case "projects":
+		return false, "projects has its own route (POST /api/projects); the settings surface does not write the registry"
+	}
+	return false, fmt.Sprintf("unknown key %q", key)
+}
+
+// FileKeys lists every YAML key File declares, read from its own struct tags so
+// the list cannot drift from the shape. The completeness test walks it.
+func FileKeys() []string {
+	typ := reflect.TypeOf(File{})
+	keys := make([]string, 0, typ.NumField())
+	for index := range typ.NumField() {
+		name, _, _ := strings.Cut(typ.Field(index).Tag.Get("yaml"), ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		keys = append(keys, name)
+	}
+	return keys
 }
 
 // ProjectTimeout is the file form of the per-project read deadline:
@@ -91,6 +175,54 @@ type Timeouts struct {
 	Base, PerItem, Ceiling time.Duration
 }
 
+// Lifecycle is the rig_lifecycle file block: the opt-in, how long a rig stays
+// quiet before it is stopped, and the ceiling the poll backs off to (design D7).
+type Lifecycle struct {
+	Enabled     bool     `yaml:"enabled"`
+	IdleAfter   Duration `yaml:"idle_after"`
+	IdlePollMax Duration `yaml:"idle_poll_max"`
+}
+
+// LifecycleSettings is the resolved rig_lifecycle block. Written records whether
+// the file actually carried the block, which is what decides the poll cadence: a
+// box that never opts in must poll at the fixed tick_interval, exactly as it did
+// before this setting existed. Enabled alone cannot answer that, because the
+// block's zero value is also "not enabled".
+type LifecycleSettings struct {
+	Written     bool
+	Enabled     bool
+	IdleAfter   time.Duration
+	IdlePollMax time.Duration
+}
+
+// ProjectLifecycle is one project's effective lifecycle value and where it came
+// from: the project's own `lifecycle:` key, or the block it inherits. It is what
+// --print-config lists per project.
+type ProjectLifecycle struct {
+	Key       string `yaml:"project"`
+	Lifecycle string `yaml:"lifecycle"` // on | off
+	Source    string `yaml:"source"`    // file | inherit
+}
+
+// LifecycleOn reports whether the app manages the named project's rigs. A key the
+// file does not name inherits the block's enabled flag, so a project absent from
+// the config is not exempted by accident.
+func (e *Effective) LifecycleOn(projectKey string) bool {
+	for _, entry := range e.Lifecycles {
+		if entry.Key == projectKey {
+			return entry.Lifecycle == "on"
+		}
+	}
+	return e.RigLifecycle.Enabled
+}
+
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
+}
+
 // Options are the inputs to Load.
 type Options struct {
 	FlagPath string            // --config; must exist when set
@@ -102,30 +234,41 @@ type Options struct {
 
 // Effective is the resolved configuration and where each value came from.
 type Effective struct {
-	Listen         string
-	Database       string
-	Token          string
-	TokenFile      string
-	RigBinary      string
-	GhBinary       string
-	GlabBinary     string
-	TickInterval   time.Duration
-	NotifyInterval time.Duration // digest cadence; 0 means off
-	ProjectTimeout Timeouts
-	Act            bool
-	Projects       []Project
-	ConfigPath     string
-	Sources        map[string]string
-	Warnings       []string
+	Listen    string
+	Database  string
+	Token     string
+	TokenFile string
+	// WebhookSecret is read at boot and held in memory; empty disables the route.
+	WebhookSecretFile string
+	WebhookSecret     string
+	RigBinary         string
+	GhBinary          string
+	GlabBinary        string
+	TickInterval      time.Duration
+	NotifyInterval    time.Duration // digest cadence; 0 means off
+	// HousekeepingInterval is the reclaim sweep's cadence; 0 means off.
+	HousekeepingInterval time.Duration
+	ProjectTimeout       Timeouts
+	Act                  bool
+	DecisionNotes        bool
+	DecisionAnswerers    []string
+	RigLifecycle         LifecycleSettings
+	Lifecycles           []ProjectLifecycle
+	Projects             []Project
+	ConfigPath           string
+	Sources              map[string]string
+	Warnings             []string
 }
 
 const (
-	defaultListen   = "127.0.0.1:8787"
-	defaultDatabase = "fleet-console.db"
-	defaultRig      = "rig"
-	defaultForge    = "gh"
-	defaultGlab     = "glab"
-	defaultTick     = 15 * time.Second
+	defaultListen      = "127.0.0.1:8787"
+	defaultDatabase    = "fleet-console.db"
+	defaultRig         = "rig"
+	defaultForge       = "gh"
+	defaultGlab        = "glab"
+	defaultTick        = 15 * time.Second
+	defaultIdleAfter   = 10 * time.Minute
+	defaultIdlePollMax = 10 * time.Minute
 )
 
 // FindPath applies the documented lookup order and returns the first existing
@@ -237,9 +380,55 @@ func Load(opts Options) (*Effective, error) {
 	}
 	eff.TickInterval, eff.Sources["tick_interval"] = tick, tickSource
 
+	// rig_lifecycle is file and default only: no env var, no flag (design D9).
+	// The ceiling is refused rather than clamped when it cannot be honoured, but
+	// only when the block is actually written: a box that never opts in must
+	// behave exactly as it did before, whatever its tick_interval.
+	enabled := false
+	idleAfter, idlePollMax := defaultIdleAfter, defaultIdlePollMax
+	eff.Sources["rig_lifecycle.enabled"] = "default"
+	eff.Sources["rig_lifecycle.idle_after"] = "default"
+	eff.Sources["rig_lifecycle.idle_poll_max"] = "default"
+	if file.RigLifecycle != nil {
+		enabled = file.RigLifecycle.Enabled
+		eff.Sources["rig_lifecycle.enabled"] = "file"
+		if file.RigLifecycle.IdleAfter > 0 {
+			idleAfter = time.Duration(file.RigLifecycle.IdleAfter)
+			eff.Sources["rig_lifecycle.idle_after"] = "file"
+		}
+		if file.RigLifecycle.IdlePollMax > 0 {
+			idlePollMax = time.Duration(file.RigLifecycle.IdlePollMax)
+			eff.Sources["rig_lifecycle.idle_poll_max"] = "file"
+		}
+		if idlePollMax < tick {
+			return nil, fmt.Errorf("config: rig_lifecycle.idle_poll_max %s is below tick_interval %s",
+				idlePollMax, tick)
+		}
+	}
+	eff.RigLifecycle = LifecycleSettings{
+		Written: file.RigLifecycle != nil, Enabled: enabled,
+		IdleAfter: idleAfter, IdlePollMax: idlePollMax,
+	}
+	eff.Lifecycles = make([]ProjectLifecycle, 0, len(file.Projects))
+	for _, project := range file.Projects {
+		if project.Lifecycle == "" {
+			eff.Lifecycles = append(eff.Lifecycles, ProjectLifecycle{
+				Key: project.Key, Lifecycle: onOff(enabled), Source: "inherit",
+			})
+			continue
+		}
+		eff.Lifecycles = append(eff.Lifecycles, ProjectLifecycle{
+			Key: project.Key, Lifecycle: project.Lifecycle, Source: "file",
+		})
+	}
+
 	// notify_interval is the optional digest cadence. Zero means off, which is
 	// the default: an unattended run should not start talking on its own.
 	eff.NotifyInterval, eff.Sources["notify_interval"] = time.Duration(file.NotifyInterval), "file"
+	// housekeeping_interval is the reclaim sweep's cadence. Zero means off, which is
+	// the default: an upgraded box keeps its current behaviour and never starts
+	// deleting worktrees because a new key appeared with a non-zero default.
+	eff.HousekeepingInterval, eff.Sources["housekeeping_interval"] = time.Duration(file.HousekeepingInterval), "file"
 
 	base, perItem, ceiling := 30*time.Second, 2*time.Second, 2*time.Minute
 	timeoutSource := "default"
@@ -265,6 +454,21 @@ func Load(opts Options) (*Effective, error) {
 		eff.Sources["act"] = "default"
 	}
 
+	eff.DecisionNotes = file.DecisionNotes
+	if file.DecisionNotes {
+		eff.Sources["decision_notes"] = "file"
+	} else {
+		eff.Sources["decision_notes"] = "default"
+	}
+	// The default author rule is resolved per project from its repository slug
+	// (design D4), so an empty list here means "the owner", not "nobody".
+	eff.DecisionAnswerers = append([]string(nil), file.DecisionAnswerers...)
+	if len(eff.DecisionAnswerers) > 0 {
+		eff.Sources["decision_answerers"] = "file"
+	} else {
+		eff.Sources["decision_answerers"] = "default"
+	}
+
 	if file.TokenFile != "" {
 		eff.TokenFile = resolve(dir, file.TokenFile, home)
 		eff.Sources["token_file"] = "file"
@@ -285,6 +489,20 @@ func Load(opts Options) (*Effective, error) {
 		eff.Token, eff.Sources["token"] = token, "token_file"
 	default:
 		eff.Sources["token"] = "none"
+	}
+	// The webhook secret follows the token's rules: a path resolved once at boot,
+	// the value read into memory, and "none" when unset so an upgraded box gains
+	// no public route until the operator asks for one (design D3).
+	if file.WebhookSecretFile != "" {
+		eff.WebhookSecretFile = resolve(dir, file.WebhookSecretFile, home)
+		eff.Sources["webhook_secret_file"] = "file"
+		secret, err := readSecretFile(eff.WebhookSecretFile, "webhook_secret_file")
+		if err != nil {
+			return nil, err
+		}
+		eff.WebhookSecret = secret
+	} else {
+		eff.Sources["webhook_secret_file"] = "none"
 	}
 	if err := validateProjects(&file, dir, home); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
@@ -353,64 +571,98 @@ func resolveBinary(dir, value, home string) string {
 }
 
 func readTokenFile(path string) (string, error) {
+	return readSecretFile(path, "token_file")
+}
+
+// readSecretFile reads one credential from a 0600 file. Both the bearer token and
+// the webhook secret follow the same rules, so a mistake in one is a mistake in
+// both: a readable-by-others file is refused rather than used, because a config
+// error that silently weakens a credential is worse than a refusal at boot.
+func readSecretFile(path, key string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", fmt.Errorf("config: token_file %s: %w", path, err)
+		return "", fmt.Errorf("config: %s %s: %w", key, path, err)
 	}
 	mode := info.Mode().Perm()
 	if mode != 0o600 {
-		return "", fmt.Errorf("config: token_file %s has mode %04o; must be 0600", path, mode)
+		return "", fmt.Errorf("config: %s %s has mode %04o; must be 0600", key, path, mode)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("config: token_file %s: %w", path, err)
+		return "", fmt.Errorf("config: %s %s: %w", key, path, err)
 	}
-	token := strings.TrimSpace(string(data))
-	if token == "" {
-		return "", fmt.Errorf("config: token_file %s is empty", path)
+	value := strings.TrimSpace(string(data))
+	if value == "" {
+		return "", fmt.Errorf("config: %s %s is empty", key, path)
 	}
-	return token, nil
+	return value, nil
 }
 
 // Print renders the effective configuration as YAML without the token value and
 // with the source of every value.
 func (e *Effective) Print() ([]byte, error) {
 	type view struct {
-		Config     string `yaml:"config"`
-		Listen     string `yaml:"listen"`
-		Database   string `yaml:"database"`
-		Token      string `yaml:"token,omitempty"`
-		TokenFile  string `yaml:"token_file,omitempty"`
-		RigBinary  string `yaml:"rig_binary"`
-		GhBinary   string `yaml:"gh_binary"`
-		GlabBinary string `yaml:"glab_binary"`
-		Tick       string `yaml:"tick_interval"`
-		Notify     string `yaml:"notify_interval"`
-		Timeout    struct {
+		Config    string `yaml:"config"`
+		Listen    string `yaml:"listen"`
+		Database  string `yaml:"database"`
+		Token     string `yaml:"token,omitempty"`
+		TokenFile string `yaml:"token_file,omitempty"`
+		// WebhookSecret is redacted like the token: the key and its source are named,
+		// the value never is (design D3).
+		WebhookSecret     string `yaml:"webhook_secret,omitempty"`
+		WebhookSecretFile string `yaml:"webhook_secret_file,omitempty"`
+		RigBinary         string `yaml:"rig_binary"`
+		GhBinary          string `yaml:"gh_binary"`
+		GlabBinary        string `yaml:"glab_binary"`
+		Tick              string `yaml:"tick_interval"`
+		Notify            string `yaml:"notify_interval"`
+		// Housekeeping is the reclaim sweep's cadence; "0s" is off.
+		Housekeeping string `yaml:"housekeeping_interval"`
+		Timeout      struct {
 			Base    string `yaml:"base"`
 			PerItem string `yaml:"per_item"`
 			Ceiling string `yaml:"ceiling"`
 		} `yaml:"project_timeout"`
-		Act      bool              `yaml:"act"`
-		Projects []Project         `yaml:"projects,omitempty"`
-		Sources  map[string]string `yaml:"sources"`
-		Warnings []string          `yaml:"warnings,omitempty"`
+		Act               bool     `yaml:"act"`
+		DecisionNotes     bool     `yaml:"decision_notes"`
+		DecisionAnswerers []string `yaml:"decision_answerers,omitempty"`
+		RigLifecycle      struct {
+			Enabled     bool   `yaml:"enabled"`
+			IdleAfter   string `yaml:"idle_after"`
+			IdlePollMax string `yaml:"idle_poll_max"`
+		} `yaml:"rig_lifecycle"`
+		Lifecycles []ProjectLifecycle `yaml:"lifecycles,omitempty"`
+		Projects   []Project          `yaml:"projects,omitempty"`
+		Sources    map[string]string  `yaml:"sources"`
+		Warnings   []string           `yaml:"warnings,omitempty"`
 	}
 	out := view{
 		Config: e.ConfigPath, Listen: e.Listen, Database: e.Database, TokenFile: e.TokenFile,
 		RigBinary: e.RigBinary, GhBinary: e.GhBinary, GlabBinary: e.GlabBinary,
 		Tick: e.TickInterval.String(), Notify: e.NotifyInterval.String(),
 		Act: e.Act, Projects: e.Projects, Sources: e.Sources, Warnings: e.Warnings,
+		DecisionNotes: e.DecisionNotes, DecisionAnswerers: e.DecisionAnswerers,
+		Housekeeping: e.HousekeepingInterval.String(),
 	}
 	out.Timeout.Base = e.ProjectTimeout.Base.String()
 	out.Timeout.PerItem = e.ProjectTimeout.PerItem.String()
 	out.Timeout.Ceiling = e.ProjectTimeout.Ceiling.String()
+	out.RigLifecycle.Enabled = e.RigLifecycle.Enabled
+	out.RigLifecycle.IdleAfter = e.RigLifecycle.IdleAfter.String()
+	out.RigLifecycle.IdlePollMax = e.RigLifecycle.IdlePollMax.String()
+	out.Lifecycles = e.Lifecycles
 	if out.Config == "" {
 		out.Config = "(none)"
 	}
 	if e.Token != "" {
 		out.Token = "<redacted>"
 	}
+	// The webhook secret is redacted on the same rule as the token: the operator
+	// sees that one is configured and where it came from, never its value.
+	if e.WebhookSecret != "" {
+		out.WebhookSecret = "<redacted>"
+	}
+	out.WebhookSecretFile = e.WebhookSecretFile
 	return yaml.Marshal(out)
 }
 
@@ -487,6 +739,7 @@ func ValidateProject(p *Project, dir, home string) error {
 	p.RepoURL = strings.TrimSpace(p.RepoURL)
 	p.Name = strings.TrimSpace(p.Name)
 	p.DefaultBranch = strings.TrimSpace(p.DefaultBranch)
+	p.Lifecycle = strings.TrimSpace(p.Lifecycle)
 
 	switch {
 	case p.Key == "":
@@ -511,24 +764,39 @@ func ValidateProject(p *Project, dir, home string) error {
 	if p.Rig != "" && p.Rigs != nil {
 		add("rigs", "rig and rigs are mutually exclusive")
 	} else if p.Rig != "" {
-		p.Rigs = []string{strings.TrimSpace(p.Rig)}
+		// The single-rig spelling is the tier-0, on-full form: the same rig with
+		// the defaults the union decode gives a bare string.
+		p.Rigs = RigRefs{{Name: strings.TrimSpace(p.Rig), Tier: 0, Spill: SpillOnFull}}
 	}
 	if len(p.Rigs) == 0 {
 		add("rigs", "rig or rigs is required")
 	}
 	seen := make(map[string]bool, len(p.Rigs))
-	for index, name := range p.Rigs {
-		name = strings.TrimSpace(name)
-		if name == "" {
+	for index := range p.Rigs {
+		ref := &p.Rigs[index]
+		ref.Name = strings.TrimSpace(ref.Name)
+		if ref.Name == "" {
 			add("rigs", "rigs[%d] must be non-empty", index)
 			continue
 		}
-		if seen[name] {
-			add("rigs", "rigs[%d] duplicates rig %q", index, name)
+		if seen[ref.Name] {
+			// Two entries naming one rig would count its seats twice.
+			add("rigs", "rigs[%d] duplicates rig %q", index, ref.Name)
 			continue
 		}
-		seen[name] = true
-		p.Rigs[index] = name
+		seen[ref.Name] = true
+		// A tier is a position, so a negative one has no meaning.
+		if ref.Tier < 0 {
+			add("rigs", "rigs[%d] (%s) has a negative tier %d", index, ref.Name, ref.Tier)
+		}
+		// An unknown trigger would silently become "never" if accepted, so name
+		// the value the file actually carried.
+		if ref.Spill == "" {
+			ref.Spill = SpillOnFull
+		}
+		if !validSpill(ref.Spill) {
+			add("rigs", "rigs[%d] (%s) has unknown spill %q; want one of %s", index, ref.Name, ref.Spill, SpillNames())
+		}
 	}
 	p.Rig = ""
 	if p.ConcurrencyCap < 0 {
@@ -541,6 +809,11 @@ func ValidateProject(p *Project, dir, home string) error {
 		p.Runtime = canonical
 	default:
 		add("runtime", "runtime %q is not one of %s", strings.TrimSpace(p.Runtime), rig.RuntimesText)
+	}
+	switch p.Lifecycle {
+	case "", "on", "off":
+	default:
+		add("lifecycle", "lifecycle must be on or off, not %q", p.Lifecycle)
 	}
 	if p.RigTemplate == "" {
 		p.RigTemplate = "default"
@@ -583,6 +856,26 @@ func ProjectWarnings(p Project) []string {
 	return nil
 }
 
+// ValidateDocument applies the loader's own rules to candidate bytes: the whole
+// File decodes under KnownFields, the project rules run, and the cross-checks
+// Load performs — the rig_lifecycle ceiling against tick_interval — are enforced
+// too. ValidateContent stops short of those cross-checks, so a settings write
+// that used only it could leave a file the app refuses to boot from. The bytes
+// are written to a temp file and read through Load, which is the only way to run
+// the loader's resolution without a second copy of its arithmetic.
+func ValidateDocument(data []byte, dir, home string) error {
+	if err := ValidateContent(data, dir, home); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, ".settings-validate.yaml")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("config: validate %s: %w", path, err)
+	}
+	defer os.Remove(path)
+	_, err := Load(Options{FlagPath: path, Home: home, Cwd: dir})
+	return err
+}
+
 // ValidateContent applies the loader's whole-file rules to a document the
 // caller is about to write: the strict schema, every project rule, one key
 // each, and one owner per rig. internal/configfile calls it before the rename,
@@ -611,7 +904,8 @@ func validateProjects(file *File, dir, home string) error {
 			return fmt.Errorf("duplicate project key %q", project.Key)
 		}
 		keys[project.Key] = true
-		for _, name := range project.Rigs {
+		for _, ref := range project.Rigs {
+			name := ref.Name
 			if owner, ok := owners[name]; ok {
 				return &ValidationError{Errors: []FieldError{{
 					Field:   "rigs",

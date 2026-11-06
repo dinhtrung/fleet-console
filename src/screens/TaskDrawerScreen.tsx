@@ -1,18 +1,78 @@
 /** The task drawer: everything behind one task's merge, on one page. */
 
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "@tanstack/react-router";
-import { getItem, shortTime } from "../lib/fleet";
+import { getItem, postVerdict, seatTail, shortTime } from "../lib/fleet";
 import {
   Badge,
+  Button,
   EmptyState,
   ErrorState,
   LoadingRows,
   Panel,
   PanelHead,
   StatusMagnet,
+  Textarea,
+  useToast,
 } from "../components/ui";
 import { PageHeader } from "../shell/PageHeader";
+
+/** The transcript panel: the dispatch seat's pane, read once when the operator opens it.
+ *  It never polls — a timer here would spawn a `rig capture` per open drawer — and it renders
+ *  the bytes as preformatted text, because the pane is terminal output, not markdown. */
+function TranscriptPanel({ seat }: { seat: string }) {
+  const [open, setOpen] = useState(false);
+  const [lines, setLines] = useState(40);
+  const tail = useQuery({
+    queryKey: ["seat-tail", seat, lines],
+    queryFn: () => seatTail(seat, lines),
+    enabled: open,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+
+  if (!open) {
+    return (
+      <div className="border-t border-rule px-3 py-2">
+        <Button variant="quiet" size="sm" onClick={() => setOpen(true)}>
+          Read the seat&apos;s pane
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t border-rule px-3 py-2">
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <p className="label text-ink-muted">Pane transcript — {lines} lines</p>
+        {lines < 200 ? (
+          <Button variant="quiet" size="sm" onClick={() => setLines(200)}>
+            Ask for more
+          </Button>
+        ) : null}
+        <Button variant="quiet" size="sm" onClick={() => setOpen(false)}>
+          Hide
+        </Button>
+      </div>
+      {tail.isLoading ? (
+        <LoadingRows rows={4} />
+      ) : tail.error ? (
+        <ErrorState
+          title="The seat could not be read"
+          error={tail.error}
+          onRetry={() => void tail.refetch()}
+        />
+      ) : tail.data?.tail.trim() ? (
+        <pre className="max-h-[24rem] overflow-auto border border-rule bg-ground/40 p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-ink">
+          {tail.data.tail}
+        </pre>
+      ) : (
+        <p className="px-1 py-2 text-[0.6875rem] text-ink-muted">The pane is empty.</p>
+      )}
+    </div>
+  );
+}
 
 function CheckList({ checks }: { checks: { name: string; conclusion: string }[] }) {
   if (checks.length === 0) return <p className="text-[0.6875rem] text-ink-muted">No checks recorded.</p>;
@@ -25,6 +85,63 @@ function CheckList({ checks }: { checks: { name: string; conclusion: string }[] 
         </li>
       ))}
     </ul>
+  );
+}
+
+/** The operator's own approve/reject. It writes the note a reviewer seat would write,
+ *  so a human can overrule a stalled review instead of waiting for one. */
+function VerdictActions({ number, change }: { number: number; change: { number: number } }) {
+  const [reason, setReason] = useState("");
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const submit = useMutation({
+    mutationFn: (verdict: "accept" | "reject") => postVerdict(number, verdict, reason.trim()),
+    onSuccess: (result) => {
+      toast.done(
+        result.verdict === "accept" ? `Approved ${result.sha}` : `Rejected ${result.sha}`,
+        result.merge === "act-tick"
+          ? `Noted on PR #${result.change_request}; the act tick merges on its next pass.`
+          : `Noted on PR #${result.change_request}, but this item has no dispatch row: merge it by hand.`,
+      );
+      setReason("");
+      void queryClient.invalidateQueries({ queryKey: ["item", number] });
+      void queryClient.invalidateQueries({ queryKey: ["board"] });
+    },
+    onError: (error) => {
+      toast.problem("The verdict did not stick", error instanceof Error ? error.message : String(error));
+    },
+  });
+  const busy = submit.isPending;
+  return (
+    <div className="flex flex-col gap-2 border-t border-rule px-3 py-2">
+      <label className="label text-ink-muted" htmlFor="verdict-reason">
+        Reason — required to reject, it is the builder&apos;s work list
+      </label>
+      <Textarea
+        id="verdict-reason"
+        rows={2}
+        value={reason}
+        placeholder="What did you check, or what must change?"
+        onChange={(event) => setReason(event.target.value)}
+      />
+      {submit.error ? (
+        <p className="text-[0.6875rem] text-destructive">{submit.error.message}</p>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="primary" busy={busy} onClick={() => submit.mutate("accept")}>
+          Approve PR #{change.number}
+        </Button>
+        <Button
+          variant="attention"
+          busy={busy}
+          disabled={reason.trim() === ""}
+          title={reason.trim() === "" ? "A reject needs a reason" : undefined}
+          onClick={() => submit.mutate("reject")}
+        >
+          Reject
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -87,6 +204,7 @@ export function TaskDrawerScreen() {
           ) : (
             <EmptyState title="No dispatch" body="This task has never been handed to a seat." />
           )}
+          {dispatch?.seat ? <TranscriptPanel seat={dispatch.seat} /> : null}
         </Panel>
 
         <Panel>
@@ -129,6 +247,7 @@ export function TaskDrawerScreen() {
               <p className="text-[0.6875rem] text-ink-muted">No verdict yet.</p>
             )}
           </div>
+          {change ? <VerdictActions number={item.number} change={change} /> : null}
         </Panel>
 
         <Panel className="lg:col-span-2">

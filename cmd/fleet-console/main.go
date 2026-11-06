@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,9 +28,11 @@ import (
 	"github.com/dinhtrung/fleet-console/internal/config"
 	"github.com/dinhtrung/fleet-console/internal/dblock"
 	"github.com/dinhtrung/fleet-console/internal/decide"
+	"github.com/dinhtrung/fleet-console/internal/decisions"
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/git"
 	"github.com/dinhtrung/fleet-console/internal/hostcheck"
+	"github.com/dinhtrung/fleet-console/internal/housekeeping"
 	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/progress"
 	"github.com/dinhtrung/fleet-console/internal/registry"
@@ -130,6 +133,239 @@ func worktreeRoot(eff *config.Effective, project store.ProjectRow, source mirror
 	return ""
 }
 
+// lifecycleFacts is one tick's lifecycle input, taken from the reads the tick
+// already performed: no second forge read, no second rig read. Ready is the
+// plan's count before the concurrency limit, Fresh is the project's own forge
+// read, and Managed is the project's effective `lifecycle:` value.
+func lifecycleFacts(rows []store.ProjectRow, reads map[int64]mirror.ProjectResult, plans map[string]decide.Plan, eff *config.Effective) []act.LifecycleProjectFacts {
+	facts := make([]act.LifecycleProjectFacts, 0, len(rows))
+	for _, project := range rows {
+		projectRead := reads[project.ID]
+		facts = append(facts, act.LifecycleProjectFacts{
+			Key:     project.Key,
+			Rigs:    project.Rigs,
+			Managed: eff.LifecycleOn(project.Key),
+			Fresh:   !projectRead.ForgeStale && projectRead.ForgeError == "",
+			Ready:   plans[project.Key].Ready,
+			Rows:    projectRead.Rows,
+			Seats:   projectRead.Seats,
+		})
+	}
+	return facts
+}
+
+// pollCadence is the poll's backoff, or the fixed tick_interval when the
+// operator never wrote the rig_lifecycle block. The spec's "an existing
+// configuration is unchanged" scenario rests on this: a block-less box must keep
+// polling at tick_interval, not at the block's 10m default.
+//
+// The block's own default idle_poll_max is 10m against a 15s tick_interval, so
+// cadence-off and cadence-on-but-default differ by forty times. That gap is why
+// Written exists rather than testing Enabled.
+func pollCadence(eff *config.Effective) mirror.Cadence {
+	if !eff.RigLifecycle.Written {
+		// Max == Base makes the loop's wait constant without special-casing the
+		// cadence type: Next still runs, and it always returns Base.
+		return mirror.Cadence{Base: eff.TickInterval, Max: eff.TickInterval}
+	}
+	return mirror.Cadence{Base: eff.TickInterval, Max: eff.RigLifecycle.IdlePollMax}
+}
+
+// readReplies resolves decisions from the answers on their items. It runs once per applied tick,
+// after the act phase, and only when decision_notes is on. The open set is the project's live rows
+// that wait on a person: those are the obligations the app has already asked about on the item.
+//
+// A failure is one log line and never fails the tick: a broken forge read must not stop dispatch.
+func readReplies(
+	ctx context.Context,
+	db *store.Store,
+	forgeClient forge.Forge,
+	rigClient act.Rig,
+	projectRead mirror.ProjectResult,
+	eff *config.Effective,
+	projectKey string,
+	forgeProject string,
+) {
+	notes := make([]decisions.Note, 0, len(projectRead.Rows))
+	for _, row := range projectRead.Rows {
+		if !rig.WaitsOnHuman(row.State, row.Destination, row.BlockedOn) {
+			continue
+		}
+		item := decisions.ItemNumber(0, row.Summary)
+		if item <= 0 {
+			continue
+		}
+		askedAt, ok := notedAt(ctx, db, item, row.ID)
+		if !ok {
+			// No decision.noted event means the app never asked on the item, so there is no note to
+			// answer. A row parked before decision_notes was turned on is exactly this case.
+			continue
+		}
+		createdAt, _ := time.Parse(time.RFC3339, strings.TrimSpace(row.CreatedAt))
+		notes = append(notes, decisions.Note{
+			Decision: decisions.Decision{
+				ID: row.ID, Summary: row.Summary, Item: item,
+				Destination: row.Destination, CreatedAt: createdAt,
+			},
+			AskedAt: askedAt,
+		})
+	}
+	if len(notes) == 0 {
+		return
+	}
+	reader := &decisions.ReplyReader{
+		Forge:    forgeClient,
+		Store:    decisionLedger{db},
+		Resolver: rowResolver{&act.Actions{Store: db, Forge: forgeClient, Rig: rigClient, Now: time.Now}},
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "decision-reply: "+format+"\n", args...)
+		},
+	}
+	for _, outcome := range reader.Read(ctx, notes, decisionAnswerers(eff, forgeProject)) {
+		switch {
+		case outcome.Resolved:
+			fmt.Fprintf(os.Stderr, "decision-reply: %s answered by %s\n", outcome.DecisionID, outcome.CommentID)
+		case outcome.Corrected:
+			fmt.Fprintf(os.Stderr, "decision-reply: %s ambiguous, correction posted\n", outcome.CommentID)
+		case outcome.Reason != "":
+			fmt.Fprintf(os.Stderr, "decision-reply: %s skipped: %s\n", outcome.DecisionID, outcome.Reason)
+		}
+	}
+}
+
+// decisionAnswerers resolves the author allowlist for one project. An empty configured list means
+// the repository owner (design D4), which is who the escalations go to — "empty means the owner, not
+// nobody", as the config's own comment says. Passing the raw empty list through would leave a fresh
+// install with no login able to answer, which the spec's default-author-rule scenario forbids.
+func decisionAnswerers(eff *config.Effective, forgeProject string) []string {
+	if eff != nil && len(eff.DecisionAnswerers) > 0 {
+		return eff.DecisionAnswerers
+	}
+	slug := strings.TrimSpace(forgeProject)
+	if at := strings.Index(slug, "/"); at > 0 {
+		if owner := strings.TrimSpace(slug[:at]); owner != "" {
+			return []string{owner}
+		}
+	}
+	// A slug with no owner part leaves nothing to default to. Returning nil keeps the raw behaviour
+	// rather than inventing a login, and the caller logs nothing because there is no author to blame.
+	return nil
+}
+
+// decisionLedger bridges the store's event row to the decisions package's narrow shape. The two
+// differ only in the extra fields the audit table carries, so the adapter is a field copy and nothing
+// more: no behaviour lives here.
+type decisionLedger struct{ db *store.Store }
+
+func (l decisionLedger) HasEvent(ctx context.Context, kind, subject, contains string) (bool, error) {
+	return l.db.HasEvent(ctx, kind, subject, contains)
+}
+
+func (l decisionLedger) AppendEvent(ctx context.Context, e decisions.Event) (int64, error) {
+	return l.db.AppendEvent(ctx, store.Event{
+		Actor: e.Actor, Kind: e.Kind, Subject: e.Subject, Detail: e.Detail,
+	})
+}
+
+// rowResolver adapts act.Actions' ResolveRow to the decisions package's Resolver. The board's answer
+// calls the same method, so a reply and a board click cannot disagree about which surface won: the
+// rig refuses the second one.
+type rowResolver struct{ actions *act.Actions }
+
+func (r rowResolver) ResolveRow(ctx context.Context, id, decision string) error {
+	_, err := r.actions.ResolveRow(ctx, id, decision)
+	return err
+}
+
+// notedAt reports when the app asked about this decision on this item, from the decision.noted event
+// T1's noter wrote. A comment older than that cannot answer the decision, so the time matters as much
+// as the presence.
+func notedAt(ctx context.Context, db *store.Store, item int, decisionID string) (time.Time, bool) {
+	page, err := db.Events(ctx, store.EventFilter{Kind: "decision.noted", Limit: 200})
+	if err != nil {
+		return time.Time{}, false
+	}
+	for _, event := range page.Events {
+		if event.Subject != fmt.Sprintf("#%d", item) {
+			continue
+		}
+		if !strings.Contains(event.Detail, decisionID) {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339, event.At)
+		if err != nil {
+			continue
+		}
+		return at, true
+	}
+	return time.Time{}, false
+}
+
+// noteContextFor builds what a decision's note needs: the item's link from the
+// read the tick already has, the board's deep link, and how many decisions are
+// open on that item so the reply line can name the id when it must (design D3).
+//
+// It reads no forge and no store: the item URL is in the item the mirror read, and
+// the open count is a walk over rows already in memory. A decision whose item the
+// app cannot name gets an empty ItemURL, which makes Render omit the link rather
+// than print a guess.
+func noteContextFor(raised act.DecisionRaised, eff *config.Effective, projectRead mirror.ProjectResult) decisions.NoteContext {
+	item := decisions.ItemNumber(raised.Item, raised.Text)
+	nc := decisions.NoteContext{
+		BoardURL: boardURLFrom(eff.Listen) + "/decisions#" + raised.QItemID,
+	}
+	if item > 0 {
+		for _, read := range projectRead.Items {
+			if read.Number == item && read.URL != "" {
+				nc.ItemURL = read.URL
+				break
+			}
+		}
+	}
+	// Count the rows waiting on a person for the same item, including this one.
+	// The read was taken before the tick, so the row this decision just created is
+	// not in it: seed it by identity and skip a pre-tick row carrying the same id,
+	// so a row already parked counts once rather than twice. With two open,
+	// "fleet: accept" would not say which question it answers.
+	open := 0
+	if item > 0 {
+		open = 1
+		for _, row := range projectRead.Rows {
+			if row.ID == raised.QItemID {
+				continue
+			}
+			if !rig.WaitsOnHuman(row.State, row.Destination, row.BlockedOn) {
+				continue
+			}
+			if decisions.ItemNumber(0, row.Summary) == item {
+				open++
+			}
+		}
+	}
+	nc.OpenOnItem = open
+	return nc
+}
+
+// filterSeatsFor keeps a project's rig seats in the configured order, the same
+// selection the mirror's own filter makes, for the re-plan after a launch.
+func filterSeatsFor(seats []rig.Seat, rigs []string) []rig.Seat {
+	if len(rigs) == 0 {
+		return seats
+	}
+	order := make(map[string]int, len(rigs))
+	for index, name := range rigs {
+		order[name] = index
+	}
+	out := make([]rig.Seat, 0, len(seats))
+	for _, seat := range seats {
+		if _, ok := order[seat.Rig]; ok {
+			out = append(out, seat)
+		}
+	}
+	sort.SliceStable(out, func(a, b int) bool { return order[out[a].Rig] < order[out[b].Rig] })
+	return out
+}
+
 func runTick(ctx context.Context, db *store.Store, out, errOut io.Writer, runner forge.Runner, rigRunner rig.ExecRunner, timeouts mirror.TimeoutSettings) error {
 	projects, err := db.Projects(ctx)
 	if err != nil {
@@ -200,6 +436,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	printConfig := flags.Bool("print-config", false, "print the effective config with secrets redacted and exit")
 	applyConfig := flags.Bool("apply-config", false, "create or refresh the projects from the config; projects absent from the file are disabled")
 	prune := flags.Bool("prune", false, "delete projects absent from the config and exit; refused while a live dispatch exists")
+	housekeep := flags.Bool("housekeep", false, "print the worktree reclaim plan and exit; change nothing without --apply")
 	syncOnHold := flags.Bool("sync-onhold", false, "with --apply-config, copy each project's onhold from the config")
 	notifyReportFlag := flags.Bool("notify-report", false, "render the progress report from the store and send it; no mirror, no dispatch")
 	notifyProject := flags.String("notify-project", "fleet-console", "with --notify-report, the project to report on")
@@ -312,6 +549,20 @@ func run(args []string, stdout, stderr io.Writer) error {
 		defer db.Close()
 		fmt.Fprintln(stdout, "database migrated")
 		return nil
+	}
+
+	if *housekeep {
+		db, err := store.Open(ctx, eff.Database)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		// Exit 0 even when removals fail: the failure is recorded in the event and
+		// printed on stderr, and a sweep that refused one path is not a broken run.
+		return runHousekeep(ctx, housekeepArgs{
+			eff: eff, db: db, runner: forgeRunner, rigRunner: rigRunner, apply: *applyFlag,
+			out: stdout, errOut: stderr,
+		})
 	}
 
 	if *tick {
@@ -462,6 +713,23 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return specs, err
 	}
 	specByKey := map[string]mirror.Project{}
+
+	// The lifecycle's memory is the running process: a quiet window is not
+	// persisted, so a restart simply gives every rig a fresh idle_after
+	// (design D6). With the block absent the coordinator decides nothing.
+	// The reclaim sweep's cadence. Zero (the default) means the tick never runs it.
+	// The stamp lives in memory: a restart legitimately resets the cadence and the
+	// first run waits one full interval, so a restart loop cannot become a delete
+	// loop (design D6).
+	housekeepingScheduler := act.NewScheduler(eff.HousekeepingInterval, time.Now().UTC())
+	lifecycle := act.NewLifecycle(eff.RigLifecycle, db, rig.NewAdapter(rigRunner), func(format string, args ...any) {
+		fmt.Fprintf(stderr, "%s\n", fmt.Sprintf(format, args...))
+	})
+	// The waker is how an HTTP delivery reaches this loop: the receiver sends, the
+	// loop selects on the channel. Built before the loop so the web server holds the
+	// same one.
+	waker := mirror.NewWaker()
+
 	go (&mirror.Mirror{
 		Store: db, Rig: rig.NewAdapter(rigRunner),
 		ProjectTimeout: mirrorTimeouts(eff),
@@ -471,8 +739,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}).Loop(
 		ctx,
 		sources,
-		eff.TickInterval, jitter,
-		func(read mirror.TickResult) {
+		pollCadence(eff), jitter,
+		func(read mirror.TickResult) bool {
 			// While the gate is closed, re-probe: a boot-time refusal is often just
 			// the daemon not being up yet, and compat must not be the one read that
 			// stays frozen for the life of the process. current() logs the reopen
@@ -488,13 +756,23 @@ func run(args []string, stdout, stderr io.Writer) error {
 			}
 			rows, err := db.Projects(ctx)
 			if err != nil {
-				return
+				// A failed store read is as blind as a failed forge read.
+				return true
 			}
 			for _, source := range specs {
 				specByKey[source.Key] = source
 			}
+			// The plans are built for every project first, so the lifecycle sees
+			// the whole tick's demand before it decides anything: a start for one
+			// rig must not depend on the loop order (design D1).
+			plans := make(map[string]decide.Plan, len(rows))
+			reads := make(map[int64]mirror.ProjectResult, len(rows))
+			// The progress report reads the dispatch rows the plan was built from,
+			// so the same read serves both.
+			dispatchRows := make(map[string][]store.DispatchRow, len(rows))
 			for _, project := range rows {
 				projectRead := read.Projects[project.Key]
+				reads[project.ID] = projectRead
 				// D4: reconcile the app's dispatch rows against the rig before
 				// planning. A reconciled item must not be dispatched again in the
 				// same tick.
@@ -520,10 +798,52 @@ func run(args []string, stdout, stderr io.Writer) error {
 					snapshot.Dispatched = append(snapshot.Dispatched, item)
 				}
 				plan := decide.PlanTick(snapshot, read.At)
+				plans[project.Key] = plan
+				dispatchRows[project.Key] = dispatches
 				fmt.Fprintf(stderr, "mirror: %s status=%s intents=%d\n", project.Key, plan.Status, len(plan.Intents))
-				if !apply || gateErr != nil {
-					continue
+			}
+			if !apply || gateErr != nil {
+				// A closed gate and a dry run both skip the act phase, but neither
+				// makes the fleet busy: the cadence describes what the read found,
+				// and that verdict was already computed. Backing off here would
+				// freeze the poll for an act:false box, which is exactly the
+				// behaviour the spec forbids.
+				busy, _ := mirror.Busy(read)
+				return busy
+			}
+			// Start before any dispatch write, so a rig is up before its worktree
+			// and its row exist (design D5). The facts come from the reads above:
+			// a project's fresh flag, its plan's Ready, and the rows and seats the
+			// tick already has, with no extra forge or rig call.
+			lifecycleActions := lifecycle.Decide(lifecycleFacts(rows, reads, plans, eff), !read.RigStale, read.At)
+			lifecycleFailed := lifecycle.Start(ctx, lifecycleActions)
+			// The rig's roster and queue were read before the launch, so a rig that
+			// just came up would plan against a stale fleet and reach the next tick
+			// with a row no running seat ever sees. Re-read the roster once and
+			// re-plan against it, only when a launch happened (spec: "the row is
+			// created for a seat the launch started").
+			if len(lifecycleActions) > 0 {
+				if fresh, seatsErr := rig.NewAdapter(rigRunner).Seats(ctx); seatsErr == nil {
+					for _, project := range rows {
+						projectRead := reads[project.ID]
+						projectRead.Seats = filterSeatsFor(fresh, project.Rigs)
+						reads[project.ID] = projectRead
+						dispatches, err := db.DispatchesForProject(ctx, project.ID)
+						if err != nil {
+							continue
+						}
+						verdicts, err := db.VerdictsForProject(ctx, project.ID)
+						if err != nil {
+							continue
+						}
+						snapshot := mirror.BuildSnapshot(project, projectRead, dispatches, verdicts)
+						plans[project.Key] = decide.PlanTick(snapshot, read.At)
+					}
 				}
+			}
+			for _, project := range rows {
+				plan := plans[project.Key]
+				projectRead := reads[project.ID]
 				source, ok := specByKey[project.Key]
 				if !ok || source.Forge == nil {
 					continue
@@ -535,15 +855,28 @@ func run(args []string, stdout, stderr io.Writer) error {
 					Rig: rig.NewAdapter(rigRunner), Git: gitRunner, Gate: gate, Apply: true,
 					Items: projectRead.Items, CRs: projectRead.CRs, Rows: projectRead.Rows,
 					Plan: plan, WorktreeRoot: worktreeRoot(eff, project, source),
+					LifecycleFailed: lifecycleFailed,
 					// A raised decision reaches the phone from here: the tick
 					// knows the row exists, and the notifier owns the transport.
+					// The note goes on the item first when decision_notes is on, so
+					// the escalation's reply line points at a thread that already
+					// carries the question.
 					OnDecision: func(raised act.DecisionRaised) {
-						notify.escalate(ctx, projectKey, raised)
+						noteCtx := noteContextFor(raised, eff, projectRead)
+						notify.noteDecision(ctx, raised, noteCtx, source.Forge)
+						notify.escalate(ctx, projectKey, raised, noteCtx)
 					},
 				})
 				if err != nil {
 					fmt.Fprintf(stderr, "act: %s: %v\n", project.Key, err)
 					continue
+				}
+				// The reply phase runs after the act phase: a decision raised this
+				// tick has its note on the item, so an answer to it can be read on
+				// the next tick and resolved through the same call the board uses.
+				// A failure here is one log line and never fails the tick.
+				if eff.DecisionNotes {
+					readReplies(ctx, db, source.Forge, rig.NewAdapter(rigRunner), projectRead, eff, projectKey, project.ForgeProject)
 				}
 				fmt.Fprintf(stderr, "act: %s dispatches=%d verdicts=%d merges=%d skipped=%d\n",
 					project.Key, len(report.Dispatches), len(report.Verdicts), len(report.Merges), len(report.Skipped))
@@ -558,7 +891,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 				// A failed send never fails the tick and never blocks a merge.
 				if len(report.Merges) > 0 || digest.allow(read.At) {
 					seats, seatsErr := rig.NewAdapter(rigRunner).Seats(ctx)
-					snapshot := progress.Build(read, dispatches, project, eff, progress.Roster{
+					snapshot := progress.Build(read, dispatchRows[project.Key], project, eff, progress.Roster{
 						Seats: seats, Err: seatsErr, Plan: &plan,
 					})
 					result, sendErr := notify.sendProgress(ctx, snapshot, read.At)
@@ -572,7 +905,29 @@ func run(args []string, stdout, stderr io.Writer) error {
 					}
 				}
 			}
+			// The stop runs after the dispatch phase, so a tick that merges the
+			// last item and finds the window elapsed stops in the same tick (3.3).
+			lifecycle.Stop(ctx, lifecycleActions)
+			// The reclaim sweep runs after the dispatch phase too, and for the same
+			// reason: an item dispatched on this tick already has a live dispatch row
+			// when the sweep reads it, so its worktree is kept without a second lock
+			// (design D5). A zero interval is off, and the first run waits one full
+			// interval after boot so a restart loop cannot become a delete loop (D6).
+			if housekeepingScheduler.Due(read.At) {
+				if err := runHousekeep(ctx, housekeepArgs{
+					eff: eff, db: db, runner: forgeRunner, rigRunner: rigRunner, apply: true,
+					out: stderr, errOut: stderr,
+				}); err != nil {
+					fmt.Fprintf(stderr, "housekeep: %v\n", err)
+				}
+			}
+			// D7: the verdict comes from the read this tick already did. A failed
+			// dispatch or merge does not make the fleet busy; only the read does,
+			// so the cadence stays a property of what the app can see.
+			busy, _ := mirror.Busy(read)
+			return busy
 		},
+		waker.Channel(),
 	)
 
 	app, err := web.New(web.Config{
@@ -581,6 +936,18 @@ func run(args []string, stdout, stderr io.Writer) error {
 		Compat:     func(context.Context) rig.Report { return compatLive.current() },
 		Store:      db,
 		Rig:        rig.NewAdapter(rigRunner),
+		// A board verdict is one comment write, then the act tick merges on the
+		// facts. Budget 50 is a per-call ceiling, not a tick's 1500.
+		ForgeFor: func(_ context.Context, project store.ProjectRow) (forge.Forge, error) {
+			switch forge.Kind(project.ForgeKind) {
+			case forge.KindGitHub:
+				return forge.NewGitHub(project.ForgeProject, forgeRunner, &forge.Budget{Max: 50}), nil
+			case forge.KindGitLab:
+				return forge.NewGitLab(project.ForgeProject, forgeRunner, &forge.Budget{Max: 50}), nil
+			default:
+				return nil, fmt.Errorf("verdict: project %s has unknown forge %q", project.Key, project.ForgeKind)
+			}
+		},
 		// The setup chain runs `mkdir`, `git clone` and the rig CLI. Only an allowlisted
 		// step builds a command, and no step builds a login: the operator's credential
 		// never passes through here.
@@ -590,6 +957,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 			output, err := cmd.CombinedOutput()
 			return string(output), err
 		},
+		// The forge receiver. An empty secret leaves the route answering 404, so a box
+		// that has not configured one gains no public route on upgrade.
+		WebhookSecret: eff.WebhookSecret,
+		Waker:         waker,
 	})
 	if err != nil {
 		return err
@@ -682,4 +1053,113 @@ func adoptPendingDispatches(ctx context.Context, db *store.Store, adapter *rig.A
 		}
 	}
 	return nil
+}
+
+// housekeepArgs is one --housekeep run's inputs.
+type housekeepArgs struct {
+	eff       *config.Effective
+	db        *store.Store
+	runner    forge.Runner
+	rigRunner rig.Runner
+	apply     bool
+	out       io.Writer
+	errOut    io.Writer
+}
+
+// runHousekeep prints one reclaim plan per project and, with --apply, performs it.
+//
+// It reads each project's forge once, the same way the tick does, so the four
+// keep conditions are answered from real facts rather than the store's cache. A
+// project whose forge read fails proposes nothing and says so: "the read failed"
+// is not "nothing is left".
+//
+// The exit code is 0 even when a removal fails. The failure lives in the event
+// and on stderr; a sweep that refused one path is a working sweep.
+func runHousekeep(ctx context.Context, in housekeepArgs) error {
+	projects, err := in.db.Projects(ctx)
+	if err != nil {
+		return err
+	}
+	specs, err := projectSources(ctx, in.db, in.runner)
+	if err != nil {
+		return err
+	}
+	specByKey := make(map[string]mirror.Project, len(specs))
+	for _, spec := range specs {
+		specByKey[spec.Key] = spec
+	}
+	mirrorer := &mirror.Mirror{Store: in.db, Rig: rig.NewAdapter(in.rigRunner), ProjectTimeout: mirrorTimeouts(in.eff)}
+	read, err := mirrorer.Tick(ctx, specs)
+	if err != nil {
+		return err
+	}
+	total := 0
+	for _, project := range projects {
+		source, ok := specByKey[project.Key]
+		if !ok {
+			continue
+		}
+		projectRead := read.Projects[project.Key]
+		hkGit := housekeeping.ExecGit{RepoPath: source.RepoPath}
+		report, err := act.Housekeep(ctx, act.HousekeepInput{
+			Store: in.db, Project: project,
+			// The mirror's own read outcome is the fact: a project whose read failed
+			// this tick has nothing to say about its change requests.
+			ForgeOK:      func() bool { return !projectRead.ForgeStale && projectRead.ForgeError == "" },
+			Items:        projectRead.Items,
+			CRs:          projectRead.CRs,
+			Rows:         projectRead.Rows,
+			WorktreeRoot: worktreeRoot(in.eff, project, source),
+			Git:          hkGit,
+			Apply:        in.apply,
+		})
+		if err != nil {
+			fmt.Fprintf(in.errOut, "housekeep: %s: %v\n", project.Key, err)
+			continue
+		}
+		verb := "would remove"
+		if in.apply {
+			verb = "removed"
+		}
+		for _, path := range report.Removed {
+			fmt.Fprintf(in.out, "%s %s\n", verb, path)
+		}
+		if report.Failed > 0 {
+			fmt.Fprintf(in.errOut, "housekeep: %s: %d removal(s) refused by git; see the events\n", project.Key, report.Failed)
+		}
+		// The summary line the task asks for, on stdout so an operator's script can
+		// read it without parsing prose from stderr.
+		fmt.Fprintf(in.out, "housekeep %s: %s\n", project.Key, housekeepSummary(report))
+		total += len(report.Removed)
+	}
+	if !in.apply && total > 0 {
+		fmt.Fprintf(in.out, "housekeep: dry run; pass --apply to perform these removals\n")
+	}
+	return nil
+}
+
+// housekeepSummary renders the counts in one line, matching the summary event's
+// detail so the console and the audit trail read the same.
+func housekeepSummary(report act.HousekeepReport) string {
+	parts := []string{fmt.Sprintf("removed=%d", len(report.Removed))}
+	for _, reason := range []housekeeping.Reason{
+		housekeeping.ReasonOpenCR,
+		housekeeping.ReasonLiveDispatch,
+		housekeeping.ReasonLiveRow,
+		housekeeping.ReasonDirty,
+		housekeeping.ReasonGitRefused,
+		housekeeping.ReasonSymlink,
+		housekeeping.ReasonOutsideRoot,
+	} {
+		if count := report.Kept[reason]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", reason, count))
+		}
+	}
+	if report.Failed > 0 {
+		parts = append(parts, fmt.Sprintf("failed=%d", report.Failed))
+	}
+	if report.ForgeStale {
+		parts = append(parts, "forge-stale=1")
+	}
+	return strings.Join(parts, " ")
 }

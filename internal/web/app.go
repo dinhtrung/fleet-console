@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/dinhtrung/fleet-console/internal/configfile"
+	"github.com/dinhtrung/fleet-console/internal/forge"
+	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/dinhtrung/fleet-console/internal/webui"
@@ -23,14 +25,27 @@ type Config struct {
 	Compat     func(ctx context.Context) rig.Report
 	Store      *store.Store
 	Rig        *rig.Adapter
+	// ForgeFor is the write path a board verdict needs. Nil answers 503 on the
+	// verdict route only; every read still serves.
+	ForgeFor func(ctx context.Context, project store.ProjectRow) (forge.Forge, error)
 	// WriteProject is the config writer, defaulting to configfile.UpsertProject.
 	// A test installs a wrapper here to hand-edit the file between the request's
 	// read and its write, which is the stale-read case.
 	WriteProject func(path string, in configfile.Project, expected *[32]byte) (configfile.Outcome, error)
+	// WriteSettings is the settings writer, defaulting to configfile.UpdateSettings.
+	// A test installs a wrapper here to hand-edit the file between the request's
+	// read and its write, which is the stale-read case.
+	WriteSettings func(path string, values map[string]string, expected *[32]byte) (configfile.Outcome, error)
 	// SetupExec runs one setup step's external command and returns its combined
 	// output. Nil means the setup endpoint answers 500: a test supplies a fake,
 	// the binary supplies the real runner.
 	SetupExec func(ctx context.Context, name string, args ...string) (string, error)
+	// WebhookSecret is the shared secret a forge signs deliveries with. Empty leaves
+	// the receiver off: the route answers 404 and reads no body (design D3).
+	WebhookSecret string
+	// Waker is the mirror loop's wake channel. Nil means no loop is running in this
+	// process (the one-shot commands); a verified delivery still answers 202.
+	Waker *mirror.Waker
 }
 
 // New builds the HTTP app. /api/health is open; every other /api route needs
@@ -55,7 +70,7 @@ func New(cfg Config) (*fiber.App, error) {
 		IdleTimeout:  60 * time.Second,
 	})
 	hub := NewHub()
-	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat}
+	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor}
 
 	app.Use(idempotency())
 	app.Get("/api/health", func(c fiber.Ctx) error {
@@ -66,20 +81,30 @@ func New(cfg Config) (*fiber.App, error) {
 	app.Post("/logout", logout)
 	app.Post("/api/session", sessionCreate(cfg.Token))
 	app.Delete("/api/session", sessionDelete)
+	// The forge receiver sits on the app, not the bearer group: a forge cannot
+	// present the board's token, so the HMAC is the whole credential. Registering it
+	// here also means bearerAuth never runs for it.
+	app.Post("/api/hooks/forge", ForgeHook{Secret: cfg.WebhookSecret, Waker: cfg.Waker}.Handle)
+
 	api := app.Group("/api", bearerAuth(cfg.Token))
 	api.Get("/compat", func(c fiber.Ctx) error {
 		return c.JSON(compat(c.Context()))
 	})
 	api.Get("/board", fleet.Board)
 	api.Get("/items/:number", fleet.Item)
+	// The operator's approve/reject: the same note shape a reviewer seat posts,
+	// so one gate reads both and the newest verdict wins.
+	api.Post("/items/:number/verdict", fleet.ItemVerdict)
 	api.Get("/decisions", fleet.Decisions)
 	api.Post("/decisions/:id/answer", fleet.AnswerDecision)
 	api.Get("/seats", fleet.Seats)
 	api.Get("/seats/:session/tail", fleet.SeatTail)
 	api.Get("/events", fleet.Events)
+	api.Get("/events/:id", fleet.Event)
 	api.Get("/stream", hub.Stream)
 	// Projects routes
 	RegisterProjectsRoutes(api, cfg, cfg.ConfigPath)
+	RegisterSettingsRoutes(api, cfg, cfg.ConfigPath)
 	RegisterCultureRoutes(api, cfg, cfg.ConfigPath)
 	RegisterPreflightRoutes(api, cfg, cfg.ConfigPath)
 	if board, ok := webui.FS(); ok {

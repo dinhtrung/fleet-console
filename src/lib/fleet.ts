@@ -93,6 +93,30 @@ export interface EventRow {
   stdout_hash: string;
 }
 
+/** One row of the app's own event log, exactly as `GET /api/events` returns it. The audit screen
+ *  renders these fields and no others: `actor`/`kind` are exact matches and `subject` is a prefix,
+ *  because that is what the server's closed filter set means. */
+export type AuditEvent = EventRow;
+
+/** A keyset page. `next_before` is the smallest id in the page when the page is full and 0 on the
+ *  last page, so the screen offers a further page only when it is non-zero. */
+export interface AuditPage {
+  events: AuditEvent[];
+  next_before: number;
+}
+
+/** The server's closed filter set. A field the server does not know is a 400, so this type carries
+ *  only the five filters plus the keyset cursor and the page size. */
+export interface EventFilter {
+  actor?: string;
+  kind?: string;
+  subject?: string;
+  since?: string;
+  until?: string;
+  before?: number;
+  limit?: number;
+}
+
 export interface Dispatch {
   id: number;
   project_id: number;
@@ -320,14 +344,56 @@ export const answerDecision = (id: string, decision: string) =>
     },
   );
 
+/** What an approve/reject did: the note that landed, the sha it names, and where the merge
+ *  happens. `merge: "manual"` is the adoption gap — the note is evidence, nothing merges it. */
+export interface VerdictResult {
+  project: string;
+  item: number;
+  verdict: "accept" | "reject";
+  sha: string;
+  change_request: number;
+  ready: boolean;
+  merge: "act-tick" | "manual";
+  checks?: { name: string; conclusion: string }[];
+}
+
+/** Posts the operator's verdict on the item's open change request. It is the same
+ *  `ACCEPT <sha>` / `REJECT <sha>` note a reviewer seat posts, so the merge gate reads one
+ *  record either way and the newest verdict wins. A reject without a reason is refused by
+ *  the service: the reason is the builder's work list. */
+export const postVerdict = (number: number, verdict: "accept" | "reject", reason: string) =>
+  request<VerdictResult>(`/api/items/${number}/verdict`, {
+    method: "POST",
+    body: JSON.stringify({ verdict, reason }),
+  });
+
 export const getSeats = () => request<{ seats: Seat[] }>("/api/seats");
 
-export const getSeatTail = (session: string, lines = 24) =>
+/** The pane tail for one seat. The session contains `@`, so the path segment is escaped;
+ *  `lines` is passed through untouched because the route owns the 1..200 clamp. */
+export const seatTail = (session: string, lines = 24) =>
   request<{ session: string; lines: number; tail: string }>(
     `/api/seats/${encodeURIComponent(session)}/tail?lines=${lines}`,
   );
 
-export const getEvents = () => request<{ events: EventRow[] }>("/api/events?limit=50");
+/** The newest page of the event log, or the page before a cursor. Every filter the server accepts
+ *  is passed through as a query parameter; an empty value is omitted so "no filter" is the absence
+ *  of the parameter rather than an empty string the server would have to interpret. */
+export const listEvents = (filter: EventFilter = {}) => {
+  const params = new URLSearchParams();
+  for (const key of ["actor", "kind", "subject", "since", "until"] as const) {
+    const value = filter[key];
+    if (value) params.set(key, value);
+  }
+  if (filter.before && filter.before > 0) params.set("before", String(filter.before));
+  if (filter.limit && filter.limit > 0) params.set("limit", String(filter.limit));
+  const query = params.toString();
+  return request<AuditPage>(`/api/events${query ? `?${query}` : ""}`);
+};
+
+/** One event by id. A missing row is a 404, which the screen renders as "no such audit event"
+ *  rather than as a failed read. */
+export const getEvent = (id: number) => request<AuditEvent>(`/api/events/${id}`);
 
 export function shortTime(value?: string): string {
   if (!value) return "—";
@@ -405,6 +471,70 @@ export async function putCulture(
       const sha = typeof body.sha === "string" ? body.sha : "";
       const mtime = typeof body.mtime === "string" ? body.mtime : undefined;
       throw new CultureConflict(error.message, sha, mtime);
+    }
+    throw error;
+  }
+}
+
+/* ------------------------------------------------------------------ settings */
+
+/** One key the settings surface refuses, with the server's reason. Rendering it editable would be a
+ *  bug: the route answers 400 for it. */
+export interface ReadOnlyKey {
+  key: string;
+  reason: string;
+}
+
+/** GET /api/config. `settings` carries only what PUT accepts; `source` says where each value came
+ *  from (flag, environment, file or default); `hash` is the file bytes this read came from and must
+ *  be sent back on save. */
+export interface SettingsSnapshot {
+  settings: Record<string, string>;
+  source: Record<string, string>;
+  read_only: ReadOnlyKey[];
+  hash: string;
+}
+
+/** PUT /api/config. `saved: false` means the file already held these values, so the same shape as
+ *  "unchanged" from --apply-config. `restart_required` names the unit command's consequence without
+ *  running it. */
+export interface SettingsWriteResult {
+  saved: boolean;
+  changed: string[];
+  restart_required: boolean;
+  settings: Record<string, string>;
+  source: Record<string, string>;
+  hash: string;
+}
+
+/** A `409` from the settings write: the file changed since the screen loaded it. The screen must
+ *  reload rather than retry, because a retry with the old hash would be refused again. Its own type
+ *  so the screen cannot mistake it for a validation refusal. */
+export class SettingsConflict extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SettingsConflict";
+  }
+}
+
+export function isSettingsConflict(error: unknown): error is SettingsConflict {
+  return error instanceof SettingsConflict;
+}
+
+export const getSettings = () => request<SettingsSnapshot>("/api/config");
+
+/** Saves the given keys. `hash` is the hash `getSettings` returned; a stale one rejects with
+ *  `SettingsConflict`. A key absent from `values` is left alone, so a save writes only what the
+ *  operator touched. */
+export async function putSettings(values: Record<string, string>, hash: string): Promise<SettingsWriteResult> {
+  try {
+    return await request<SettingsWriteResult>("/api/config", {
+      method: "PUT",
+      body: JSON.stringify({ values, hash }),
+    });
+  } catch (error) {
+    if (isApiError(error) && error.status === 409) {
+      throw new SettingsConflict(error.message);
     }
     throw error;
   }

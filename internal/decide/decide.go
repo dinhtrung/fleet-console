@@ -39,12 +39,29 @@ const (
 
 // Project is one enabled project's tick scope.
 type Project struct {
-	Key            string `json:"key"`
-	Forge          Forge  `json:"forge"`
-	Enabled        bool   `json:"enabled"`
-	OnHold         bool   `json:"onhold"`
-	ConcurrencyCap int    `json:"concurrency_cap"` // 0 = no cap beyond free builders
+	Key            string   `json:"key"`
+	Forge          Forge    `json:"forge"`
+	Enabled        bool     `json:"enabled"`
+	OnHold         bool     `json:"onhold"`
+	ConcurrencyCap int      `json:"concurrency_cap"` // 0 = no cap beyond free builders
+	Rigs           []RigRef `json:"rigs,omitempty"`
 }
+
+// RigRef is one declared rig and its place in the fill order. The config type carries the
+// same three fields; decide keeps its own copy so this package stays free of config imports
+// and the snapshot stays the only input.
+type RigRef struct {
+	Name  string `json:"name"`
+	Tier  int    `json:"tier"`
+	Spill string `json:"spill"`
+}
+
+// The spill triggers. A later tier is reached only when its trigger allows it.
+const (
+	SpillNever         = "never"
+	SpillOnFull        = "on-full"
+	SpillOnUnavailable = "on-unavailable"
+)
 
 // Link is a forge link. GitHub dependencies use State; GitLab related links are
 // symmetric and carry the other item's state.
@@ -157,8 +174,12 @@ type Dispatch struct {
 
 // Result is the whole plan: deterministic for a snapshot.
 type Result struct {
-	Status     Status     `json:"status"`
+	Status Status `json:"status"`
+	// Free is the number of seats that could take work. Ready is how many items
+	// the rules found dispatchable, counted before the concurrency limit: a rig
+	// with Ready > 0 and Free == 0 has work and no seat to take it (design D1).
 	Free       int        `json:"free"`
+	Ready      int        `json:"ready"`
 	Dispatches []Dispatch `json:"dispatches"`
 	Skips      []Skip     `json:"skips"`
 	Error      string     `json:"error,omitempty"`
@@ -205,6 +226,9 @@ func Decide(s Snapshot) Result {
 
 	busy := busyBuilders(s.Rows)
 	free := freeBuilders(s.Builders, busy)
+	// The tier order decides which of those free seats this project may use. fillSeats returns the
+	// admitted seats and the reason a later tier was refused, which the skip detail quotes.
+	free, tierRefusal := fillSeats(s.Project.Rigs, free, s.Builders, s.Project.ConcurrencyCap)
 	limit := len(free)
 	if s.Project.ConcurrencyCap > 0 && s.Project.ConcurrencyCap < limit {
 		limit = s.Project.ConcurrencyCap
@@ -281,6 +305,7 @@ func Decide(s Snapshot) Result {
 		ready = append(ready, item)
 	}
 
+	result.Ready = len(ready)
 	if len(ready) == 0 {
 		result.Status = StatusNothing
 		return result
@@ -288,7 +313,13 @@ func Decide(s Snapshot) Result {
 
 	for index, item := range ready {
 		if index >= limit {
-			result.Skips = append(result.Skips, Skip{Number: item.Number, Reason: ReasonNoFreeBuilder})
+			detail := tierRefusal.String()
+			if detail == "" {
+				detail = "every admitted seat is taken"
+			}
+			result.Skips = append(result.Skips, Skip{
+				Number: item.Number, Reason: ReasonNoFreeBuilder, Detail: detail,
+			})
 			continue
 		}
 		result.Dispatches = append(result.Dispatches, Dispatch{Number: item.Number, Seat: free[index]})
@@ -354,6 +385,157 @@ func freeBuilders(builders []string, busy map[string]bool) []string {
 		free = append(free, seat)
 	}
 	return free
+}
+
+// rigOf reads the rig a seat belongs to from the `@<rig>` suffix of its session name. A seat with
+// no suffix belongs to no declared rig and is ignored by the fill order.
+func rigOf(session string) string {
+	at := strings.LastIndex(session, "@")
+	if at < 0 || at == len(session)-1 {
+		return ""
+	}
+	return session[at+1:]
+}
+
+// seatsByRig groups free seats by their rig. Order within a rig follows the builders list, so the
+// same snapshot always fills the same seat.
+func seatsByRig(free []string) map[string][]string {
+	out := make(map[string][]string, len(free))
+	for _, seat := range free {
+		rigName := rigOf(seat)
+		if rigName == "" {
+			continue
+		}
+		out[rigName] = append(out[rigName], seat)
+	}
+	return out
+}
+
+// rigHasRunningSeat reports whether any builder seat runs on the named rig. An empty rig has no
+// running seat, which is the condition `on-unavailable` tests.
+func rigHasRunningSeat(builders []string, rigName string) bool {
+	for _, seat := range builders {
+		if rigOf(seat) == rigName {
+			return true
+		}
+	}
+	return false
+}
+
+// tierRefusal is why a later tier was not reached. The skip detail quotes it as
+// `tier N (spill=<trigger>: <fact>)`, so the three parts are kept apart until the string is built.
+type tierRefusal struct {
+	Tier  int
+	Name  string
+	Spill string
+	Fact  string
+}
+
+// String renders the spec's refusal form, `tier N (spill=<trigger>: <fact>)`, or "" when no tier
+// refused the item. The rig's name goes in the fact so the operator knows which rig came up empty
+// without the form growing a second parenthetical.
+func (r tierRefusal) String() string {
+	if r.Fact == "" {
+		return ""
+	}
+	return fmt.Sprintf("tier %d (spill=%s: %s on %s)", r.Tier, r.Spill, r.Fact, r.Name)
+}
+
+// fillSeats walks the declared rigs in order and returns the seats this project may use, with the
+// refusal when a tier stopped the walk. A seat on a rig the project does not declare is ignored.
+//
+// The trigger on a later tier decides whether reaching it is allowed:
+//
+//   - never: unused while any earlier tier exists
+//   - on-full: allowed when no free seat remains in the earlier tiers, the concurrency cap included
+//   - on-unavailable: allowed only when an earlier tier's rig has no running seat
+//
+// The first argument is the whole free list so the caller's primitives stay unchanged; the second is
+// every running builder, which is what tells an empty rig from a busy one.
+func fillSeats(rigs []RigRef, free, builders []string, cap int) ([]string, tierRefusal) {
+	if len(rigs) == 0 {
+		// No tier declaration: the flat list behaves exactly as before.
+		return free, tierRefusal{}
+	}
+	byRig := seatsByRig(free)
+	declared := make(map[string]bool, len(rigs))
+	chosen := make([]string, 0, len(free))
+	// admitted records that an earlier tier was reached. A later tier is considered only then, so a
+	// `never` tier cannot be entered past a tier that itself refused.
+	admitted := false
+	var refusal, empty tierRefusal
+	for index, ref := range rigs {
+		if declared[ref.Name] {
+			continue
+		}
+		declared[ref.Name] = true
+		first := index == 0
+		if !first && !admitted {
+			break
+		}
+		if !first {
+			if fact := spillFact(rigs[:index], free, builders, cap, ref.Spill); fact != "" {
+				refusal = tierRefusal{Tier: ref.Tier, Name: ref.Name, Spill: ref.Spill, Fact: fact}
+				break
+			}
+		}
+		seats := byRig[ref.Name]
+		if len(seats) > 0 {
+			chosen = append(chosen, seats...)
+			admitted = true
+			continue
+		}
+		// A tier with no free seat: the walk may still reach a later one. The fact is remembered so a
+		// skip with no seat anywhere names the first tier that came up empty, but it is not a refusal
+		// while a later tier still supplies a seat.
+		if empty.Fact == "" {
+			empty = tierRefusal{
+				Tier: ref.Tier, Name: ref.Name, Spill: ref.Spill,
+				Fact: "no free seat on this rig",
+			}
+		}
+		admitted = true
+	}
+	// A refusal only matters when no seat was admitted at all. A walk that spilled successfully is
+	// not a refusal, even though an earlier tier came up empty on the way.
+	if len(chosen) > 0 {
+		return chosen, tierRefusal{}
+	}
+	if refusal.Fact != "" {
+		return chosen, refusal
+	}
+	return chosen, empty
+}
+
+// spillFact answers whether a later tier may be reached, naming the earlier tier that refuses it. An
+// empty answer means the spill is allowed.
+func spillFact(earlier []RigRef, free, builders []string, cap int, spill string) string {
+	switch spill {
+	case SpillNever:
+		return "an earlier tier exists"
+	case SpillOnUnavailable:
+		for _, ref := range earlier {
+			if !rigHasRunningSeat(builders, ref.Name) {
+				return ""
+			}
+		}
+		return "every earlier tier has a running seat"
+	case SpillOnFull, "":
+		byRig := seatsByRig(free)
+		remaining := 0
+		for _, ref := range earlier {
+			remaining += len(byRig[ref.Name])
+		}
+		if cap > 0 && cap < remaining {
+			remaining = cap
+		}
+		if remaining > 0 {
+			return fmt.Sprintf("%d free seat(s) remain in an earlier tier", remaining)
+		}
+		return ""
+	default:
+		return fmt.Sprintf("unknown trigger %q", spill)
+	}
 }
 
 // inflightNumbers maps a task number to the live row whose body names it. The

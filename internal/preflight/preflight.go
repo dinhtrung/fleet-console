@@ -119,7 +119,7 @@ type Project struct {
 func FromConfig(p config.Project) Project {
 	rigName := strings.TrimSpace(p.Rig)
 	if rigName == "" && len(p.Rigs) > 0 {
-		rigName = strings.TrimSpace(p.Rigs[0])
+		rigName = strings.TrimSpace(p.Rigs[0].Name)
 	}
 	return Project{
 		Key:           p.Key,
@@ -214,4 +214,11 @@ func (d Deps) withDefaults(eff config.Effective) Deps {
 // teardown archives from here.
 func specDir(home, rigName string) string {
 	return filepath.Join(home, ".openrig", "specs", "rigs", rigName)
+}
+
+// SpecPath is the rig.yaml a launch names, `<home>/.openrig/specs/rigs/<rig>/
+// rig.yaml`. It is the one convention WriteSpecDir writes and teardown archives
+// from, so a start that cannot find it is a missing spec rather than a wrong path.
+func SpecPath(home, rigName string) string {
+	return filepath.Join(specDir(home, rigName), "rig.yaml")
 }

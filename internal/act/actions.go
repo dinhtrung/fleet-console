@@ -27,12 +27,18 @@ type Rig interface {
 }
 
 // Actions is the act pass's dependency set.
+//
+// ProjectID scopes every read that item numbers alone cannot: item numbers are
+// unique only within a project, so a verdict or a dispatch lookup that omits it
+// can match another project's work. It is set once per tick from
+// TickInput.Project.
 type Actions struct {
-	Store *store.Store
-	Forge forge.Forge
-	Rig   Rig
-	Git   Git
-	Now   func() time.Time
+	Store     *store.Store
+	Forge     forge.Forge
+	Rig       Rig
+	Git       Git
+	Now       func() time.Time
+	ProjectID int64
 }
 
 func (a *Actions) now() time.Time {

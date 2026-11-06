@@ -58,6 +58,11 @@ type Mirror struct {
 	Now            func() time.Time
 	ProjectTimeout TimeoutSettings
 	Logf           func(format string, args ...any)
+	// OnWait, when set, records each wait the loop is about to sleep. A test
+	// seam: production leaves it nil and the loop just sleeps. It runs before
+	// the timer starts, so a recorder that cancels the context stops the loop
+	// without the test waiting out a real interval.
+	OnWait func(time.Duration)
 }
 
 // TimeoutSettings scales one project's read deadline with its item count. The
@@ -286,6 +291,12 @@ func missingRigs(rigs []string, seats []rig.Seat) []string {
 	return missing
 }
 
+// filterRows keeps the project's rows: those addressed to one of its rigs, and
+// those parked on a person. The second kind is not noise to drop — a decision
+// row lives on a seat that is often outside the project's rigs (an @kernel
+// operator or advisor), and the operator still owes an answer. Removing it here
+// is how the quiet rule stopped seeing the very obligations it must never mute
+// (issue #143).
 func filterRows(rows []rig.QueueRow, rigs []string) []rig.QueueRow {
 	if len(rigs) == 0 {
 		return rows
@@ -296,8 +307,11 @@ func filterRows(rows []rig.QueueRow, rigs []string) []rig.QueueRow {
 	}
 	out := make([]rig.QueueRow, 0, len(rows))
 	for _, row := range rows {
-		at := strings.LastIndex(row.Destination, "@")
-		if at >= 0 && wanted[row.Destination[at+1:]] {
+		if at := strings.LastIndex(row.Destination, "@"); at >= 0 && wanted[row.Destination[at+1:]] {
+			out = append(out, row)
+			continue
+		}
+		if rig.WaitsOnHuman(row.State, row.Destination, row.BlockedOn) {
 			out = append(out, row)
 		}
 	}
@@ -346,6 +360,7 @@ func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []
 		Project: projectFields{
 			Key: project.Key, Forge: decide.Forge(project.ForgeKind), Enabled: project.Enabled,
 			OnHold: project.OnHold, ConcurrencyCap: project.ConcurrencyCap,
+			Rigs: decideRigRefs(project.RigTiers),
 		},
 		ForgeOK: !result.ForgeStale,
 	}
@@ -436,6 +451,24 @@ func parseTime(raw string) time.Time {
 // while still producing its exact types.
 type decideSnapshot = decide.Snapshot
 type projectFields = decide.Project
+
+// decideRigRefs converts the store's persisted tier list into the plan's own shape. An empty list
+// means the project declares no tiers, and the plan keeps the flat behaviour.
+func decideRigRefs(tiers []store.RigTier) []decide.RigRef {
+	if len(tiers) == 0 {
+		return nil
+	}
+	out := make([]decide.RigRef, 0, len(tiers))
+	for _, tier := range tiers {
+		spill := tier.Spill
+		if spill == "" {
+			spill = decide.SpillOnFull
+		}
+		out = append(out, decide.RigRef{Name: tier.Name, Tier: tier.Tier, Spill: spill})
+	}
+	return out
+}
+
 type itemFields = decide.Item
 type linkFields = decide.Link
 type rowFields = decide.Row
@@ -447,29 +480,96 @@ type verdictFields = decide.VerdictState
 // Loop ticks immediately and then on a jittered interval until ctx is done. A
 // source error or a failed tick is retried on the next interval; it never stops the
 // loop.
-func (m *Mirror) Loop(ctx context.Context, sources func(context.Context) ([]Project, error), interval, jitter time.Duration, onTick func(TickResult)) {
+//
+// The wait comes from the cadence: the caller's onTick verdict says whether the
+// tick ended quiet (the wait doubles, capped at the cadence's Max) or busy (the
+// wait returns to Base). A tick that could not read at all counts as busy, so a
+// broken source is retried at the normal rate instead of the backed-off one.
+// jitter is added to the chosen wait and never exceeds it, so a jittered wait
+// cannot jump past the ceiling the operator set.
+//
+// onTick may be nil, which leaves every tick quiet. The cadence may be zero,
+// which makes every wait Base — the pre-cadence behaviour, still the default for
+// a box that never writes the rig_lifecycle block.
+//
+// wake lets another goroutine ask for a tick before the timer would fire. A
+// receive runs the tick immediately and resets the cadence to Base, exactly as a
+// busy tick does: the wait after a wake is tick_interval even when the tick it
+// triggered found nothing. A nil channel disables the arm, so every caller that
+// predates the wake keeps its behaviour. Coalescing belongs to the sender — see
+// Waker — so this loop only ever sees one pending wake at a time.
+func (m *Mirror) Loop(ctx context.Context, sources func(context.Context) ([]Project, error), cadence Cadence, jitter time.Duration, onTick func(TickResult) bool, wake <-chan struct{}) {
 	seen := make(map[string]string)
+	// quiet and reason describe the tick that just ran: whether it found nothing
+	// anywhere, and when it did find something, the fact that ended the stretch.
+	var quiet bool
+	var reason string
 	tick := func() {
+		quiet, reason = true, ""
 		projects, err := sources(ctx)
 		if err != nil {
 			m.note(seen, "sources", err)
+			quiet, reason = false, "sources: "+err.Error()
 			return
 		}
 		result, err := m.Tick(ctx, projects)
 		if err != nil {
 			m.note(seen, "tick", err)
+			quiet, reason = false, "tick: "+err.Error()
 			return
 		}
 		m.noteProjects(seen, result)
-		if onTick != nil {
-			onTick(result)
+		if onTick == nil {
+			return
 		}
+		if !onTick(result) {
+			return
+		}
+		// Busy. Name the fact from the same read, so the reset line says why the
+		// poll went back to the normal rate instead of only that it did.
+		quiet = false
+		_, reason = Busy(result)
+		if reason == "" {
+			reason = "the caller reported busy"
+		}
+	}
+	// prev starts at the base so the first tick, which also returns the base,
+	// logs nothing: a wait that did not change is not news.
+	prev := cadence.Base
+	next := func() time.Duration {
+		// chosen is the cadence's own number, before jitter. The comparison and
+		// the log line both use it, because jitter changes every wait: comparing
+		// the jittered value would log a line on every quiet tick at the ceiling,
+		// which is exactly the noise task 4.3 forbids.
+		chosen := cadence.Next(quiet)
+		if chosen != prev {
+			// One line per change, and only a change: an operator reads this to
+			// tell a deliberately slow poll from a hung loop, so a repeated wait
+			// would bury the two lines that matter.
+			if cadence.Streak() > 0 {
+				m.logf("cadence %s (quiet %d)", chosen, cadence.Streak())
+			} else {
+				m.logf("cadence %s reset: %s", chosen, reason)
+			}
+			prev = chosen
+		}
+		wait := chosen
+		if jitter > 0 {
+			// Capped at the wait itself, so a long tick_interval does not turn a
+			// short backed-off wait into a much longer one.
+			spread := jitter
+			if spread > wait {
+				spread = wait
+			}
+			wait += time.Duration(rand.Int63n(int64(spread)))
+		}
+		return wait
 	}
 	tick()
 	for {
-		wait := interval
-		if jitter > 0 {
-			wait += time.Duration(rand.Int63n(int64(jitter)))
+		wait := next()
+		if m.OnWait != nil {
+			m.OnWait(wait)
 		}
 		timer := time.NewTimer(wait)
 		select {
@@ -478,7 +578,25 @@ func (m *Mirror) Loop(ctx context.Context, sources func(context.Context) ([]Proj
 			return
 		case <-timer.C:
 			tick()
+		case <-wake:
+			timer.Stop()
+			tick()
+			// A wake is a busy verdict even when the tick it triggered found
+			// nothing: something changed out there, and the next wait must be
+			// tick_interval rather than a further doubling. This is the same
+			// path a busy tick takes — cadence.Next(false) clears the streak and
+			// returns Base — so the cadence's own arithmetic is untouched.
+			quiet = false
+			reason = "woken by a forge delivery"
 		}
+	}
+}
+
+// logf writes one line when a logger is configured. The loop logs only changes,
+// so a nil logger costs nothing on a quiet box.
+func (m *Mirror) logf(format string, args ...any) {
+	if m.Logf != nil {
+		m.Logf(format, args...)
 	}
 }
 

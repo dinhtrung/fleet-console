@@ -1,6 +1,7 @@
 package progress
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"os"
@@ -41,7 +42,7 @@ func testConfig() *config.Effective {
 	project := config.Project{
 		Key: "fleet-console", Name: "fleet-console", Forge: "github",
 		Repo: "dinhtrung/fleet-console", DefaultBranch: "main",
-		Rigs: []string{"fleet-console"}, ConcurrencyCap: 2,
+		Rigs: config.NamedRigs("fleet-console"), ConcurrencyCap: 2,
 	}
 	project.Paths.Main = "/home/dinhtrung/develop/fleet-console"
 	project.Paths.Worktrees = "/home/dinhtrung/develop"
@@ -459,7 +460,7 @@ func TestIdleSeatReasons(t *testing.T) {
 			project := testProject()
 			project.Rigs = []string{"rig"}
 			eff := testConfig()
-			eff.Projects[0].Rigs = []string{"rig"}
+			eff.Projects[0].Rigs = config.NamedRigs("rig")
 			read := mirror.TickResult{At: fixedNow, Projects: map[string]mirror.ProjectResult{
 				"fleet-console": {Items: tc.items, Seats: tc.seats()},
 			}}
@@ -502,3 +503,269 @@ func TestRepoURLRules(t *testing.T) {
 		})
 	}
 }
+
+// quietRead is a board with nothing on it: every issue closed, no epic open,
+// nothing in flight, pending or on hold, and no decision waiting.
+func quietRead() mirror.TickResult {
+	return mirror.TickResult{
+		At: fixedNow,
+		Projects: map[string]mirror.ProjectResult{
+			"fleet-console": {
+				Items: []forge.Item{
+					{Number: 64, Kind: forge.KindEpic, State: forge.StateClosed, Title: "done epic"},
+					{Number: 65, Kind: forge.KindTask, State: forge.StateClosed, Title: "done task", Parent: intPtr(64)},
+				},
+				Seats: testSeats(),
+			},
+		},
+	}
+}
+
+func buildQuiet() Snapshot {
+	return Build(quietRead(), nil, testProject(), testConfig(), Roster{Plan: &decide.Plan{}})
+}
+
+// TestQuietWhenEverythingIsZero is the base case: an empty board is quiet.
+func TestQuietWhenEverythingIsZero(t *testing.T) {
+	snapshot := buildQuiet()
+	if !snapshot.Quiet() {
+		t.Fatalf("Quiet() = false on an empty board; counts = %+v", snapshot.Counts)
+	}
+	if snapshot.Counts != (Counts{}) {
+		t.Fatalf("counts = %+v, want all zero", snapshot.Counts)
+	}
+}
+
+// TestNotQuietForEachNonZeroCount is five separate cases, not one row with all
+// five set: a predicate that forgets one bucket must fail on that bucket alone.
+func TestNotQuietForEachNonZeroCount(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*mirror.TickResult, *[]store.DispatchRow)
+	}{
+		{
+			name: "one open epic",
+			mutate: func(read *mirror.TickResult, _ *[]store.DispatchRow) {
+				// openEpics counts an epic only when it has an open child
+				// (progress.go:484). The child here is itself an epic: openBuckets
+				// skips epics, so this leaves Pending, OnHold and InFlight at zero
+				// and makes the Epics term alone decide the predicate.
+				projectRead := read.Projects["fleet-console"]
+				projectRead.Items = append(projectRead.Items, forge.Item{
+					Number: 70, Kind: forge.KindEpic, State: forge.StateOpen, Title: "open epic",
+				}, forge.Item{
+					Number: 74, Kind: forge.KindEpic, State: forge.StateOpen,
+					Title: "nested open epic", Parent: intPtr(70),
+				})
+				read.Projects["fleet-console"] = projectRead
+			},
+		},
+		{
+			name: "one in flight",
+			mutate: func(read *mirror.TickResult, rows *[]store.DispatchRow) {
+				projectRead := read.Projects["fleet-console"]
+				projectRead.Items = append(projectRead.Items, forge.Item{
+					Number: 71, Kind: forge.KindTask, State: forge.StateOpen, Title: "in flight",
+				})
+				read.Projects["fleet-console"] = projectRead
+				*rows = []store.DispatchRow{{
+					ID: 1, ProjectID: 1, ItemNumber: 71, Seat: "dev-build-1@fleet-console",
+					Branch: "feature/71", CreatedAt: "2026-10-30T11:33:00Z", State: "active",
+				}}
+			},
+		},
+		{
+			name: "one pending",
+			mutate: func(read *mirror.TickResult, _ *[]store.DispatchRow) {
+				projectRead := read.Projects["fleet-console"]
+				projectRead.Items = append(projectRead.Items, forge.Item{
+					Number: 72, Kind: forge.KindTask, State: forge.StateOpen, Title: "pending work",
+				})
+				read.Projects["fleet-console"] = projectRead
+			},
+		},
+		{
+			name: "one on hold",
+			mutate: func(read *mirror.TickResult, _ *[]store.DispatchRow) {
+				projectRead := read.Projects["fleet-console"]
+				projectRead.Items = append(projectRead.Items, forge.Item{
+					Number: 73, Kind: forge.KindTask, State: forge.StateOpen, Title: "held work",
+					Labels: []string{"onhold"},
+				})
+				read.Projects["fleet-console"] = projectRead
+			},
+		},
+		{
+			name: "one open decision",
+			mutate: func(read *mirror.TickResult, _ *[]store.DispatchRow) {
+				projectRead := read.Projects["fleet-console"]
+				projectRead.Rows = []rig.QueueRow{{
+					ID: "qitem-1", State: "pending", Destination: "human@kernel",
+					Summary: "#63 accept the parked change request?", Body: "fleet-console #63: no verdict",
+				}}
+				read.Projects["fleet-console"] = projectRead
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			read := quietRead()
+			var rows []store.DispatchRow
+			tc.mutate(&read, &rows)
+			snapshot := Build(read, rows, testProject(), testConfig(), Roster{Plan: &decide.Plan{}})
+			if snapshot.Quiet() {
+				t.Fatalf("Quiet() = true with %s; counts = %+v", tc.name, snapshot.Counts)
+			}
+		})
+	}
+}
+
+// TestNotQuietWhenAListIsTruncated pins the reason Quiet reads Counts and not
+// the slices. Truncation happens in Render (entryLimit, render.go:15), not in
+// Build: the snapshot keeps the full slice and the count agrees with it. The
+// message prints only five pending lines; the board still has forty.
+func TestNotQuietWhenAListIsTruncated(t *testing.T) {
+	read := quietRead()
+	projectRead := read.Projects["fleet-console"]
+	for i := range 40 {
+		projectRead.Items = append(projectRead.Items, forge.Item{
+			Number: 100 + i, Kind: forge.KindTask, State: forge.StateOpen,
+			Title: "pending work", Labels: []string{"status::ongoing"},
+		})
+	}
+	read.Projects["fleet-console"] = projectRead
+
+	snapshot := Build(read, nil, testProject(), testConfig(), Roster{Plan: &decide.Plan{}})
+	if snapshot.Counts.Pending != 40 {
+		t.Fatalf("Counts.Pending = %d, want 40", snapshot.Counts.Pending)
+	}
+	body := Render(snapshot, fixedNow)
+	// The pending bucket prints entryLimit lines and then "+35 more".
+	if printed := strings.Count(body, "  #1"); printed != 5 {
+		t.Fatalf("pending lines printed = %d, want 5 (entryLimit)", printed)
+	}
+	if !strings.Contains(body, "+35 more") {
+		t.Fatalf("body has no truncation marker; the case would not prove anything:\n%s", body)
+	}
+	if snapshot.Quiet() {
+		t.Fatal("Quiet() = true although the count is 40 and only the rendered list is truncated")
+	}
+}
+
+// TestProductionShapedDecisionRowsAreNotQuiet pins issue #143 end to end. It
+// drives the production path — real `rig queue list` wire bytes through
+// rig.ParseQueueList, then the real mirror through filterRows — rather than
+// handing Build a hand-made row that skipped both. That shortcut is what let
+// the original test pass while production stayed broken.
+//
+// It covers all three shapes a decision takes on this box, because the first
+// fix for #143 covered only the first and the review caught the other two:
+//
+//  1. `blocked` whose destination is an agent seat and whose blocker is a
+//     person — the shape production produced while the board read quiet;
+//  2. `pending` whose destination is a person — what internal/act/adopt.go
+//     creates for an ambiguous dispatch;
+//  3. `blocked` whose destination is a person, with no blocker.
+//
+// Every row's destination rig is another rig, so filterRows must keep each one:
+// a person's obligation does not belong to the project's rig.
+func TestProductionShapedDecisionRowsAreNotQuiet(t *testing.T) {
+	// Exactly the fields `rig queue list -A -a --json` emits, including the
+	// required pickup block.
+	const wire = `[
+	  {"pickup":{"state":"parked","evidence":"awaits a person"},
+	   "qitemId":"qitem-20261104014517-6e808968eec861e8",
+	   "tsCreated":"2026-11-04T01:45:17.000Z","sourceSession":"hermes-orchestrator",
+	   "destinationSession":"operator-agent@kernel","state":"blocked","priority":"routine",
+	   "blockedOn":"operator-human@kernel",
+	   "summary":"Row S3 needs a builder","body":"#38 needs a decision"},
+	  {"pickup":{"state":"parked","evidence":"awaits a person"},
+	   "qitemId":"qitem-20261104012716-36bbd84f",
+	   "tsCreated":"2026-11-04T01:27:16.000Z","sourceSession":"hermes-orchestrator",
+	   "destinationSession":"advisor-lead@kernel","state":"blocked","priority":"routine",
+	   "blockedOn":"operator-human@kernel",
+	   "summary":"Release gate","body":"do not tag android-v1.2.0"},
+	  {"pickup":{"state":"unclaimed"},
+	   "qitemId":"qitem-20261104012613-e9f2a970",
+	   "tsCreated":"2026-11-04T01:26:13.000Z","sourceSession":"hermes-orchestrator",
+	   "destinationSession":"human@kernel","state":"pending","priority":"routine",
+	   "blockedOn":"",
+	   "summary":"ambiguous dispatch: #12 has 2 queue rows","body":"pick one row"},
+	  {"pickup":{"state":"parked","evidence":"awaits a person"},
+	   "qitemId":"qitem-20261104013000-b7c1de44",
+	   "tsCreated":"2026-11-04T01:30:00.000Z","sourceSession":"hermes-orchestrator",
+	   "destinationSession":"human@kernel","state":"blocked","priority":"routine",
+	   "blockedOn":"",
+	   "summary":"confirm the release tag","body":"blocked, addressed to the operator"}
+	]`
+
+	const wantDecisions = 4
+
+	rows, err := rig.ParseQueueList([]byte(wire), nil)
+	if err != nil {
+		t.Fatalf("ParseQueueList: %v", err)
+	}
+	if len(rows) != wantDecisions {
+		t.Fatalf("decoded rows = %d, want %d", len(rows), wantDecisions)
+	}
+	// Every row must satisfy the shared rule, and the decode must have carried
+	// the fields the rule reads (blockedOn arrives as `blockedOn` on the wire).
+	for _, row := range rows {
+		if !rig.WaitsOnHuman(row.State, row.Destination, row.BlockedOn) {
+			t.Fatalf("row %s (state=%q dest=%q blockedOn=%q) not a human obligation",
+				row.ID, row.State, row.Destination, row.BlockedOn)
+		}
+	}
+
+	runner := queueRunner(func(_ context.Context, args ...string) ([]byte, error) {
+		switch {
+		case len(args) > 0 && args[0] == "queue":
+			return []byte(wire), nil
+		case len(args) > 0 && args[0] == "ps":
+			return []byte("[]"), nil
+		default:
+			return []byte("[]"), nil
+		}
+	})
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "fleet.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	projectID, err := st.CreateProject(context.Background(), store.ProjectInput{
+		Key: "fleet-console", Name: "fleet-console", ForgeKind: "github",
+		ForgeProject: "dinhtrung/fleet-console", DefaultBranch: "main",
+		Rigs: []string{"fleet-console"}, ConcurrencyCap: 2, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("upsert project: %v", err)
+	}
+	m := &mirror.Mirror{Store: st, Rig: rig.NewAdapter(runner)}
+	ctx := context.Background()
+	read, err := m.Tick(ctx, []mirror.Project{{
+		ID: projectID, Key: "fleet-console",
+		Forge: forge.NewFake(forge.KindGitHub), Rigs: []string{"fleet-console"},
+	}})
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	kept := read.Projects["fleet-console"].Rows
+	if len(kept) != wantDecisions {
+		t.Fatalf("filterRows kept %d rows, want %d: a decision row was dropped", len(kept), wantDecisions)
+	}
+
+	snapshot := Build(read, nil, testProject(), testConfig(), Roster{Plan: &decide.Plan{}})
+	if snapshot.Counts.OpenDecisions != wantDecisions {
+		t.Fatalf("Counts.OpenDecisions = %d, want %d", snapshot.Counts.OpenDecisions, wantDecisions)
+	}
+	if snapshot.Quiet() {
+		t.Fatalf("Quiet() = true with %d decisions waiting; counts = %+v", wantDecisions, snapshot.Counts)
+	}
+}
+
+// queueRunner answers the rig CLI for this test: the queue read returns the
+// recorded wire bytes, everything else is empty.
+type queueRunner func(context.Context, ...string) ([]byte, error)
+
+func (f queueRunner) Run(ctx context.Context, args ...string) ([]byte, error) { return f(ctx, args...) }

@@ -15,8 +15,11 @@ import (
 	"time"
 
 	"github.com/dinhtrung/fleet-console/internal/act"
+	"github.com/dinhtrung/fleet-console/internal/decisions"
 	"github.com/dinhtrung/fleet-console/internal/alert"
 	"github.com/dinhtrung/fleet-console/internal/config"
+	"github.com/dinhtrung/fleet-console/internal/forge"
+	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/progress"
 	"github.com/dinhtrung/fleet-console/internal/store"
 )
@@ -129,6 +132,8 @@ func notifierFor(t *testing.T, eff *config.Effective, bot *fakeBotAPI, logw *byt
 			Logf:  func(string, ...any) {},
 		},
 		escalator: &alert.Escalator{Store: db, Sender: sender, BoardURL: "http://127.0.0.1:8787"},
+		notes:     &decisions.Noter{Store: &decisionStore{db: db}, Logf: func(string, ...any) {}},
+		decisionNotes: eff != nil && eff.DecisionNotes,
 		log:       logw,
 	}
 }
@@ -292,7 +297,10 @@ func TestEscalatorReachesThePhone(t *testing.T) {
 	n := notifierFor(t, eff, bot, &logw)
 
 	raised := act.DecisionRaised{QItemID: "qitem-1", Item: 62, Text: "re-review needed"}
-	n.escalate(context.Background(), "app", raised)
+	note := decisions.NoteContext{
+		ItemURL: "https://github.com/dinhtrung/fleet-console/issues/62", OpenOnItem: 1,
+	}
+	n.escalate(context.Background(), "app", raised, note)
 	if got := bot.count(); got != 1 {
 		t.Fatalf("sends = %d, want 1", got)
 	}
@@ -320,7 +328,7 @@ func TestEscalatorReachesThePhone(t *testing.T) {
 	}
 
 	// The same decision again: the message is edited, not resent.
-	n.escalate(context.Background(), "app", raised)
+	n.escalate(context.Background(), "app", raised, note)
 	if got := bot.count(); got != 1 {
 		t.Fatalf("sends after re-escalation = %d, want 1 (the second is an edit)", got)
 	}
@@ -352,6 +360,194 @@ func TestDigestGate(t *testing.T) {
 		}
 		if !g.allow(at.Add(31 * time.Minute)) {
 			t.Fatal("call past the interval was refused")
+		}
+	})
+}
+
+// quietSnapshotForTest is a board with nothing on it, built through the real
+// Build so the counts and the slices agree.
+func quietSnapshotForTest(t *testing.T, eff *config.Effective) progress.Snapshot {
+	t.Helper()
+	db, err := store.Open(context.Background(), eff.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	project, err := db.ProjectByKey(context.Background(), "app")
+	if err != nil || project == nil {
+		t.Fatalf("project: %v", err)
+	}
+	return progress.Build(mirror.TickResult{}, nil, *project, eff, progress.Roster{})
+}
+
+// busySnapshotForTest is the same board with one issue pending — work the
+// operator has to see, so the quiet rule must not swallow it.
+func busySnapshotForTest(t *testing.T, eff *config.Effective) progress.Snapshot {
+	t.Helper()
+	db, err := store.Open(context.Background(), eff.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	project, err := db.ProjectByKey(context.Background(), "app")
+	if err != nil || project == nil {
+		t.Fatalf("project: %v", err)
+	}
+	read := mirror.TickResult{
+		At: time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC),
+		Projects: map[string]mirror.ProjectResult{
+			"app": {Items: []forge.Item{
+				{Number: 7, Kind: forge.KindTask, State: forge.StateOpen, Title: "pending work"},
+			}},
+		},
+	}
+	return progress.Build(read, nil, *project, eff, progress.Roster{})
+}
+
+// TestQuietSnapshotSendsNothing pins the quiet rule at the notifier, counting
+// real sendMessage calls against the fake Bot API. Cases (a)-(c) and (e) are
+// the unsolicited triggers; (d) is the exempt on-demand report.
+func TestQuietSnapshotSendsNothing(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+
+	t.Run("a. quiet snapshot on the digest trigger sends 0", func(t *testing.T) {
+		eff := notifyFixture(t)
+		bot := newFakeBot(t)
+		var logw bytes.Buffer
+		n := notifierFor(t, eff, bot, &logw)
+
+		snapshot := quietSnapshotForTest(t, eff)
+		if !snapshot.Quiet() {
+			t.Fatalf("fixture is not quiet: %+v", snapshot.Counts)
+		}
+		result, err := n.sendProgress(ctx, snapshot, at)
+		if err != nil {
+			t.Fatalf("sendProgress = %v", err)
+		}
+		if got := bot.count(); got != 0 {
+			t.Fatalf("sendMessage calls = %d, want 0", got)
+		}
+		if result.Sent || result.Failed || result.Duplicate {
+			t.Fatalf("result = %+v, want an empty skip result", result)
+		}
+		if got := strings.Count(logw.String(), "skipped, no open work"); got != 1 {
+			t.Fatalf("skip log lines = %d, want exactly 1:\n%s", got, logw.String())
+		}
+	})
+
+	t.Run("b. quiet snapshot on a merge tick sends 0", func(t *testing.T) {
+		// A merge is the one trigger that fires without the digest. It reaches the
+		// notifier through the same sendProgress, so the quiet gate must cover it:
+		// the tick that merges the last open issue reports nothing. main.go keeps
+		// its trigger condition untouched.
+		eff := notifyFixture(t)
+		bot := newFakeBot(t)
+		var logw bytes.Buffer
+		n := notifierFor(t, eff, bot, &logw)
+
+		snapshot := quietSnapshotForTest(t, eff)
+		digest := &digestGate{} // interval 0: the digest is off, the merge is the only trigger
+		merges := 1
+		if merges > 0 || digest.allow(at) {
+			result, err := n.sendProgress(ctx, snapshot, at)
+			if err != nil {
+				t.Fatalf("sendProgress = %v", err)
+			}
+			if result.Sent {
+				t.Fatalf("result = %+v, want a skip", result)
+			}
+		}
+		if got := bot.count(); got != 0 {
+			t.Fatalf("sendMessage calls = %d, want 0", got)
+		}
+		if got := strings.Count(logw.String(), "skipped, no open work"); got != 1 {
+			t.Fatalf("skip log lines = %d, want exactly 1:\n%s", got, logw.String())
+		}
+	})
+
+	t.Run("c. non-quiet snapshot sends 1", func(t *testing.T) {
+		eff := notifyFixture(t)
+		bot := newFakeBot(t)
+		var logw bytes.Buffer
+		n := notifierFor(t, eff, bot, &logw)
+
+		snapshot := busySnapshotForTest(t, eff)
+		if snapshot.Quiet() {
+			t.Fatalf("fixture is quiet: %+v", snapshot.Counts)
+		}
+		result, err := n.sendProgress(ctx, snapshot, at)
+		if err != nil {
+			t.Fatalf("sendProgress = %v", err)
+		}
+		if got := bot.count(); got != 1 {
+			t.Fatalf("sendMessage calls = %d, want 1", got)
+		}
+		if !result.Sent {
+			t.Fatalf("result = %+v, want Sent", result)
+		}
+		if strings.Contains(logw.String(), "skipped") {
+			t.Fatalf("a non-quiet send logged a skip:\n%s", logw.String())
+		}
+	})
+
+	t.Run("d. --notify-report on a quiet snapshot sends 1 and exits 0", func(t *testing.T) {
+		eff := notifyFixture(t)
+		bot := newFakeBot(t)
+		var logw bytes.Buffer
+		n := notifierFor(t, eff, bot, &logw)
+
+		code, err := runNotifyReport(ctx, notifyReportArgs{
+			eff: eff, projectKey: "app", notifier: n, log: &logw,
+			now: func() time.Time { return at },
+		})
+		if err != nil {
+			t.Fatalf("runNotifyReport = %v", err)
+		}
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+		if got := bot.count(); got != 1 {
+			t.Fatalf("sendMessage calls = %d, want 1 (the exemption)", got)
+		}
+	})
+
+	t.Run("e. dedupe is not poisoned by a quiet skip", func(t *testing.T) {
+		eff := notifyFixture(t)
+		bot := newFakeBot(t)
+		var logw bytes.Buffer
+		n := notifierFor(t, eff, bot, &logw)
+
+		// The body that will be sent before and after the quiet stretch.
+		busy := busySnapshotForTest(t, eff)
+		if _, err := n.sendProgress(ctx, busy, at); err != nil {
+			t.Fatalf("first send: %v", err)
+		}
+		if got := bot.count(); got != 1 {
+			t.Fatalf("sends after the first body = %d, want 1", got)
+		}
+
+		// A quiet trigger in between. It must not record anything as the last
+		// reported state.
+		if _, err := n.sendProgress(ctx, quietSnapshotForTest(t, eff), at.Add(time.Minute)); err != nil {
+			t.Fatalf("quiet send: %v", err)
+		}
+		if got := bot.count(); got != 1 {
+			t.Fatalf("sends after the quiet skip = %d, want still 1", got)
+		}
+
+		// The same body as before the quiet stretch. The skip did not poison the
+		// dedupe: this is a duplicate of the first real message, so it must not
+		// resend either — the point is the ledger still names the real message.
+		result, err := n.sendProgress(ctx, busy, at.Add(2*time.Minute))
+		if err != nil {
+			t.Fatalf("second send: %v", err)
+		}
+		if !result.Duplicate {
+			t.Fatalf("result = %+v, want Duplicate against the pre-quiet message", result)
+		}
+		if got := bot.count(); got != 1 {
+			t.Fatalf("sendMessage calls = %d, want 1", got)
 		}
 	})
 }
