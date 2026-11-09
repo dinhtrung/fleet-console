@@ -346,6 +346,50 @@ to be **down**, not merely busy.
 A seat on a rig the project does not declare is ignored, and the concurrency cap stays per project — it bounds that
 project's work in flight, not any one rig's.
 
+### Rigs in tiers, so a standby is cheaper than a second primary
+
+A project can declare its rigs as a **fill order** instead of a flat list. Tier 0's seats are used first; a later
+tier is reached only when the entry's `spill` trigger allows it. A bare string is tier 0 with `spill: on-full`, so
+an existing `rigs: [a, b]` keeps its meaning.
+
+```yaml
+projects:
+  - key: fleet-console
+    rigs:
+      - primary            # tier 0, on-full (the bare-string form)
+      - name: standby
+        tier: 1
+        spill: on-full     # a seat here is used only when no earlier seat is free
+```
+
+| `spill` | A later tier is used when |
+|---|---|
+| `never` | never, while any earlier tier exists |
+| `on-full` | no free seat remains in the earlier tiers — the concurrency cap counted |
+| `on-unavailable` | an earlier tier's rig has **no running seat**, or its read failed |
+
+**A worked example.** `primary` (tier 0) and `standby` (tier 1, `on-full`), cap 2, both rigs up. An issue is ready;
+`primary`'s two seats are both working.
+
+```
+→ the plan spills: the ready item is dispatched to a free seat on standby
+→ the queue row's destination is <seat>@standby, and its worktree is still wt-<key>-<n>
+  (one worktree layout for every rig: the rig's own daemon routes the row)
+```
+
+Switch that entry to `spill: on-unavailable` and the same state parks the item instead, with the reason in the
+journal — `act-skip: <project>: tier 1 (spill=on-unavailable: every earlier tier has a running seat on standby)`.
+That line is the point of naming the trigger: a busy fleet and a misconfigured one read differently.
+
+**The warning.** `on-unavailable` starts the standby **cold**. While tier 0 has any running seat, tier 1 gets
+nothing — so a burst that fills tier 0 parks items until a tier-0 seat frees, rather than bursting onto the standby.
+That is the right trade when the standby costs real money or a scarce quota, and the wrong one when you want the
+work to start now. `on-full` spills as soon as the earlier tier is full; `on-unavailable` waits for the earlier rig
+to be **down**, not merely busy.
+
+A seat on a rig the project does not declare is ignored, and the concurrency cap stays per project — it bounds that
+project's work in flight, not any one rig's.
+
 ---
 
 ## 4. Rebuilding this on a new box
