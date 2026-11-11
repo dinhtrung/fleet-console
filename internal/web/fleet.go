@@ -575,6 +575,13 @@ func (f *Fleet) Decisions(c fiber.Ctx) error {
 }
 
 // AnswerDecision records the answer with the rig and one audit event.
+//
+// Two row shapes carry a decision, and the verb each one accepts differs
+// (#253): `queue resolve` requires a leg-1 parked row (state blocked), while a
+// pending row addressed to a human — the shape act's raiser creates — accepts
+// only an update that closes it. The pending fallback closes the row the way
+// the operator's own workaround did, so the board and the queue stay in step
+// either way.
 func (f *Fleet) AnswerDecision(c fiber.Ctx) error {
 	if f.Rig == nil {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "rig adapter is not configured")
@@ -590,7 +597,25 @@ func (f *Fleet) AnswerDecision(c fiber.Ctx) error {
 	if id == "" || decision == "" {
 		return fiber.NewError(fiber.StatusBadRequest, "id and decision are required")
 	}
-	item, err := f.Rig.QueueResolve(c.Context(), id, decision)
+	row, err := f.Rig.QueueShow(c.Context(), id)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, err.Error())
+	}
+	var item *rig.QueueItem
+	switch state := strings.ToLower(row.State); {
+	case state == "blocked":
+		item, err = f.Rig.QueueResolve(c.Context(), id, decision)
+	case state == "pending" && rig.HumanDecision(row.Destination):
+		// A pending human row cannot resolve: the verb demands a parked row.
+		// Close it as answered, carrying the decision in the note.
+		item, err = f.Rig.QueueUpdate(c.Context(), id, rig.UpdateRequest{
+			State: "done", ClosureReason: "answered",
+			Note: "decision: " + decision + " (answered from the board)",
+		})
+	default:
+		return fiber.NewError(fiber.StatusConflict,
+			fmt.Sprintf("row %s is %s and addressed to %s; the board can answer a blocked row or a pending row addressed to a human", id, row.State, row.Destination))
+	}
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadGateway, err.Error())
 	}
