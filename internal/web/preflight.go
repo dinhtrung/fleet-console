@@ -25,6 +25,7 @@ import (
 	"github.com/dinhtrung/fleet-console/internal/preflight"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/setup"
+	"github.com/dinhtrung/fleet-console/internal/store"
 )
 
 // PreflightResponse is the report shape from design.md §1. It mirrors
@@ -166,9 +167,39 @@ func preflightProject(cfg Config, configPath string) fiber.Handler {
 		if !ok {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": fmt.Sprintf("project %q is not registered", key)})
 		}
-		report := preflight.Run(c.Context(), preflight.FromConfig(project), *eff)
+		p := preflight.FromConfig(project)
+		// The note-write probe aims at an item the mirror already has: the
+		// newest open one. An empty mirror leaves the number zero, and the
+		// check answers unknown rather than aiming at nothing.
+		p.ProbeItemNumber = newestOpenItem(c.Context(), cfg.Store, project.Key)
+		report := preflight.RunWith(c.Context(), p, *eff, preflight.Deps{Forge: cfg.PreflightForge})
 		return c.JSON(preflightResponse(report))
 	}
+}
+
+// newestOpenItem is the highest-numbered open item the mirror holds for the
+// project, or 0 when the mirror is empty, the project has no row or the store
+// is unavailable. Zero means "aim at nothing", which the forge_write check
+// turns into an honest unknown.
+func newestOpenItem(ctx context.Context, st *store.Store, key string) int {
+	if st == nil {
+		return 0
+	}
+	row, err := st.ProjectByKey(ctx, key)
+	if err != nil || row == nil {
+		return 0
+	}
+	items, err := st.Items(ctx)
+	if err != nil {
+		return 0
+	}
+	newest := 0
+	for _, item := range items {
+		if item.ProjectID == row.ID && strings.EqualFold(strings.TrimSpace(item.State), "open") && item.Number > newest {
+			newest = item.Number
+		}
+	}
+	return newest
 }
 
 // preflightDraft checks a body that is not a project row yet. `rig` answers
@@ -193,7 +224,9 @@ func preflightDraft(cfg Config, configPath string) fiber.Handler {
 			Worktrees: in.Paths.Worktrees,
 			Draft:     true,
 		}
-		report := preflight.Run(c.Context(), project, *eff)
+		// A draft has no row, so the mirror holds nothing to aim the note probe
+		// at; the change-request probe alone answers what a token may do.
+		report := preflight.RunWith(c.Context(), project, *eff, preflight.Deps{Forge: cfg.PreflightForge})
 		return c.JSON(preflightResponse(report))
 	}
 }

@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,6 +24,7 @@ type preflightHarness struct {
 	confPath string
 	home     string
 	exec     *execRecorder
+	forge    *forgeRecorder
 }
 
 // execRecorder stands in for the setup chain's external command, so no test
@@ -61,11 +63,49 @@ func newPreflightHarness(t *testing.T, configBody string) *preflightHarness {
 	t.Cleanup(func() { st.Close() })
 
 	rec := &execRecorder{out: "cloned"}
-	app, err := New(Config{Token: testToken, Store: st, ConfigPath: confPath, SetupExec: rec.run})
+	forgeRec := &forgeRecorder{}
+	app, err := New(Config{Token: testToken, Store: st, ConfigPath: confPath, SetupExec: rec.run, PreflightForge: forgeRec.run})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
-	return &preflightHarness{app: app, confPath: confPath, home: home, exec: rec}
+	return &preflightHarness{app: app, confPath: confPath, home: home, exec: rec, forge: forgeRec}
+}
+
+// forgeRecorder stands in for the forge CLI, so the forge_write check never
+// shells out from a test. It answers the validation refusals a real gh/glab
+// prints for the two probes, records every call, and a test can replace its
+// answer through reply.
+type forgeRecorder struct {
+	calls [][]string
+	reply func(ctx context.Context, binary string, args ...string) (string, string, error)
+}
+
+// The bodies gh prints for the two deliberately invalid writes. Both exit
+// non-zero: the write was refused, and stdout carries the forge's own JSON.
+const (
+	probePRBody    = `{"message":"Validation Failed","errors":[{"resource":"PullRequest","field":"head","code":"invalid"}],"status":"422"}`
+	probeNoteBody  = `{"message":"Validation Failed","errors":[{"resource":"IssueComment","code":"unprocessable","field":"data","message":"Body cannot be blank"}],"status":"422"}`
+	probe422Stderr = "gh: HTTP 422: Validation Failed (https://api.github.com/)"
+
+	probeScopeHeaders = "HTTP/2 200\nx-oauth-scopes: repo, workflow\n\n"
+)
+
+func (r *forgeRecorder) run(ctx context.Context, binary string, args ...string) (string, string, error) {
+	argv := append([]string{binary}, args...)
+	r.calls = append(r.calls, argv)
+	if r.reply != nil {
+		return r.reply(ctx, binary, args...)
+	}
+	joined := strings.Join(argv, " ")
+	switch {
+	case strings.Contains(joined, "-i user"):
+		return probeScopeHeaders, "", nil
+	case strings.Contains(joined, "/comments"):
+		return probeNoteBody, probe422Stderr, errors.New("exit status 1")
+	case strings.Contains(joined, "/pulls"), strings.Contains(joined, "/merge_requests"):
+		return probePRBody, probe422Stderr, errors.New("exit status 1")
+	}
+	return "", "", errors.New("forgeRecorder: unexpected call " + joined)
 }
 
 const preflightConfig = `listen: 127.0.0.1:0
@@ -106,9 +146,9 @@ func (h *preflightHarness) post(t *testing.T, path, body string) *http.Response 
 	return resp
 }
 
-// TestPreflightProjectHasFourChecks: the report shape design.md §1 promises —
-// exactly four checks in order, each with a state, a detail and a fix.
-func TestPreflightProjectHasFourChecks(t *testing.T) {
+// TestPreflightProjectHasFiveChecks: the report shape design.md §1 promises —
+// exactly five checks in order, each with a state, a detail and a fix.
+func TestPreflightProjectHasFiveChecks(t *testing.T) {
 	h := newPreflightHarness(t, preflightConfig)
 	resp := h.get(t, "/api/projects/app/preflight")
 	if resp.StatusCode != http.StatusOK {
@@ -118,7 +158,7 @@ func TestPreflightProjectHasFourChecks(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	want := []string{"git_url", "base_dir", "rig", "runtime"}
+	want := []string{"git_url", "forge_write", "base_dir", "rig", "runtime"}
 	if len(body.Checks) != len(want) {
 		t.Fatalf("checks = %d, want %d", len(body.Checks), len(want))
 	}

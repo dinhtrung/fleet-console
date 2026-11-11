@@ -1,7 +1,7 @@
-// Package preflight answers four questions about a project before the app tries
-// to dispatch work for it: does the repository answer, is the checkout in place,
-// is the rig running the shape the project declares, and can this host
-// authenticate the runtime that rig uses.
+// Package preflight answers five questions about a project before the app tries
+// to dispatch work for it: does the repository answer, may the forge token
+// write, is the checkout in place, is the rig running the shape the project
+// declares, and can this host authenticate the runtime that rig uses.
 //
 // Two rules shape every check:
 //
@@ -47,12 +47,13 @@ const (
 	StepUpRig     = "up_rig"
 )
 
-// The four check ids, in the order the report lists them.
+// The five check ids, in the order the report lists them.
 const (
-	CheckGitURL  = "git_url"
-	CheckBaseDir = "base_dir"
-	CheckRig     = "rig"
-	CheckRuntime = "runtime"
+	CheckGitURL     = "git_url"
+	CheckForgeWrite = "forge_write"
+	CheckBaseDir    = "base_dir"
+	CheckRig        = "rig"
+	CheckRuntime    = "runtime"
 )
 
 // DefaultTimeout bounds one check. A check that outlives it is unknown, not ok.
@@ -111,6 +112,10 @@ type Project struct {
 	CloneURL      string
 	DefaultBranch string // the branch dispatch works from; "" skips the branch check
 	Worktrees     string // paths.worktrees, where per-item worktrees are cut
+	// ProbeItemNumber is the newest open item in the mirror, for the note-write
+	// probe. Zero means the mirror has no open item, so the note cannot be
+	// probed and the check reports unknown rather than inventing a number.
+	ProbeItemNumber int
 }
 
 // FromConfig copies the row facts out of a resolved config project. The row
@@ -139,6 +144,7 @@ type Deps struct {
 	Env      func(string) string          // default: os.Getenv
 	LookPath func(string) (string, error) // default: exec.LookPath
 	Git      func(ctx context.Context, args ...string) (stdout, stderr string, err error)
+	Forge    func(ctx context.Context, binary string, args ...string) (stdout, stderr string, err error)
 	Seats    func(ctx context.Context, rigName string) ([]rig.Seat, error)
 	Now      func() time.Time
 	Timeout  time.Duration
@@ -164,6 +170,7 @@ func RunWith(ctx context.Context, p Project, eff config.Effective, deps Deps) Re
 	runtime, probeErr := runtimeInfo(deps, resolveRuntime(p, spec))
 	checks := []Check{
 		checkGitURL(ctx, deps, p),
+		checkForgeWrite(ctx, deps, p),
 		checkBaseDir(ctx, deps, p),
 		checkRig(ctx, deps, p, spec, specErr),
 		checkRuntime(ctx, deps, p, runtime, probeErr),
@@ -196,6 +203,9 @@ func (d Deps) withDefaults(eff config.Effective) Deps {
 	}
 	if d.Git == nil {
 		d.Git = execGit
+	}
+	if d.Forge == nil {
+		d.Forge = execForge
 	}
 	if d.Seats == nil {
 		adapter := rig.NewAdapter(rig.ExecRunner{Path: eff.RigBinary})
