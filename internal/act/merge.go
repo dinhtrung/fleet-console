@@ -9,6 +9,27 @@ import (
 	"strings"
 )
 
+// NotMergeableError is the merge gate's refusal when the verdict is an accept at
+// the head but the forge says the change request cannot merge. A conflicting
+// branch never becomes mergeable on its own — the head has to be rebased or the
+// conflicts resolved — so this is a repair condition, not a transient one, and the
+// tick reacts to it instead of skipping forever (#251). The fields name the facts
+// the repair row quotes.
+type NotMergeableError struct {
+	Number int    // the change request number
+	Item   int    // the issue it closes
+	SHA    string // the accepted head
+	Branch string // the head's branch
+	Reason string // the forge's own word, e.g. dirty / cannot_be_merged
+}
+
+func (e *NotMergeableError) Error() string {
+	if e.Reason == "" {
+		return fmt.Sprintf("refusing merge: change request #%d is not mergeable", e.Number)
+	}
+	return fmt.Sprintf("refusing merge: change request #%d is not mergeable (%s)", e.Number, e.Reason)
+}
+
 // MergeResult is the evidence of one watchdog merge.
 //
 // AuditGaps names every ledger write that failed after the merge had already
@@ -89,7 +110,10 @@ func (a *Actions) Merge(ctx context.Context, dispatchID int64, item int) (*Merge
 		return nil, fmt.Errorf("refusing merge: checks are not green: %s", reason)
 	}
 	if !request.Mergeable {
-		return nil, fmt.Errorf("refusing merge: change request #%d is not mergeable", request.Number)
+		return nil, &NotMergeableError{
+			Number: request.Number, Item: item, SHA: verdict.SHA,
+			Branch: request.Branch, Reason: request.MergeState,
+		}
 	}
 	if closes := forge.ParseCloses(request.Body); closes != item {
 		return nil, fmt.Errorf("refusing merge: body does not close #%d", item)
@@ -280,7 +304,10 @@ func (a *Actions) MergeAdopted(ctx context.Context, projectID int64, item int, r
 		return nil, fmt.Errorf("refusing merge: checks are not green: %s", reason)
 	}
 	if !request.Mergeable {
-		return nil, fmt.Errorf("refusing merge: change request #%d is not mergeable", request.Number)
+		return nil, &NotMergeableError{
+			Number: request.Number, Item: item, SHA: verdict.SHA,
+			Branch: request.Branch, Reason: request.MergeState,
+		}
 	}
 	if closes := forge.ParseCloses(request.Body); closes != item {
 		return nil, fmt.Errorf("refusing merge: body does not close #%d", item)

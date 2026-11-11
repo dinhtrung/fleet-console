@@ -137,11 +137,27 @@ type ChangeRequest struct {
 	Branch     string  `json:"branch,omitempty"` // the head's branch name, e.g. feature/138-...
 	Draft      bool    `json:"draft"`
 	Mergeable  bool    `json:"mergeable"`
+	// MergeState is the forge's own word for why a change request is not mergeable:
+	// GitHub's `mergeable_state` (e.g. dirty) or GitLab's `detailed_merge_status`
+	// (e.g. cannot_be_merged). Empty when the forge named no reason. It is carried
+	// so a refusal can say why, not just that.
+	MergeState string  `json:"merge_state,omitempty"`
 	Body       string  `json:"body"`
 	ClosesItem int     `json:"closes_item,omitempty"`
 	Checks     []Check `json:"checks"`
 	DocsOnly   bool    `json:"docs_only"`
 	URL        string  `json:"url"`
+}
+
+// MergeConflict reports whether the merge state says the head conflicts with the
+// default branch. Both forges have several not-mergeable words; only these two are
+// conflicts a rebase would repair. An unknown word is not claimed as a conflict.
+func (cr ChangeRequest) MergeConflict() bool {
+	switch strings.ToLower(cr.MergeState) {
+	case "dirty", "cannot_be_merged":
+		return true
+	}
+	return false
 }
 
 // HeadGreen answers the merge gate's head question and says why. A docs-only change
