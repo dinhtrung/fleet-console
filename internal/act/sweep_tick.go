@@ -72,11 +72,20 @@ func (a *Actions) sweepEpics(ctx context.Context, in TickInput, report *TickRepo
 		}
 		if !commented {
 			if err := a.Forge.Comment(ctx, decision.Epic, sweepComment(decision)); err != nil {
+				// A permission refusal raises the operator question (#260):
+				// attempt 0 — the epic has no dispatch — and the journal line
+				// names the permission, not the adapter error.
+				if notePermission(in, report, a.RefusePermission(ctx, decision.Epic, epic.Title, "comment", err, 0, 0, "")) {
+					continue
+				}
 				report.Skipped = append(report.Skipped, fmt.Sprintf("#%d sweep: comment: %v", decision.Epic, err))
 				continue
 			}
 		}
 		if err := a.Forge.CloseItem(ctx, decision.Epic); err != nil {
+			if notePermission(in, report, a.RefusePermission(ctx, decision.Epic, epic.Title, "close", err, 0, 0, "")) {
+				continue
+			}
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d sweep: close: %v", decision.Epic, err))
 			continue
 		}
