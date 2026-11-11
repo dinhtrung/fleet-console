@@ -13,7 +13,8 @@ import (
 )
 
 // A note is a verdict when its **first non-empty line** starts with the token and
-// a sha. Both anchors matter:
+// a sha — after stripDecoration has removed the markdown a model may have
+// wrapped it in. Both anchors still matter:
 //
 //   - anchored at the start, so "Not ready to ACCEPT <sha> until CI is green" is
 //     a sentence and not a verdict;
@@ -27,6 +28,45 @@ var (
 	verdictToken = regexp.MustCompile(`(?i)^(ACCEPT|REJECT)\b`)
 	newline      = regexp.MustCompile(`\r?\n`)
 )
+
+// verdictDecoration is the cutset stripDecoration removes from the start of a
+// line, in any order: heading marks, quote marks, list bullets, emphasis and
+// code-span marks, and the whitespace around them. `**` comes out as two `*`,
+// `__` as two `_`.
+const verdictDecoration = "#>-*+`_ \t"
+
+// verdictSeparator matches one separator — a colon, an em dash, or a dash —
+// with the whitespace around it, immediately after the token: `ACCEPT: <sha>`
+// and `ACCEPT — <sha>` say the same thing as `ACCEPT <sha>`, which is the one
+// shape the note regex reads.
+var verdictSeparator = regexp.MustCompile(`(?i)^((?:ACCEPT|REJECT)\b)\s*[:—-]\s*`)
+
+// stripDecoration removes the markdown a model may wrap its verdict in, so the
+// parser reads what the reviewer meant rather than how they wrapped it
+// (epic #263, design D1). Three strips, in order, each at most once:
+//
+//   - the decoration marks themselves, from the start, in any order;
+//   - one label closed by a separator — `## Verdict: ACCEPT <sha>` is a
+//     heading around the verdict, so the `Verdict:` label goes with the marks.
+//     Tried only when the token is not already at the start, so `ACCEPT: <sha>`
+//     loses the separator after the token below, not the token with it;
+//   - one separator immediately after the token, rewritten as the single
+//     space the regexes expect.
+//
+// Everything else is left alone, deliberately. A sentence that merely mentions
+// the token (`Not ready to ACCEPT <sha> until CI is green`) carries no
+// separator before it, so it survives the strip and the anchored regexes still
+// read it as prose; `ACCEPTED` is not `ACCEPT`; and a dash inside a word ends
+// the label strip rather than eating half a sentence.
+func stripDecoration(line string) string {
+	s := strings.TrimLeft(line, verdictDecoration)
+	if !verdictToken.MatchString(s) {
+		if i := strings.IndexAny(s, ":—-"); i > 0 {
+			s = strings.TrimLeft(s[i:], verdictDecoration+":—-")
+		}
+	}
+	return verdictSeparator.ReplaceAllString(s, "$1 ")
+}
 
 // ErrUnattributableVerdict is returned when the newest verdict-shaped note cannot
 // be tied to the head under review. The merge must not proceed: falling through
@@ -81,13 +121,15 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 	})
 	for _, note := range sorted {
 		line := firstLine(note.Body)
-		if !verdictToken.MatchString(line) {
+		normal := stripDecoration(line)
+		if !verdictToken.MatchString(normal) {
 			continue
 		}
-		match := verdictNote.FindStringSubmatch(line)
+		match := verdictNote.FindStringSubmatch(normal)
 		if match == nil {
 			// It claims to be a verdict and does not parse: a truncated or
-			// mistyped sha, or the token with nothing after it.
+			// mistyped sha, or the token with nothing after it. The error
+			// quotes the line the reviewer wrote, not the normalised one.
 			return nil, &UnattributableVerdictError{
 				NoteID: note.ID, Line: line,
 				Reason: "the first line starts with a verdict token but its sha does not parse",
