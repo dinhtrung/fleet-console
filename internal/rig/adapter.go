@@ -8,14 +8,43 @@ import (
 	"strings"
 )
 
+// OperatorSession is the seat the service speaks as for the verbs that act as
+// a seat. The service daemon has no seat of its own: `queue resolve` refuses
+// without OPENRIG_SESSION_NAME, and the surfaces that resolve — the board's
+// one-click answer and the act reply reader — act with the operator's
+// authority, so the identity is the operator seat's (#253).
+const OperatorSession = "human@kernel"
+
 // Adapter is one function per rig CLI command. Domain types leave this package;
 // no decoded map or raw JSON does.
 type Adapter struct {
 	Runner Runner
+	// Operator runs the seat-acting verbs with the operator identity.
+	// NewAdapter derives it from an ExecRunner; over a bare Runner it stays
+	// nil and those verbs run with the parent environment, which is what tests
+	// and embedded callers that manage their own env want.
+	Operator Runner
 }
 
 // NewAdapter returns an adapter over a runner.
-func NewAdapter(runner Runner) *Adapter { return &Adapter{Runner: runner} }
+func NewAdapter(runner Runner) *Adapter {
+	a := &Adapter{Runner: runner}
+	if exec, ok := runner.(ExecRunner); ok {
+		a.Operator = exec.AsSession(OperatorSession)
+	}
+	return a
+}
+
+// operator is the runner for the verbs that act as a seat.
+func (a *Adapter) operator() Runner {
+	if a == nil {
+		return nil
+	}
+	if a.Operator != nil {
+		return a.Operator
+	}
+	return a.Runner
+}
 
 func (a *Adapter) run(ctx context.Context, args ...string) ([]byte, error) {
 	if a == nil || a.Runner == nil {
@@ -254,16 +283,34 @@ func (a *Adapter) QueueHandoff(ctx context.Context, id string, req HandoffReques
 	return a.writeItem(ctx, "queue handoff", args...)
 }
 
-// QueueResolve records a human decision on a parked row.
+// QueueResolve records a human decision on a parked row. The resolve verb
+// acts as a seat, and the service has none of its own, so it runs with the
+// operator identity (#253).
 func (a *Adapter) QueueResolve(ctx context.Context, id, decision string) (*QueueItem, error) {
 	if id == "" || decision == "" {
 		return nil, fmt.Errorf("queue resolve: id and decision are required")
 	}
-	return a.writeItem(ctx, "queue resolve", "queue", "resolve", id, "--decision", decision, "--json")
+	return a.writeItemRunner(a.operator(), ctx, "queue resolve",
+		"queue", "resolve", id, "--decision", decision, "--json")
 }
 
 func (a *Adapter) writeItem(ctx context.Context, command string, args ...string) (*QueueItem, error) {
-	data, err := a.run(ctx, args...)
+	return a.writeItemRunner(runnerFunc(a.run), ctx, command, args...)
+}
+
+// runnerFunc adapts a run-shaped function to the Runner interface.
+type runnerFunc func(ctx context.Context, args ...string) ([]byte, error)
+
+// Run implements Runner.
+func (f runnerFunc) Run(ctx context.Context, args ...string) ([]byte, error) { return f(ctx, args...) }
+
+// writeItemRunner runs one write through an explicit runner and decodes the
+// queue item it closed or created.
+func (a *Adapter) writeItemRunner(runner Runner, ctx context.Context, command string, args ...string) (*QueueItem, error) {
+	if runner == nil {
+		return nil, fmt.Errorf("rig adapter: no runner")
+	}
+	data, err := runner.Run(ctx, args...)
 	if err != nil {
 		return nil, err
 	}

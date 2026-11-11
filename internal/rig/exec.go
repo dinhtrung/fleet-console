@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -22,10 +23,13 @@ type Runner interface {
 }
 
 // ExecRunner runs the installed rig binary. An empty Path means "rig" on PATH;
-// a zero Timeout means DefaultTimeout. A shorter parent deadline wins.
+// a zero Timeout means DefaultTimeout. A shorter parent deadline wins. Env is
+// additive over the parent's environment, for the child commands that need an
+// identity the daemon does not have.
 type ExecRunner struct {
 	Path    string
 	Timeout time.Duration
+	Env     []string
 }
 
 func (r ExecRunner) limit() time.Duration {
@@ -33,6 +37,14 @@ func (r ExecRunner) limit() time.Duration {
 		return r.Timeout
 	}
 	return DefaultTimeout
+}
+
+// AsSession returns a runner for the same binary that speaks as one seat: the
+// child environment carries OPENRIG_SESSION_NAME on top of the parent's. The
+// rig CLI refuses the verbs that act as a seat without it (#253).
+func (r ExecRunner) AsSession(session string) ExecRunner {
+	r.Env = append(append([]string(nil), r.Env...), "OPENRIG_SESSION_NAME="+session)
+	return r
 }
 
 // Run implements Runner.
@@ -51,6 +63,9 @@ func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, path, args...)
+	if len(r.Env) > 0 {
+		cmd.Env = append(os.Environ(), r.Env...)
+	}
 	// A killed CLI can leave a child holding the output pipes; WaitDelay keeps
 	// Run from waiting on that child after the deadline.
 	cmd.WaitDelay = 200 * time.Millisecond
