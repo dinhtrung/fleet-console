@@ -262,6 +262,61 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		}
 	}
 
+	// A live dispatch that produced no change request is a stall, not progress
+	// (#261): decide named it, and this raises the operator's question — once
+	// per (item, attempt) on the ledger, the same raise family #260 uses. The
+	// seat is not killed and nothing is re-dispatched: two builders on one
+	// branch close one item from two heads, and the merge gate refuses both.
+	// The facts come from the dispatch rows this tick already read, so a
+	// dispatch that ended between the plan and here raises nothing, and a
+	// change request that appeared raises nothing — that is the merge gate's
+	// case, and the plan's judgment is stale.
+	for _, intent := range in.Plan.Intents {
+		if intent.Kind != decide.IntentSilentDispatch {
+			continue
+		}
+		item := itemFor(in.Items, intent.Item)
+		if item == nil || !strings.EqualFold(item.State, forge.StateOpen) {
+			report.Skipped = append(report.Skipped,
+				fmt.Sprintf("#%d silent dispatch skipped: the item is not open", intent.Item))
+			continue
+		}
+		if changeRequestFor(in.CRs, intent.Item) != nil {
+			report.Skipped = append(report.Skipped,
+				fmt.Sprintf("#%d silent dispatch skipped: the item now has a change request", intent.Item))
+			continue
+		}
+		dispatch, live := latest[intent.Item]
+		if !live || dispatch.EndedAt != nil {
+			report.Skipped = append(report.Skipped,
+				fmt.Sprintf("#%d silent dispatch skipped: the dispatch has already ended", intent.Item))
+			continue
+		}
+		age := dispatchAge(dispatch, in.Now)
+		if age <= 0 {
+			report.Skipped = append(report.Skipped,
+				fmt.Sprintf("#%d silent dispatch skipped: the dispatch's age cannot be read", intent.Item))
+			continue
+		}
+		raised, err := actions.RaiseSilentDispatch(ctx, SilentDispatchInput{
+			Item: intent.Item, Title: item.Title, Seat: dispatch.Seat, Branch: dispatch.Branch, Worktree: dispatch.Worktree,
+			Attempt: dispatch.Attempt, Age: age, Repo: in.Project.ForgeProject, ProjectKey: in.Project.Key,
+		})
+		if err != nil {
+			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d silent dispatch: %v", intent.Item, err))
+			continue
+		}
+		if raised.NoOp {
+			continue
+		}
+		report.Skipped = append(report.Skipped, raised.Journal)
+		report.Decisions = append(report.Decisions, raised.QItemID)
+		// The row exists before the phone is told about it, like every raise.
+		if in.OnDecision != nil {
+			in.OnDecision(DecisionRaised{QItemID: raised.QItemID, Item: intent.Item, Text: raised.Question})
+		}
+	}
+
 	// A rig whose launch failed this tick has nothing to claim its work: name the
 	// failure once, before the dispatch loop, whatever the plan carried. The skip
 	// is the one line the operator sees, and the issue is retried next tick.
