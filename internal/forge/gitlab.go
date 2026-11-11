@@ -521,27 +521,52 @@ func (g *GitLab) CRNotes(ctx context.Context, number int) ([]Comment, error) {
 	return out, nil
 }
 
+// gitlabPermissionRefusal reports whether a GitLab write refusal is a permission
+// fact rather than a transient condition (#258). The sentence classes:
+//
+//   - "403 Forbidden" — a valid credential without the required access level;
+//   - "insufficient_scope" — the token's scopes do not cover the API being called;
+//   - "401 Unauthorized" on a write — a token that no longer authenticates or
+//     lacks the write scope. The same status on a read stays stale (the read
+//     path's established word), because a read failure can be a wrong URL as
+//     easily as a wrong token.
+func gitlabPermissionRefusal(stderr string, err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(stderr + " " + err.Error())
+	switch {
+	case strings.Contains(message, "403 forbidden"),
+		strings.Contains(message, "insufficient_scope"),
+		strings.Contains(message, "http 401"),
+		strings.Contains(message, "401 unauthorized"):
+		return true
+	}
+	return false
+}
+
 // SetMarker adds or removes the in-flight marker label.
 func (g *GitLab) SetMarker(ctx context.Context, number int, present bool) error {
 	field := "add_labels=" + MarkerLabel
 	if !present {
 		field = "remove_labels=" + MarkerLabel
 	}
-	_, err := g.cli.api(ctx, "-X", "PUT", fmt.Sprintf("projects/%s/issues/%d", g.enc, number), "-f", field)
+	_, err := g.cli.write(ctx, "label", "api", "-X", "PUT",
+		fmt.Sprintf("projects/%s/issues/%d", g.enc, number), "-f", field)
 	return err
 }
 
 // Comment posts one note on an issue.
 func (g *GitLab) Comment(ctx context.Context, number int, body string) error {
-	_, err := g.cli.api(ctx, "-X", "POST", fmt.Sprintf("projects/%s/issues/%d/notes", g.enc, number),
-		"-f", "body="+body)
+	_, err := g.cli.write(ctx, "comment", "api", "-X", "POST",
+		fmt.Sprintf("projects/%s/issues/%d/notes", g.enc, number), "-f", "body="+body)
 	return err
 }
 
 // CloseItem closes an issue.
 func (g *GitLab) CloseItem(ctx context.Context, number int) error {
-	_, err := g.cli.api(ctx, "-X", "PUT", fmt.Sprintf("projects/%s/issues/%d", g.enc, number),
-		"-f", "state_event=close")
+	_, err := g.cli.write(ctx, "close", "api", "-X", "PUT",
+		fmt.Sprintf("projects/%s/issues/%d", g.enc, number), "-f", "state_event=close")
 	return err
 }
 
@@ -562,14 +587,16 @@ func (g *GitLab) Ready(ctx context.Context, number int) error {
 	if title == "" || title == request.Title {
 		return nil
 	}
-	_, err = g.cli.api(ctx, "-X", "PUT", fmt.Sprintf("projects/%s/merge_requests/%d", g.enc, number),
-		"-f", "title="+title)
+	// The PUT is the write; the GET above is a read and keeps the read path's
+	// classification.
+	_, err = g.cli.write(ctx, "ready", "api", "-X", "PUT",
+		fmt.Sprintf("projects/%s/merge_requests/%d", g.enc, number), "-f", "title="+title)
 	return err
 }
 
 // Merge merges a change request only if its head is still sha.
 func (g *GitLab) Merge(ctx context.Context, number int, sha string) error {
-	_, err := g.cli.run(ctx, "mr", "merge", fmt.Sprint(number), "--sha", sha, "--yes", "--repo", g.project)
+	_, err := g.cli.write(ctx, "merge", "mr", "merge", fmt.Sprint(number), "--sha", sha, "--yes", "--repo", g.project)
 	return err
 }
 
