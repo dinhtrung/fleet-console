@@ -14,6 +14,14 @@ const (
 	// StalledAfter is how long an ended dispatch with no open change request waits
 	// before the next attempt replaces it.
 	StalledAfter = 30 * time.Minute
+	// SilentDispatchAfter is how long a dispatch that is still live and has
+	// produced no change request waits before the operator is asked (#261).
+	// The two thresholds measure different clocks: StalledAfter runs on an
+	// attempt that already ended, this one on a dispatch whose seat is still
+	// holding it and has produced nothing — the reset rule cannot see that
+	// case, and the merge watchdog walks open change requests, so without
+	// this constant the dispatch is invisible forever.
+	SilentDispatchAfter = 30 * time.Minute
 	// RenudgeAfter is how long an unclaimed row waits before a nudge.
 	RenudgeAfter = 15 * time.Minute
 	// RenudgeCooldown is the shortest gap between two nudges of one row.
@@ -60,6 +68,10 @@ const (
 	IntentClearMarker   IntentKind = "clear_marker"
 	IntentCloseEpic     IntentKind = "close_epic"
 	IntentRaiseDecision IntentKind = "raise_decision"
+	// IntentSilentDispatch asks the operator about a live dispatch that
+	// produced no change request (#261). It is a question, not a reset: the
+	// seat is not killed and nothing is re-dispatched.
+	IntentSilentDispatch IntentKind = "silent_dispatch"
 )
 
 // Event is the audit row an intent writes.
@@ -165,6 +177,32 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 		}
 		event(kind, fmt.Sprintf("#%d", dispatch.Item),
 			fmt.Sprintf("stalled %s; attempt %d/%d", now.Sub(dispatch.EndedAt).Round(time.Minute), dispatch.Attempt, MaxAttempts))
+	}
+
+	// A live dispatch that produced no change request is a stall the reset rule
+	// cannot see (#261): that rule needs EndedAt set, and this dispatch has
+	// none — the seat is still holding it. One intent per live dispatch per
+	// tick; across ticks the dedupe is the act raise's ledger entry, keyed by
+	// (item, attempt). An open change request is the merge gate's case, not a
+	// stall, and a dispatch whose age cannot be measured (no CreatedAt) is
+	// never called silent on a guess.
+	for _, dispatch := range s.Dispatches {
+		item, ok := items[dispatch.Item]
+		if !ok || !item.open() || !dispatch.EndedAt.IsZero() {
+			continue
+		}
+		if dispatch.CreatedAt.IsZero() || now.Sub(dispatch.CreatedAt) < SilentDispatchAfter {
+			continue
+		}
+		if openCRFor(s.CRs, dispatch.Item) {
+			continue
+		}
+		add(Intent{
+			Kind: IntentSilentDispatch, Project: key, Item: dispatch.Item, Seat: dispatch.Seat,
+			Event: Event{Actor: "decide", Kind: "dispatch.silent", Subject: fmt.Sprintf("#%d", dispatch.Item),
+				Detail: fmt.Sprintf("seat=%s branch=%s attempt=%d age=%s", dispatch.Seat, dispatch.Branch,
+					dispatch.Attempt, now.Sub(dispatch.CreatedAt).Round(time.Minute))},
+		})
 	}
 
 	// Reconcile the in-flight marker: a closed item, or an ended dispatch with no live row.

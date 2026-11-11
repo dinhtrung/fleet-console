@@ -110,6 +110,62 @@ func TestHousekeepingCloseEpic(t *testing.T) {
 	}
 }
 
+// TestSilentDispatchIntent is the #261 table: a live dispatch that produced no
+// change request becomes one dispatch.silent intent after SilentDispatchAfter,
+// and the four look-alike states stay silent — an open change request (the
+// merge gate's case), an ended dispatch (the reset rule's), a young dispatch,
+// and a closed item.
+func TestSilentDispatchIntent(t *testing.T) {
+	live := func(age time.Duration) DispatchState {
+		return DispatchState{Item: 1, Seat: "dev-build-1@r", Branch: "feature/1-x",
+			Attempt: 1, CreatedAt: planNow.Add(-age)}
+	}
+	ended := func(age, ago time.Duration) DispatchState {
+		d := live(age)
+		d.EndedAt = planNow.Add(-ago)
+		return d
+	}
+	cases := []struct {
+		name      string
+		dispatch  DispatchState
+		crs       []CRState
+		item      Item
+		wantCount int
+	}{
+		{"open 31m, no change request", live(31 * time.Minute), nil, task(1), 1},
+		{"open 31m, open change request", live(31 * time.Minute),
+			[]CRState{{Number: 9, Item: 1, State: "open"}}, task(1), 0},
+		{"ended 31m ago", ended(2*time.Hour, 31*time.Minute), nil, task(1), 0},
+		{"open 10m", live(10 * time.Minute), nil, task(1), 0},
+		{"item closed", live(31 * time.Minute), nil, closedTask(1, nil), 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := base(tc.item)
+			s.Dispatches = []DispatchState{tc.dispatch}
+			s.CRs = tc.crs
+			plan := PlanTick(s, planNow)
+			intents := findIntents(plan, IntentSilentDispatch)
+			if len(intents) != tc.wantCount {
+				t.Fatalf("intents = %+v, want %d silent dispatch intents", plan.Intents, tc.wantCount)
+			}
+			if tc.wantCount == 0 {
+				return
+			}
+			if !hasEvent(plan, "dispatch.silent", "#1") {
+				t.Fatalf("events = %+v, want dispatch.silent for #1", plan.Events)
+			}
+			want := "seat=dev-build-1@r branch=feature/1-x attempt=1 age=31m0s"
+			if intents[0].Event.Detail != want {
+				t.Fatalf("detail = %q, want %q", intents[0].Event.Detail, want)
+			}
+			if intents[0].Seat != "dev-build-1@r" {
+				t.Fatalf("intent seat = %q, want the dispatch's seat", intents[0].Seat)
+			}
+		})
+	}
+}
+
 func TestIncidentParked(t *testing.T) {
 	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
 	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "abc123"}}
