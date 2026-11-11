@@ -456,6 +456,34 @@ func (g *GitHub) CRNotes(ctx context.Context, number int) ([]Comment, error) {
 	return g.Notes(ctx, number)
 }
 
+// githubPermissionRefusal reports whether a GitHub write refusal is a permission
+// fact rather than a transient condition (#258). The sentence classes:
+//
+//   - HTTP 403 the token caused — the anonymous fine-grained PAT answer;
+//   - "Resource not accessible by personal access token" — the same refusal in
+//     GitHub's own words, without the status;
+//   - "must have push access" — a valid credential below the write floor;
+//   - a 404 on a write — a fine-grained token without access to the repository
+//     answers 404, which is a permission fact there, not a missing target.
+//
+// The 404 class exists on writes only: a read 404 stays an ordinary failure,
+// because not-found reads are legitimate answers about missing targets.
+func githubPermissionRefusal(stderr string, err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(stderr + " " + err.Error())
+	switch {
+	case strings.Contains(message, "http 403"),
+		strings.Contains(message, "resource not accessible by personal access token"),
+		strings.Contains(message, "must have push access"),
+		strings.Contains(message, "http 404"),
+		strings.Contains(message, "404 not found"):
+		return true
+	}
+	return false
+}
+
 // SetMarker adds or removes the in-flight marker label.
 //
 // -R is not optional on any `gh` verb: the service runs in $HOME, where the CLI
@@ -467,25 +495,25 @@ func (g *GitHub) SetMarker(ctx context.Context, number int, present bool) error 
 	if present {
 		flag = "--add-label"
 	}
-	_, err := g.cli.run(ctx, "issue", "edit", fmt.Sprint(number), flag, MarkerLabel, "-R", g.slug)
+	_, err := g.cli.write(ctx, "label", "issue", "edit", fmt.Sprint(number), flag, MarkerLabel, "-R", g.slug)
 	return err
 }
 
 // Comment posts one comment on an item.
 func (g *GitHub) Comment(ctx context.Context, number int, body string) error {
-	_, err := g.cli.run(ctx, "issue", "comment", fmt.Sprint(number), "--body", body, "-R", g.slug)
+	_, err := g.cli.write(ctx, "comment", "issue", "comment", fmt.Sprint(number), "--body", body, "-R", g.slug)
 	return err
 }
 
 // CloseItem closes an issue.
 func (g *GitHub) CloseItem(ctx context.Context, number int) error {
-	_, err := g.cli.run(ctx, "issue", "close", fmt.Sprint(number), "-R", g.slug)
+	_, err := g.cli.write(ctx, "close", "issue", "close", fmt.Sprint(number), "-R", g.slug)
 	return err
 }
 
 // Ready takes a pull request out of draft.
 func (g *GitHub) Ready(ctx context.Context, number int) error {
-	_, err := g.cli.run(ctx, "pr", "ready", fmt.Sprint(number), "-R", g.slug)
+	_, err := g.cli.write(ctx, "ready", "pr", "ready", fmt.Sprint(number), "-R", g.slug)
 	return err
 }
 
@@ -494,7 +522,7 @@ func (g *GitHub) Merge(ctx context.Context, number int, sha string) error {
 	// -R is not optional: the service runs in $HOME where `gh pr merge` finds no
 	// repository and dies with "failed to run git: not a git repository". Every
 	// `gh api` call carries the slug in its path, so only the verbs needed it.
-	_, err := g.cli.run(ctx, "pr", "merge", fmt.Sprint(number), "--squash",
+	_, err := g.cli.write(ctx, "merge", "pr", "merge", fmt.Sprint(number), "--squash",
 		"--match-head-commit", sha, "-R", g.slug)
 	return err
 }
