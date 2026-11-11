@@ -30,6 +30,45 @@ func (e *NotMergeableError) Error() string {
 	return fmt.Sprintf("refusing merge: change request #%d is not mergeable (%s)", e.Number, e.Reason)
 }
 
+// BlockedMerge is one merge refusal that is an operator obligation: the head
+// will not merge on its own, and the next tick cannot fix it (#252). The tick
+// reports the fact every tick it holds; the notifier owns the rate limit, so
+// the same stall pages once per (item, reason, head sha).
+type BlockedMerge struct {
+	Item   int    // the issue the change request closes
+	CR     int    // the change request number
+	SHA    string // the head the refusal judged
+	Reason string // the refusal, as the merge gate worded it
+	Action string // what the operator or the builder is expected to do
+}
+
+// blockedMerge reports whether a merge refusal needs a human or a rework
+// rather than the next tick, and names the action expected (#252). The classes
+// are the refusals an ACCEPT cannot survive: conflicts, red checks, a verdict
+// that no longer names the head, a draft that could not be readied. A plain
+// "no ACCEPT verdict" is the normal wait for a review and is not a stall —
+// paging it would page every item under review, every tick.
+func blockedMerge(item int, request forge.ChangeRequest, err error) (BlockedMerge, bool) {
+	if err == nil {
+		return BlockedMerge{}, false
+	}
+	text := strings.TrimPrefix(err.Error(), "refusing merge: ")
+	blocked := BlockedMerge{Item: item, CR: request.Number, SHA: request.HeadSHA}
+	switch {
+	case strings.Contains(text, "is not mergeable"):
+		blocked.Reason, blocked.Action = text, "rebase onto the default branch and re-accept"
+	case strings.Contains(text, "checks are not green"):
+		blocked.Reason, blocked.Action = text, "fix or re-run the checks, then re-accept"
+	case strings.Contains(text, "does not match head"):
+		blocked.Reason, blocked.Action = text, "re-review at the current head and accept it"
+	case strings.Contains(text, "could not be marked ready"):
+		blocked.Reason, blocked.Action = text, "mark the change request ready for review"
+	default:
+		return BlockedMerge{}, false
+	}
+	return blocked, true
+}
+
 // MergeResult is the evidence of one watchdog merge.
 //
 // AuditGaps names every ledger write that failed after the merge had already

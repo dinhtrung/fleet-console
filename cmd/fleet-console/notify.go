@@ -54,6 +54,11 @@ const (
 type notifier struct {
 	sender    alert.Telegram
 	progress  *alert.Notifier
+	// blocked pages the merge refusals that are operator obligations (#252).
+	// It is a separate Notifier so its dedupe lineage never collides with the
+	// progress report's: a blocked-merge page must not push the digest off its
+	// last reported state, and vice versa.
+	blocked   *alert.Notifier
 	escalator *alert.Escalator
 	// notes posts a decision's question on its item when decision_notes is on.
 	// The Forge is filled in per decision, from the project's read.
@@ -84,6 +89,16 @@ func newNotifier(db *store.Store, eff *config.Effective, logw io.Writer, boardUR
 	n.progress = &alert.Notifier{
 		Store:  db,
 		Sender: sender,
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(logw, "notify: %s\n", fmt.Sprintf(format, args...))
+		},
+	}
+	n.blocked = &alert.Notifier{
+		Store:  db,
+		Sender: sender,
+		// Its own dedupe lineage: the hash chain under this subject is the
+		// blocked-merge page's, not the progress report's.
+		Subject: "merge_blocked",
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(logw, "notify: %s\n", fmt.Sprintf(format, args...))
 		},
@@ -193,6 +208,65 @@ func (n *notifier) sendNow(ctx context.Context, snapshot progress.Snapshot, now 
 	}
 	body := progress.Render(snapshot, now)
 	return n.progress.Notify(ctx, body)
+}
+
+// eventMergeBlocked is the rate-limit ledger for blocked-merge pages: one
+// event per (project, item), detail "<reason>|<sha>". HasEvent is the
+// once-per-key rule, the same one the repair raise uses.
+const eventMergeBlocked = "notify.merge_blocked"
+
+// sendBlocked pages one blocked merge: a merge refusal the tick judged to be
+// an operator obligation — conflicts, red checks, a verdict that no longer
+// names the head, a draft that could not be readied (#252).
+//
+// sendProgress owns the quiet gate for progress-class messages; this class is
+// the explicit exception: a blocked merge is an obligation, not idleness, so
+// Quiet() is never consulted. It rides the same sender and ledger, in its own
+// dedupe lineage under the "merge_blocked" subject, so a page can never push
+// the progress report's dedupe off its last real state.
+//
+// The rate limit is per (item, reason, head sha): a delivered page is recorded
+// in the event ledger, so an unchanged stall stays silent, and a new head or a
+// new reason is a new key and pages again. A failed send is not recorded, so
+// the next tick retries. Every failure is a log line: the tick must not wait
+// on Telegram (design.md §5).
+func (n *notifier) sendBlocked(ctx context.Context, project string, blocked act.BlockedMerge) {
+	if n == nil || n.blocked == nil {
+		return
+	}
+	subject := fmt.Sprintf("%s#%d", project, blocked.Item)
+	key := fmt.Sprintf("%s|%s", blocked.Reason, blocked.SHA)
+	exists, err := n.blocked.Store.HasEvent(ctx, eventMergeBlocked, subject, key)
+	if err != nil {
+		fmt.Fprintf(n.log, "notify: merge_blocked %s: %v\n", subject, err)
+		return
+	}
+	if exists {
+		return
+	}
+	text := fmt.Sprintf("%s: #%d — change request #%d cannot merge (head %s): %s.\nExpected: %s.",
+		project, blocked.Item, blocked.CR, blocked.SHA, blocked.Reason, blocked.Action)
+	result, err := n.blocked.Notify(ctx, text)
+	if err != nil {
+		fmt.Fprintf(n.log, "notify: merge_blocked %s: %v\n", subject, err)
+		return
+	}
+	switch {
+	case result.Sent, result.Duplicate:
+		// Sent covers a fresh page; Duplicate covers the crash gap where the
+		// message went out but the rate-limit record did not land — recording
+		// it here is what makes the unchanged stall quiet from now on.
+		if _, err := n.blocked.Store.AppendEvent(ctx, store.Event{
+			Actor: "notify", Kind: eventMergeBlocked, Subject: subject, Detail: key,
+		}); err != nil {
+			fmt.Fprintf(n.log, "notify: merge_blocked %s: ledger: %v\n", subject, err)
+		}
+		if result.Sent {
+			fmt.Fprintf(n.log, "notify: merge_blocked %s sent as message %s\n", subject, result.MessageID)
+		}
+	case result.Failed:
+		fmt.Fprintf(n.log, "notify: merge_blocked %s: send failed: %s\n", subject, result.Reason)
+	}
 }
 
 // reportSnapshot builds the report from the store and the roster alone: no

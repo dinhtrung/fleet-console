@@ -885,6 +885,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 				for _, why := range report.Skipped {
 					fmt.Fprintf(stderr, "act-skip: %s: %s\n", project.Key, why)
 				}
+				// A blocked merge is an operator obligation (#252): the tick
+				// refused a merge for a reason the next tick cannot fix. Each
+				// refusal pages once per (item, reason, head sha); the quiet
+				// rule does not apply to it.
+				for _, blocked := range report.BlockedMerges {
+					notify.sendBlocked(ctx, project.Key, blocked)
+				}
 				// A merge is the only "code done" moment (design.md §4.1), so
 				// it is the only trigger that reports without being asked, and
 				// it builds the snapshot after the merge rather than before.
