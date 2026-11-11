@@ -127,9 +127,9 @@ func checkByID(t *testing.T, report Report, id string) Check {
 	return Check{}
 }
 
-// TestReportAlwaysHasFourChecks pins the shape the surfaces render: exactly the
-// four checks, in order, whatever the host answers.
-func TestReportAlwaysHasFourChecks(t *testing.T) {
+// TestReportAlwaysHasFiveChecks pins the shape the surfaces render: exactly the
+// five checks, in order, whatever the host answers.
+func TestReportAlwaysHasFiveChecks(t *testing.T) {
 	home := t.TempDir()
 	repo := bareRepo(t, "main")
 	p := Project{Key: "p", Rig: "r", CloneURL: repo, DefaultBranch: "main", MainPath: filepath.Join(home, "base")}
@@ -137,7 +137,7 @@ func TestReportAlwaysHasFourChecks(t *testing.T) {
 		Home: home, Env: noEnv, LookPath: func(string) (string, error) { return "", errors.New("missing") },
 		Seats: seatsFor(), Timeout: 5 * time.Second,
 	})
-	want := []string{CheckGitURL, CheckBaseDir, CheckRig, CheckRuntime}
+	want := []string{CheckGitURL, CheckForgeWrite, CheckBaseDir, CheckRig, CheckRuntime}
 	if len(report.Checks) != len(want) {
 		t.Fatalf("checks = %d, want %d", len(report.Checks), len(want))
 	}
@@ -246,6 +246,184 @@ func TestGitURLDetailIsTheCommandsOwnLine(t *testing.T) {
 	}
 	if check.Detail != line {
 		t.Fatalf("detail = %q, want git's own last line %q", check.Detail, line)
+	}
+}
+
+// TestForgeWriteChecks pins the probe's mapping: a validation refusal on the
+// probe's own invalid field is OK, a permission refusal is Fail with the
+// forge's own line and the scope-appropriate fix, no open item is Unknown
+// (never fail), and a timeout is Unknown too. The Forge edge is injected; no
+// test shells out to gh or glab.
+func TestForgeWriteChecks(t *testing.T) {
+	home := t.TempDir()
+
+	// answer builds one Forge edge from a single recorded (stdout, stderr, err).
+	answer := func(stdout, stderr string, err error) func(context.Context, string, ...string) (string, string, error) {
+		return func(context.Context, string, ...string) (string, string, error) { return stdout, stderr, err }
+	}
+
+	tests := []struct {
+		name    string
+		project Project
+		forge   func(ctx context.Context, binary string, args ...string) (string, string, error)
+		want    State
+		detail  string // substring the Detail must carry
+		command string // substring the Fix.Command must carry; "" skips
+		why     string // substring the Fix.Why must carry; "" skips
+	}{
+		{
+			name:    "ok: 422 validation failed on the probe head, note probed on the newest open item",
+			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main", ProbeItemNumber: 42},
+			forge:   forgeProbeOK,
+			want:    OK,
+			detail:  "may comment and open a change request",
+		},
+		{
+			name:    "ok: 422 without a default branch probes base=main",
+			project: Project{Forge: "github", Repo: "o/r", ProbeItemNumber: 42},
+			forge:   forgeProbeOK,
+			want:    OK,
+			detail:  "may comment",
+		},
+		{
+			name:    "fail: 403 on the change-request probe",
+			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main"},
+			forge:   forgeProbeForbidden,
+			want:    Fail,
+			detail:  "Resource not accessible by personal access token",
+			why:     "may not open a change request",
+		},
+		{
+			name:    "fail: 403 on the note probe only",
+			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main", ProbeItemNumber: 42},
+			forge: func(ctx context.Context, binary string, args ...string) (string, string, error) {
+				if strings.Contains(strings.Join(args, " "), "/comments") {
+					return forgeProbeForbidden(ctx, binary, args...)
+				}
+				return forgeProbeOK(ctx, binary, args...)
+			},
+			want:    Fail,
+			detail:  "Resource not accessible",
+			why:     "may not comment",
+		},
+		{
+			name:    "unknown: no open item to probe a note on",
+			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main"},
+			forge: func(ctx context.Context, binary string, args ...string) (string, string, error) {
+				// A blank-body refusal never arrives: the PR probe passed, and
+				// there is no item to aim the note probe at.
+				if strings.Contains(strings.Join(args, " "), "/comments") {
+					return "", "", errors.New("must not be called")
+				}
+				return forgeProbeOK(ctx, binary, args...)
+			},
+			want:   Unknown,
+			detail: "no open item to probe a note on",
+		},
+		{
+			name:    "unknown: the probe does not answer in time",
+			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main"},
+			forge: func(ctx context.Context, binary string, args ...string) (string, string, error) {
+				<-ctx.Done()
+				return "", "", ctx.Err()
+			},
+			want:   Unknown,
+			detail: "did not answer",
+		},
+		{
+			name:    "unknown: a rate limit is not a permission fact",
+			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main"},
+			forge: answer("",
+				"gh: API rate limit exceeded for installation ID 1", errors.New("exit status 1")),
+			want:   Unknown,
+			detail: "did not classify",
+		},
+		{
+			name:    "unknown: the 422 lands on a different field",
+			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main"},
+			forge: answer(`{"message":"Validation Failed","errors":[{"resource":"PullRequest","field":"base","code":"invalid"}],"status":"422"}`,
+				"gh: HTTP 422: Validation Failed", errors.New("exit status 1")),
+			want:   Unknown,
+			detail: "refused on \"base\"",
+		},
+		{
+			name:    "unknown: an unexpectedly successful probe is owned up to, never green",
+			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main"},
+			forge:   answer(`{"id":1}`, "", nil),
+			want:    Unknown,
+			detail:  "unexpectedly succeeded",
+		},
+		{
+			name:    "unknown: no repository named",
+			project: Project{Forge: "github"},
+			forge:   forgeProbeOK,
+			want:    Unknown,
+			detail:  "names no repository",
+		},
+		{
+			name:    "unknown: a forge the check cannot probe",
+			project: Project{Forge: "bitbucket", Repo: "o/r"},
+			forge:   forgeProbeOK,
+			want:    Unknown,
+			detail:  "not github or gitlab",
+		},
+		{
+			name:    "ok: gitlab 400 on the invalid source branch",
+			project: Project{Forge: "gitlab", Repo: "g/p", DefaultBranch: "main"},
+			forge: answer(`{"message":{"source_branch":["is invalid"]}}`,
+				"glab: HTTP 400: Bad Request", errors.New("exit status 1")),
+			want:   OK,
+			detail: "may comment and open a change request",
+		},
+		{
+			name:    "fail: gitlab 403 on the merge-request probe",
+			project: Project{Forge: "gitlab", Repo: "g/p", DefaultBranch: "main"},
+			forge: answer(`{"message":"403 Forbidden"}`,
+				"glab: error: 403 Forbidden", errors.New("exit status 1")),
+			want:   Fail,
+			detail: "403 Forbidden",
+			why:    "may not open merge requests",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := depsFor(home)
+			deps.Forge = tc.forge
+			report := RunWith(context.Background(), tc.project, config.Effective{}, deps)
+			check := checkByID(t, report, CheckForgeWrite)
+			if check.State != tc.want {
+				t.Fatalf("state = %q, want %q (detail %q)", check.State, tc.want, check.Detail)
+			}
+			if !strings.Contains(check.Detail, tc.detail) {
+				t.Fatalf("detail = %q, want it to contain %q", check.Detail, tc.detail)
+			}
+			if tc.command != "" && !strings.Contains(check.Fix.Command, tc.command) {
+				t.Fatalf("fix command = %q, want it to contain %q", check.Fix.Command, tc.command)
+			}
+			if tc.why != "" && !strings.Contains(check.Fix.Why, tc.why) {
+				t.Fatalf("fix why = %q, want it to contain %q", check.Fix.Why, tc.why)
+			}
+			if check.State == Fail && check.Fix.Why == "" {
+				t.Fatal("a failure owes the operator a reason")
+			}
+		})
+	}
+}
+
+// TestForgeWriteNeverWarnsAndNeverLeavesState: Warn is the one state this
+// check must never produce (a token that cannot write means no item can be
+// delivered), and a probe that left state behind must not read as green.
+func TestForgeWriteNeverWarnsAndNeverLeavesState(t *testing.T) {
+	deps := depsFor(t.TempDir())
+	deps.Forge = forgeProbeForbidden
+	report := RunWith(context.Background(), Project{Forge: "github", Repo: "o/r", DefaultBranch: "main"},
+		config.Effective{}, deps)
+	check := checkByID(t, report, CheckForgeWrite)
+	if check.State == Warn {
+		t.Fatal("forge_write warned; a token that cannot write stops every dispatch and must fail")
+	}
+	if report.Ready {
+		t.Fatal("report ready with a forge_write failure; Ready must turn false on Fail")
 	}
 }
 
@@ -574,6 +752,38 @@ func reportStrings(report Report) []string {
 	return out
 }
 
+// forgeProbeOK answers both GitHub probes the way a forge answers a
+// deliberately invalid write from a token that cleared authorization: a 422 on
+// the probe's own invalid field, never a 403.
+func forgeProbeOK(ctx context.Context, binary string, args ...string) (string, string, error) {
+	joined := strings.Join(args, " ")
+	switch {
+	case strings.Contains(joined, "-i user"):
+		return "HTTP/2 200\nx-oauth-scopes: repo\n\n", "", nil
+	case strings.Contains(joined, "/comments"):
+		return `{"message":"Validation Failed","errors":[{"resource":"IssueComment","code":"unprocessable","field":"data","message":"Body cannot be blank"}],"status":"422"}`,
+			"gh: HTTP 422: Validation Failed", errors.New("exit status 1")
+	case strings.Contains(joined, "/pulls"):
+		return `{"message":"Validation Failed","errors":[{"resource":"PullRequest","field":"head","code":"invalid"}],"status":"422"}`,
+			"gh: HTTP 422: Validation Failed", errors.New("exit status 1")
+	}
+	return "", "", errors.New("unexpected forge call " + joined)
+}
+
+// forgeProbeForbidden answers both probes the way a forge answers a write from
+// a token that may read but may not write.
+func forgeProbeForbidden(ctx context.Context, binary string, args ...string) (string, string, error) {
+	joined := strings.Join(args, " ")
+	switch {
+	case strings.Contains(joined, "-i user"):
+		return "HTTP/2 200\nx-oauth-scopes: repo:read\n\n", "", nil
+	case strings.Contains(joined, "/comments"), strings.Contains(joined, "/pulls"):
+		return `{"message":"Resource not accessible by personal access token","status":"403"}`,
+			"gh: HTTP 403: Resource not accessible by personal access token", errors.New("exit status 1")
+	}
+	return "", "", errors.New("unexpected forge call " + joined)
+}
+
 // TestReadyFoldsStates pins the rule the surfaces show: warn is still ready,
 // unknown is not.
 func TestReadyFoldsStates(t *testing.T) {
@@ -598,8 +808,10 @@ func TestReadyFoldsStates(t *testing.T) {
 			}
 			return ""
 		}
+		deps.Forge = forgeProbeOK
 		report := ready(t, Project{
-			Key: "p", Rig: "r", Runtime: "omp", CloneURL: repo, DefaultBranch: "main", MainPath: checkout,
+			Key: "p", Rig: "r", Runtime: "omp", Forge: "github", Repo: "o/r",
+			CloneURL: repo, DefaultBranch: "main", MainPath: checkout, ProbeItemNumber: 12,
 		}, deps)
 		if !report.Ready {
 			t.Fatalf("ready = false, want true: %+v", report.Checks)
@@ -623,12 +835,14 @@ func TestReadyFoldsStates(t *testing.T) {
 			}
 			return ""
 		}
+		deps.Forge = forgeProbeOK
 		// The repository answers but has no "main", so git_url warns; the
 		// checkout has to be of that same repository for base_dir to pass.
 		trunk := bareRepo(t, "trunk")
 		trunkCheckout := checkoutWithOrigin(t, trunk)
 		report := ready(t, Project{
-			Key: "p", Rig: "r", Runtime: "omp", CloneURL: trunk, DefaultBranch: "main", MainPath: trunkCheckout,
+			Key: "p", Rig: "r", Runtime: "omp", Forge: "github", Repo: "o/r",
+			CloneURL: trunk, DefaultBranch: "main", MainPath: trunkCheckout, ProbeItemNumber: 12,
 		}, deps)
 		if got := checkByID(t, report, CheckGitURL).State; got != Warn {
 			t.Fatalf("git_url = %q, want warn", got)

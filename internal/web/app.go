@@ -40,6 +40,9 @@ type Config struct {
 	// output. Nil means the setup endpoint answers 500: a test supplies a fake,
 	// the binary supplies the real runner.
 	SetupExec func(ctx context.Context, name string, args ...string) (string, error)
+	// PreflightForge is the forge_write check's CLI edge. Nil means the check's
+	// own exec default, which runs the resolved gh/glab binary.
+	PreflightForge func(ctx context.Context, binary string, args ...string) (stdout, stderr string, err error)
 	// WebhookSecret is the shared secret a forge signs deliveries with. Empty leaves
 	// the receiver off: the route answers 404 and reads no body (design D3).
 	WebhookSecret string
