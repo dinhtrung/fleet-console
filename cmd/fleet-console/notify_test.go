@@ -131,6 +131,11 @@ func notifierFor(t *testing.T, eff *config.Effective, bot *fakeBotAPI, logw *byt
 			Sleep: func(time.Duration) {}, // no real retry pause in a test
 			Logf:  func(string, ...any) {},
 		},
+		blocked: &alert.Notifier{
+			Store: db, Sender: sender, Subject: "merge_blocked",
+			Sleep: func(time.Duration) {},
+			Logf:  func(string, ...any) {},
+		},
 		escalator: &alert.Escalator{Store: db, Sender: sender, BoardURL: "http://127.0.0.1:8787"},
 		notes:     &decisions.Noter{Store: &decisionStore{db: db}, Logf: func(string, ...any) {}},
 		decisionNotes: eff != nil && eff.DecisionNotes,

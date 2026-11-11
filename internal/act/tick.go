@@ -59,6 +59,11 @@ type TickReport struct {
 	Verdicts   []CapturedVerdict
 	Merges     []*MergeResult
 	Decisions  []string
+	// BlockedMerges lists the merge refusals this tick judged to be operator
+	// obligations — a stall the next tick cannot fix (#252). The fact is
+	// reported on every tick it holds; the rate limit per (item, reason, head
+	// sha) belongs to the notifier, which pages from it.
+	BlockedMerges []BlockedMerge
 	// Epics lists the epics this tick closed by rollup or by the sweep, once each.
 	Epics []EpicRollup
 	// SweepReads is the number of forge sub-issue reads the sweep spent this tick:
@@ -179,6 +184,12 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 							"accepted change request #%d cannot merge: rework or defer #%d", notMergeable.Number, item)})
 					}
 				}
+			}
+			// A refusal the next tick cannot fix is an operator obligation, not
+			// idleness: report it as a fact for the notifier to page (#252).
+			// The skip line stays the journal's own record of the same refusal.
+			if blocked, ok := blockedMerge(item, request, err); ok {
+				report.BlockedMerges = append(report.BlockedMerges, blocked)
 			}
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d merge waiting: %v", item, err))
 			continue
