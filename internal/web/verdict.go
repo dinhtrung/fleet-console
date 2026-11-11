@@ -1,9 +1,12 @@
 package web
 
 import (
+	"context"
+	"errors"
 	"strconv"
 	"strings"
 
+	"github.com/dinhtrung/fleet-console/internal/act"
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/gofiber/fiber/v3"
@@ -98,13 +101,26 @@ func (f *Fleet) ItemVerdict(c fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusConflict, "the change request has no head sha to name")
 		}
 
+		// The dispatch row (when the item has one) names the attempt both the
+		// merge field below and a permission refusal dedupe on (#260).
+		dispatches, err := f.Store.Dispatches(ctx, project.ID, number)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		attempt := 0
+		if len(dispatches) > 0 {
+			attempt = dispatches[0].Attempt
+		}
+
 		note := strings.ToUpper(verdict) + " " + request.HeadSHA + "\n\n" + reason
 		if err := source.Comment(ctx, request.Number, note); err != nil {
+			f.raisePermission(ctx, project, item, request, "comment", err, attempt)
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
 		ready := false
 		if verdict == "accept" && request.Draft {
 			if err := source.Ready(ctx, request.Number); err != nil {
+				f.raisePermission(ctx, project, item, request, "ready", err, attempt)
 				return fiber.NewError(fiber.StatusBadGateway, err.Error())
 			}
 			ready = true
@@ -115,10 +131,6 @@ func (f *Fleet) ItemVerdict(c fiber.Ctx) error {
 		// with no dispatch row is the documented adoption gap: the note stands as
 		// evidence and the merge stays a human's, which the answer says out loud.
 		merge := "act-tick"
-		dispatches, err := f.Store.Dispatches(ctx, project.ID, number)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
 		if len(dispatches) == 0 {
 			merge = "manual"
 		}
@@ -146,6 +158,24 @@ func (f *Fleet) ItemVerdict(c fiber.Ctx) error {
 		})
 	}
 	return fiber.NewError(fiber.StatusNotFound, "item not found")
+}
+
+// raisePermission asks the operator to fix the forge token when the board's
+// own write was refused for permission (#260): the same raise the act loop
+// runs, deduped on the same event ledger, so a refusal the board and a tick
+// both hit is one question, not two. The 502 still answers — the note did not
+// land — and a failed raise is silent: the refusal the operator is looking at
+// already names the permission class, and the board retry re-raises.
+func (f *Fleet) raisePermission(ctx context.Context, project store.ProjectRow, item *store.ItemRow, request forge.ChangeRequest, operation string, err error, attempt int) {
+	var refusal *forge.PermissionError
+	if !errors.As(err, &refusal) {
+		return
+	}
+	if f.Rig == nil || f.Store == nil {
+		return
+	}
+	actions := &act.Actions{Store: f.Store, Rig: f.Rig, ProjectID: project.ID, ProjectKey: project.Key}
+	_ = actions.RefusePermission(ctx, item.Number, item.Title, operation, err, attempt, request.Number, request.HeadSHA)
 }
 
 // openChangeRequest picks the change request this item's verdict belongs to:

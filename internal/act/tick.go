@@ -95,7 +95,7 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	}
 	actions := &Actions{
 		Store: in.Store, Forge: in.Forge, Rig: in.Rig, Git: in.Git, Now: in.Now,
-		ProjectID: in.Project.ID,
+		ProjectID: in.Project.ID, ProjectKey: in.Project.Key, WorktreeRoot: in.WorktreeRoot,
 	}
 
 	// Verdict capture and the merge watchdog run before new dispatches: a merged
@@ -169,6 +169,17 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			merged, err = actions.MergeAdopted(ctx, in.Project.ID, item, request)
 		}
 		if err != nil {
+			// A forge write refused for permission already raised the operator
+			// question (#260): the journal line names the permission instead of
+			// an anonymous error, and the refusal is not counted as a retry —
+			// the dispatch stays live, and the next tick retries by itself once
+			// the token is fixed. The #252 blocked-merge page would double-page
+			// the same refusal, so it is not consulted here.
+			var refused *PermissionRefused
+			if errors.As(err, &refused) {
+				notePermission(in, &report, refused)
+				continue
+			}
 			// An accepted change request that cannot merge never recovers on its
 			// own: the head must be rebased or the item deferred, so the skip is
 			// the repair's trigger, not its resting state (#251). The raise is
@@ -195,6 +206,10 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			continue
 		}
 		report.Merges = append(report.Merges, merged)
+		// A post-merge write (the item close) can also be refused for
+		// permission: the merge landed, the result rides the refusal, and the
+		// same note path tells the phone (#260).
+		notePermission(in, &report, merged.Permission)
 		// The rollup runs after the merge and against the same snapshot the plan
 		// used: no extra forge read. `rolled` is shared across the loop so two
 		// merged siblings produce one close.

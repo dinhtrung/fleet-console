@@ -39,6 +39,12 @@ type Actions struct {
 	Git       Git
 	Now       func() time.Time
 	ProjectID int64
+	// ProjectKey and WorktreeRoot name the project for the raises some write
+	// failures produce (#260) and where their briefs go. They are set once per
+	// tick; the resolver construction in cmd leaves them empty, which every
+	// raise treats as a best-effort default.
+	ProjectKey   string
+	WorktreeRoot string
 }
 
 func (a *Actions) now() time.Time {

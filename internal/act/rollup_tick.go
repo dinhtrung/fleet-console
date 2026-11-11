@@ -52,10 +52,18 @@ func (a *Actions) rollupAfterMerge(
 	}
 
 	if err := a.Forge.Comment(ctx, decision.Epic, epicComment(item, merged, decision)); err != nil {
+		// A permission refusal raises the operator question (#260): attempt 0 —
+		// the epic has no dispatch — and the journal line names the permission.
+		if notePermission(in, report, a.RefusePermission(ctx, decision.Epic, epicTitle(in, decision.Epic), "comment", err, 0, merged.ChangeRequest, "")) {
+			return
+		}
 		report.Skipped = append(report.Skipped, fmt.Sprintf("#%d rollup: comment: %v", decision.Epic, err))
 		return
 	}
 	if err := a.Forge.CloseItem(ctx, decision.Epic); err != nil {
+		if notePermission(in, report, a.RefusePermission(ctx, decision.Epic, epicTitle(in, decision.Epic), "close", err, 0, merged.ChangeRequest, "")) {
+			return
+		}
 		report.Skipped = append(report.Skipped, fmt.Sprintf("#%d rollup: close: %v", decision.Epic, err))
 		return
 	}
@@ -104,6 +112,15 @@ func (a *Actions) parentFor(ctx context.Context, in TickInput, number int) *int 
 		return nil
 	}
 	return row.ParentNumber
+}
+
+// epicTitle is the epic's title from the snapshot, empty when the snapshot has
+// none — the raise then fills the title from the store (#260).
+func epicTitle(in TickInput, epic int) string {
+	if item := itemFor(in.Items, epic); item != nil {
+		return item.Title
+	}
+	return ""
 }
 
 // journalsSkip reports whether a skip is worth a line in the tick's journal. The

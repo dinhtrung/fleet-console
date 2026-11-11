@@ -87,6 +87,10 @@ type MergeResult struct {
 	NextUnblocked int
 	Events        []int64
 	AuditGaps     []string
+	// Permission is the refusal a post-merge write hit, raised as the operator
+	// question (#260). The merge landed; the refusal rides the result so the
+	// tick can journal and page it through the same note path as a decision.
+	Permission *PermissionRefused
 }
 
 // gap records a ledger failure that must not fail the call, because the merge
@@ -162,6 +166,13 @@ func (a *Actions) Merge(ctx context.Context, dispatchID int64, item int) (*Merge
 	// draft`, which reads like a real refusal in the log. Readiness is the integrator's.
 	if request.Draft {
 		if err := a.Forge.Ready(ctx, request.Number); err != nil {
+			// A permission refusal is the operator's question, not a merge
+			// wait (#260): the row is raised once per (attempt, operation,
+			// detail) and the dispatch is not ended — the next tick retries by
+			// itself once the token is fixed.
+			if refused := a.RefusePermission(ctx, item, "", "ready", err, dispatch.Attempt, request.Number, request.HeadSHA); refused != nil {
+				return nil, refused
+			}
 			return nil, fmt.Errorf("refusing merge: change request #%d is a draft and could not be marked ready: %w", request.Number, err)
 		}
 		// Before Forge.Merge, so a ledger failure still refuses: the pull
@@ -173,6 +184,9 @@ func (a *Actions) Merge(ctx context.Context, dispatchID int64, item int) (*Merge
 	}
 
 	if err := a.Forge.Merge(ctx, request.Number, verdict.SHA); err != nil {
+		if refused := a.RefusePermission(ctx, item, "", "merge", err, dispatch.Attempt, request.Number, request.HeadSHA); refused != nil {
+			return nil, refused
+		}
 		return nil, err
 	}
 	// Past this point the merge has landed, so nothing below returns an error for
@@ -243,6 +257,13 @@ func (a *Actions) Finalize(ctx context.Context, dispatchID int64, item int, requ
 	}
 	if current != nil && current.State != forge.StateClosed {
 		if err := a.Forge.CloseItem(ctx, item); err != nil {
+			// Post-merge, so the merge landed: the permission refusal becomes
+			// the operator question (#260) and rides the result as a gap — the
+			// item stays open until the token is fixed.
+			if refused := a.RefusePermission(ctx, item, "", "close", err, 0, request.Number, request.HeadSHA); refused != nil {
+				result.Permission = refused
+				return result, refused
+			}
 			return result, err
 		}
 		result.ClosedByApp = true
@@ -360,10 +381,18 @@ func (a *Actions) MergeAdopted(ctx context.Context, projectID int64, item int, r
 	}
 	if request.Draft {
 		if err := a.Forge.Ready(ctx, request.Number); err != nil {
+			// Permission refused, so the operator's question — attempt 0: an
+			// adopted merge has no dispatch to ride (#260).
+			if refused := a.RefusePermission(ctx, item, "", "ready", err, 0, request.Number, request.HeadSHA); refused != nil {
+				return nil, refused
+			}
 			return nil, fmt.Errorf("refusing merge: change request #%d is a draft and could not be marked ready: %w", request.Number, err)
 		}
 	}
 	if err := a.Forge.Merge(ctx, request.Number, verdict.SHA); err != nil {
+		if refused := a.RefusePermission(ctx, item, "", "merge", err, 0, request.Number, request.HeadSHA); refused != nil {
+			return nil, refused
+		}
 		return nil, err
 	}
 	// Past this point the merge has landed: bookkeeping failures are gaps, not
