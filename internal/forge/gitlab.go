@@ -292,13 +292,14 @@ func (g *GitLab) related(ctx context.Context, number int) ([]Link, error) {
 }
 
 type glMergeRequest struct {
-	IID         int    `json:"iid"`
-	State       string `json:"state"`
-	SHA         string `json:"sha"`
-	Draft       bool   `json:"draft"`
-	MergeStatus string `json:"merge_status"`
-	Description string `json:"description"`
-	WebURL      string `json:"web_url"`
+	IID                int    `json:"iid"`
+	State              string `json:"state"`
+	SHA                string `json:"sha"`
+	Draft              bool   `json:"draft"`
+	MergeStatus        string `json:"merge_status"`
+	DetailedMergeState string `json:"detailed_merge_status"`
+	Description        string `json:"description"`
+	WebURL             string `json:"web_url"`
 }
 
 // ChangeRequests reads every merge request without candidate filtering.
@@ -326,7 +327,11 @@ func (g *GitLab) ChangeRequestsFor(ctx context.Context, accepted map[string]stru
 				Number: mr.IID, State: normalizeMRState(mr.State), Merged: strings.EqualFold(mr.State, "merged"),
 				HeadSHA: mr.SHA, Draft: mr.Draft,
 				Mergeable: strings.EqualFold(mr.MergeStatus, "can_be_merged"),
-				Body:      mr.Description, ClosesItem: ParseCloses(mr.Description), URL: mr.WebURL,
+				// detailed_merge_status names why: cannot_be_merged for a
+				// conflict, ci_stale, discussions_pending and so on. It is the
+				// word the repair path quotes.
+				MergeState: mr.DetailedMergeState,
+				Body:       mr.Description, ClosesItem: ParseCloses(mr.Description), URL: mr.WebURL,
 			}
 			if mrNeedsDetails(mr, request.ClosesItem, accepted) {
 				paths, err := g.changedPaths(ctx, mr.IID)

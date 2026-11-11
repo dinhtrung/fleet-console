@@ -164,6 +164,22 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			merged, err = actions.MergeAdopted(ctx, in.Project.ID, item, request)
 		}
 		if err != nil {
+			// An accepted change request that cannot merge never recovers on its
+			// own: the head must be rebased or the item deferred, so the skip is
+			// the repair's trigger, not its resting state (#251). The raise is
+			// once per (item, head); the skip line still carries the reason.
+			var notMergeable *NotMergeableError
+			if errors.As(err, &notMergeable) {
+				if repair, repairErr := actions.RaiseMergeRepair(ctx, in.Project.Key, notMergeable, in.WorktreeRoot); repairErr != nil {
+					report.Skipped = append(report.Skipped, fmt.Sprintf("#%d merge repair: %v", item, repairErr))
+				} else if !repair.NoOp {
+					report.Decisions = append(report.Decisions, repair.QItemID)
+					if in.OnDecision != nil {
+						in.OnDecision(DecisionRaised{QItemID: repair.QItemID, Item: item, Text: fmt.Sprintf(
+							"accepted change request #%d cannot merge: rework or defer #%d", notMergeable.Number, item)})
+					}
+				}
+			}
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d merge waiting: %v", item, err))
 			continue
 		}
