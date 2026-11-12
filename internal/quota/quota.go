@@ -93,7 +93,7 @@ func (d *Detector) Check(ctx context.Context, projectID int64, rigName string, s
 			return finding, false, nil
 		}
 	}
-	if err := d.Store.SetProjectOnHold(ctx, projectID, true); err != nil {
+	if _, err := d.Store.SetProjectOnHold(ctx, projectID, true); err != nil {
 		return nil, false, err
 	}
 	if _, err := d.Store.AppendEvent(ctx, store.Event{

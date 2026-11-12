@@ -21,6 +21,24 @@ func (s *Store) SetProjectEnabled(ctx context.Context, projectID int64, enabled 
 	return n > 0, nil
 }
 
+// SetProjectOnHold pauses or resumes dispatch for one project, reporting
+// whether the row changed. onhold is the pause flag, never enabled: every
+// upsert sets enabled = 1 unconditionally (upsert.go), so the boot pass and
+// --apply-config would re-enable a project paused through enabled. onhold is
+// DB-owned — UpsertProject only overwrites it when the caller passes
+// SyncOnHold — so a pause survives both.
+func (s *Store) SetProjectOnHold(ctx context.Context, projectID int64, onhold bool) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE project SET onhold = ? WHERE id = ?`, boolInt(onhold), projectID)
+	if err != nil {
+		return false, fmt.Errorf("store: set project onhold: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: set project onhold: %w", err)
+	}
+	return n > 0, nil
+}
+
 // LiveDispatch returns the first open dispatch of a project, if any.
 func (s *Store) LiveDispatch(ctx context.Context, projectID int64) (int64, bool, error) {
 	var id int64

@@ -55,7 +55,7 @@ func TestUpsertPreservesOnHoldUnlessSynced(t *testing.T) {
 	in := baseUpsert()
 	if _, id, err := st.UpsertProject(ctx, in); err != nil {
 		t.Fatalf("first: %v", err)
-	} else if err := st.SetProjectOnHold(ctx, id, true); err != nil {
+	} else if _, err := st.SetProjectOnHold(ctx, id, true); err != nil {
 		t.Fatal(err)
 	}
 	in.Project.Name = "renamed"

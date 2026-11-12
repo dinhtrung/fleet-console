@@ -49,7 +49,7 @@ func TestApplyDisablesAbsentAndReenables(t *testing.T) {
 	if before == nil || !before.Enabled {
 		t.Fatalf("b = %+v, want enabled", before)
 	}
-	if err := st.SetProjectOnHold(ctx, before.ID, true); err != nil {
+	if _, err := st.SetProjectOnHold(ctx, before.ID, true); err != nil {
 		t.Fatalf("onhold: %v", err)
 	}
 
