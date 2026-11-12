@@ -23,6 +23,12 @@ type ItemRecord struct {
 
 // ReplaceItems rewrites one project's mirrored items in a transaction. A failed
 // forge read never reaches here, so cached rows survive a stale tick.
+//
+// The insert runs WHERE EXISTS on the project row: the tick read the project
+// before its transaction opened, and a delete that lands in that window must
+// leave no item rows behind — orphans are invisible (every read joins project),
+// unreachable, and never cleaned (design D4). A deleted project writes
+// nothing; the call does not error.
 func (s *Store) ReplaceItems(ctx context.Context, projectID int64, records []ItemRecord) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -35,7 +41,8 @@ func (s *Store) ReplaceItems(ctx context.Context, projectID int64, records []Ite
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO item (project_id, number, kind, state, title, labels, parent_number,
 		                  blocked_by_json, url, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE EXISTS (SELECT 1 FROM project WHERE id = ?)`)
 	if err != nil {
 		return fmt.Errorf("store: replace items: %w", err)
 	}
@@ -47,12 +54,23 @@ func (s *Store) ReplaceItems(ctx context.Context, projectID int64, records []Ite
 		}
 		if _, err := stmt.ExecContext(ctx, projectID, record.Number, record.Kind, record.State,
 			record.Title, record.Labels, parent, record.BlockedByJSON, record.URL,
-			record.UpdatedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+			record.UpdatedAt.UTC().Format(time.RFC3339Nano), projectID); err != nil {
 			return fmt.Errorf("store: replace item %d: %w", record.Number, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: replace items: %w", err)
+	}
+	return nil
+}
+
+// ClearItems deletes one project's mirrored items — the same statement
+// ReplaceItems opens its transaction with — so an edit that changes the repo
+// or forge clears the old repository's items without opening its own
+// transaction. Nothing is planned from the previous repository afterwards.
+func (s *Store) ClearItems(ctx context.Context, projectID int64) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM item WHERE project_id = ?`, projectID); err != nil {
+		return fmt.Errorf("store: clear items: %w", err)
 	}
 	return nil
 }

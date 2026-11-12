@@ -137,6 +137,55 @@ func (s *Store) Items(ctx context.Context) ([]ItemRow, error) {
 	return out, rows.Err()
 }
 
+// ProjectCount is one project's row counts, the numbers the registry list and
+// the delete dialog show. Verdicts counts only the verdicts the delete
+// cascade removes — the ones joined through a dispatch of this project; an
+// adopted verdict (no dispatch) is kept by DeleteProject, so it is not counted
+// as if it were going anywhere.
+type ProjectCount struct {
+	Items        int64
+	Dispatches   int64
+	Verdicts     int64
+	Snapshots    int64
+	LiveDispatch int64
+}
+
+// ProjectCounts returns the row counts for every project that has rows, in one
+// query. A project absent from the answer has no rows at all; the caller
+// treats a missing key as zeros rather than asking per project — the list
+// route renders on every visit (design D7).
+func (s *Store) ProjectCounts(ctx context.Context) (map[int64]ProjectCount, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		WITH counts(project_id, items, dispatches, verdicts, snapshots, live) AS (
+			SELECT project_id, 1, 0, 0, 0, NULL FROM item
+			UNION ALL
+			SELECT project_id, 0, 1, 0, 0, NULL FROM dispatch
+			UNION ALL
+			SELECT d.project_id, 0, 0, 1, 0, NULL
+			  FROM verdict v JOIN dispatch d ON d.id = v.dispatch_id
+			UNION ALL
+			SELECT project_id, 0, 0, 0, 1, NULL FROM snapshot
+			UNION ALL
+			SELECT project_id, 0, 0, 0, 0, id FROM dispatch WHERE ended_at IS NULL
+		)
+		SELECT project_id, SUM(items), SUM(dispatches), SUM(verdicts), SUM(snapshots), COALESCE(MIN(live), 0)
+		FROM counts GROUP BY project_id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: project counts: %w", err)
+	}
+	defer rows.Close()
+	counts := make(map[int64]ProjectCount)
+	for rows.Next() {
+		var id int64
+		var count ProjectCount
+		if err := rows.Scan(&id, &count.Items, &count.Dispatches, &count.Verdicts, &count.Snapshots, &count.LiveDispatch); err != nil {
+			return nil, fmt.Errorf("store: project counts: %w", err)
+		}
+		counts[id] = count
+	}
+	return counts, rows.Err()
+}
+
 // ItemCount returns how many items are cached for a project. The mirror uses it
 // to scale the project deadline before the forge read (base + per-item).
 func (s *Store) ItemCount(ctx context.Context, projectID int64) (int, error) {
@@ -406,15 +455,6 @@ func (s *Store) EventByKindAndSubject(ctx context.Context, kind, subject string)
 		return nil, err
 	}
 	return &events[0], nil
-}
-
-// SetProjectOnHold pauses or resumes dispatch for one project.
-func (s *Store) SetProjectOnHold(ctx context.Context, projectID int64, onhold bool) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE project SET onhold = ? WHERE id = ?`, boolInt(onhold), projectID)
-	if err != nil {
-		return fmt.Errorf("store: set project onhold: %w", err)
-	}
-	return nil
 }
 
 // HasEvent reports whether an event of kind for subject already carries the text.
