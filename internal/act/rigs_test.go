@@ -48,7 +48,7 @@ func TestReviewGoesToTheBuildingRigsReviewer(t *testing.T) {
 	queue := &queueStub{item: &rig.QueueItem{ID: "qitem-2", State: "pending"}, created: &rig.CreateRequest{}}
 	actions := &Actions{Store: st, Rig: queue}
 	project := store.ProjectRow{ID: pid, Key: "app", Rigs: []string{"rig-a", "rig-b"}}
-	result, err := actions.RaiseDecision(ctx, project, 5, "head moved", "decision.stale", t.TempDir())
+	result, err := actions.RaiseDecision(ctx, project, 5, "head moved", "decision.stale", 0, "", t.TempDir())
 	if err != nil {
 		t.Fatalf("raise: %v", err)
 	}

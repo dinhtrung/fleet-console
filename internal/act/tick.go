@@ -238,6 +238,10 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		capturedItems[captured.Item] = true
 	}
 
+	// The decision's audience routes the raise (#265): an operator question —
+	// a missing verdict, which only a human can answer — goes to human@kernel,
+	// and the reviewer path keeps its re-review row. OnDecision fires for both,
+	// so the alert path is unchanged.
 	for _, intent := range in.Plan.Intents {
 		if intent.Kind != decide.IntentRaiseDecision {
 			continue
@@ -247,7 +251,15 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 				"#%d decision skipped: this tick captured the verdict the plan called missing", intent.Item))
 			continue
 		}
-		result, err := actions.RaiseDecision(ctx, in.Project, intent.Item, intent.Text, intent.Event.Kind, in.WorktreeRoot)
+		var result *RaiseResult
+		var err error
+		if intent.Audience == decide.AudienceOperator {
+			result, err = actions.RaiseOperatorQuestion(ctx, in.Project, intent.Item, intent.Text,
+				intent.Event.Kind, intent.HeadSHA, in.WorktreeRoot)
+		} else {
+			result, err = actions.RaiseDecision(ctx, in.Project, intent.Item, intent.Text,
+				intent.Event.Kind, intent.ChangeRequest, intent.HeadSHA, in.WorktreeRoot)
+		}
 		if err != nil {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d decision: %v", intent.Item, err))
 			continue

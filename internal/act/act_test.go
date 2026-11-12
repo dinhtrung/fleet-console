@@ -400,6 +400,9 @@ func (f fakeRunner) Run(_ context.Context, args ...string) ([]byte, error) { ret
 type queueStub struct {
 	item        *rig.QueueItem
 	created     *rig.CreateRequest
+	// creates records every create in order, for the tests that raise more
+	// than one row in one tick (#266). Optional: nil skips the recording.
+	creates     *[]rig.CreateRequest
 	createCalls int
 	sendCalls   int
 	rows        []rig.QueueRow
@@ -421,6 +424,9 @@ func (q *queueStub) QueueCreate(_ context.Context, req rig.CreateRequest) (*rig.
 	q.createCalls++
 	if q.created != nil {
 		*q.created = req
+	}
+	if q.creates != nil {
+		*q.creates = append(*q.creates, req)
 	}
 	if q.item == nil {
 		return &rig.QueueItem{ID: "qitem-stub", State: "pending"}, nil
