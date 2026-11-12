@@ -73,6 +73,7 @@ func (a *Actions) RaiseMergeRepair(ctx context.Context, projectKey string, failu
 		Source:      "human@kernel",
 	})
 	if err != nil {
+		_ = noteRefusal(ctx, a.Store, failure.Item, err)
 		return nil, err
 	}
 	eventID, err := a.event(ctx, "act", kind, subject, text+"; row "+row.ID)
