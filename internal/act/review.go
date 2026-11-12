@@ -151,6 +151,7 @@ func (a *Actions) RaiseOperatorQuestion(ctx context.Context, project store.Proje
 		Destination: "human@kernel", Summary: summary, BodyFile: path, Source: "human@kernel", EvidenceRef: path,
 	})
 	if err != nil {
+		_ = noteRefusal(ctx, a.Store, item, err)
 		return nil, err
 	}
 	detail := fmt.Sprintf("%s; head=%s; row %s", firstLine(question), sha, row.ID)

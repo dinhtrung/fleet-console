@@ -133,6 +133,7 @@ Seat transcript directory: %s (one file per occupant account)
 		Source:      "human@kernel",
 	})
 	if err != nil {
+		_ = noteRefusal(ctx, a.Store, in.Item, err)
 		return nil, err
 	}
 	eventID, err := a.event(ctx, "act", EventSilentDispatch, subject,

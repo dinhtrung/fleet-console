@@ -121,7 +121,7 @@ func AdoptPending(ctx context.Context, st *store.Store, rg AdoptionRig, project 
 			}
 			result.Abandoned = append(result.Abandoned, dispatch.ID)
 			result.Ambiguous = append(result.Ambiguous, dispatch.ID)
-			decision, err := raiseAdoptionDecision(ctx, rg, project, dispatch, matches, worktreeRoot)
+			decision, err := raiseAdoptionDecision(ctx, st, rg, project, dispatch, matches, worktreeRoot)
 			if err != nil {
 				return result, err
 			}
@@ -154,7 +154,7 @@ func briefSummary(dispatch store.DispatchRow) string {
 	return fmt.Sprintf("#%d %s", dispatch.ItemNumber, title)
 }
 
-func raiseAdoptionDecision(ctx context.Context, rg AdoptionRig, project store.ProjectRow, dispatch store.DispatchRow, matches []rig.QueueRow, worktreeRoot string) (*rig.QueueItem, error) {
+func raiseAdoptionDecision(ctx context.Context, st *store.Store, rg AdoptionRig, project store.ProjectRow, dispatch store.DispatchRow, matches []rig.QueueRow, worktreeRoot string) (*rig.QueueItem, error) {
 	dir := worktreeRoot
 	if dir == "" {
 		dir = os.TempDir()
@@ -182,6 +182,7 @@ func raiseAdoptionDecision(ctx context.Context, rg AdoptionRig, project store.Pr
 		Source:      "human@kernel",
 	})
 	if err != nil {
+		_ = noteRefusal(ctx, st, dispatch.ItemNumber, err)
 		return nil, err
 	}
 	return row, nil

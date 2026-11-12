@@ -144,6 +144,7 @@ func (a *Actions) RaisePermissionDecision(ctx context.Context, in PermissionInpu
 		Source:      "human@kernel",
 	})
 	if err != nil {
+		_ = noteRefusal(ctx, a.Store, in.Item, err)
 		return nil, err
 	}
 	eventID, err := a.event(ctx, "act", EventPermissionDenied, subject, key+"; row "+row.ID)
