@@ -65,9 +65,14 @@ for one run. `--json` is only valid with `--version`.
 `enabled = 0` (`disabled <key>`) and keeps every row, so its history stays
 readable and re-adding the block re-enables the same project id. It never resumes
 a project that was paused in the database unless `--sync-onhold` is passed.
-`--prune` is the only path that deletes a project; it refuses with the dispatch id
-while a live dispatch exists. A server started with a config applies the same
-registry at boot: present projects are enabled, absent ones disabled.
+A project is deleted by `--prune` and by the board's own delete button, which is
+the same cascade as `--prune` for the one project named — file entry first, then
+the rows, refused with the dispatch id while a live dispatch exists. The board
+also edits a project per row (same fields, the key is immutable) and pauses it
+by setting the database's `onhold`, which the file never resets on a normal
+apply. `--apply-config` and `--prune` remain the reconciliation paths. A server
+started with a config applies the same registry at boot: present projects are
+enabled, absent ones disabled.
 
 A server started with `--apply` (or `act: true` in the config) takes an
 exclusive flock on `<database>.lock` for its lifetime. A second acting instance
