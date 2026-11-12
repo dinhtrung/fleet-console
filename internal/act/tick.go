@@ -144,6 +144,17 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		}
 		captured, err := actions.CaptureFromForge(ctx, dispatchID, item, request.Number, request.HeadSHA)
 		if err != nil {
+			// An ACCEPT that names another sha ends the capture (#289 T2): the
+			// skip line below already names the note and both shas through the
+			// error's own text, and the audit surface gets one event per note
+			// so a tick repeating every few minutes cannot flood it. The write
+			// is best-effort: a ledger failure keeps the skip line and moves
+			// on — a missed audit row never becomes a crashed tick or a merge,
+			// and the next tick retries the write.
+			var unattributed *UnattributedAcceptError
+			if errors.As(err, &unattributed) {
+				noteUnattributedAccept(ctx, actions, item, unattributed)
+			}
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d verdict: %v", item, err))
 			continue
 		}
@@ -378,6 +389,23 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		report.Dispatches = append(report.Dispatches, *result)
 	}
 	return report, nil
+}
+
+// noteUnattributedAccept writes the once-per-note audit row for an ACCEPT that
+// names another sha (epic #289's fixed vocabulary: kind verdict.unattributed,
+// subject #<item>, detail "note=<id>; sha=<written>; head=<head>"). The
+// trailing `;` on the dedupe key is the terminator, so note 12 can never match
+// note 123. Every error is swallowed on purpose: the skip line already records
+// the refusal in the tick log, and a ledger failure must not change the flow.
+func noteUnattributedAccept(ctx context.Context, actions *Actions, item int, refused *UnattributedAcceptError) {
+	subject := fmt.Sprintf("#%d", item)
+	key := fmt.Sprintf("note=%s;", refused.NoteID)
+	noted, err := actions.Store.HasEvent(ctx, "verdict.unattributed", subject, key)
+	if err != nil || noted {
+		return
+	}
+	_, _ = actions.event(ctx, "act", "verdict.unattributed", subject,
+		fmt.Sprintf("%s sha=%s; head=%s", key, refused.Written, refused.Head))
 }
 
 func refusalReason(err error) string {
