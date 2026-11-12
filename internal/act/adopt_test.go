@@ -119,10 +119,11 @@ func TestAdoptRefusesWithoutAVerdict(t *testing.T) {
 	}
 }
 
-// TestAdoptRefusesAVerdictAtAnotherSha: an ACCEPT for a superseded head says
-// nothing about this one, so nothing merges. The capture stores no row either —
-// an accept at another sha is not this head's verdict — so the refusal names the
-// absent verdict, not a sha mismatch.
+// TestAdoptRefusesAVerdictAtAnotherSha: an ACCEPT for another sha says nothing
+// about this head, so nothing merges. Since #290 it also ends the capture scan
+// with a typed refusal that names the accept, instead of silently storing
+// nothing — an older ACCEPT at the head must not resurface. No verdict row is
+// stored for this head either way.
 func TestAdoptRefusesAVerdictAtAnotherSha(t *testing.T) {
 	ctx, st, _, _, fake, in := adoptedFixture(t, "deadbee")
 
@@ -133,8 +134,8 @@ func TestAdoptRefusesAVerdictAtAnotherSha(t *testing.T) {
 	if len(report.Merges) != 0 {
 		t.Fatalf("merged on a stale verdict: %+v", report.Merges)
 	}
-	if !hasSkip(report, "no ACCEPT verdict for #5") {
-		t.Fatalf("skipped = %v, want the missing verdict named", report.Skipped)
+	if !hasSkip(report, "does not name head") {
+		t.Fatalf("skipped = %v, want the unattributed accept named", report.Skipped)
 	}
 	if hasWrite(fake.Writes, "merge", 9, "deadbee") {
 		t.Fatalf("merged at the stale sha: %+v", fake.Writes)

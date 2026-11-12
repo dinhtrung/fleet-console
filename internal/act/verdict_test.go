@@ -200,3 +200,152 @@ func TestCaptureVerdictDecoration(t *testing.T) {
 		})
 	}
 }
+
+// captureAt runs notes through the real capture path at an arbitrary head: a
+// fresh store per call, because storeVerdict dedupes on (sha, decision). It
+// returns the stored rows too, so a test can assert what was written, not only
+// what came back.
+func captureAt(t *testing.T, head string, notes []forge.Comment) (*CapturedVerdict, []store.VerdictRow, error) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "fleet.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	projectID, err := st.CreateProject(ctx, store.ProjectInput{
+		Key: "p", Name: "P", ForgeKind: "github", ForgeProject: "o/r", Rig: "r", ConcurrencyCap: 1,
+	})
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	dispatchID, err := st.CreateDispatch(ctx, store.NewDispatch{
+		ProjectID: projectID, ItemNumber: 5, Attempt: 1, Seat: "s",
+		Branch: "b", Worktree: "/tmp/w", BaseSHA: "x", CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	actions := &Actions{Store: st, ProjectID: projectID, Now: func() time.Time { return now }}
+	verdict, err := actions.CaptureVerdict(ctx, dispatchID, 5, head, notes)
+	rows, rowErr := st.Verdicts(ctx, dispatchID)
+	if rowErr != nil {
+		t.Fatalf("verdicts: %v", rowErr)
+	}
+	return verdict, rows, err
+}
+
+func TestSameSHA(t *testing.T) {
+	const fullHead = "3f2a1b9c4d5e6f708192a3b4c5d6e7f8091a2b3c"
+	cases := []struct {
+		name string
+		note string
+		head string
+		want bool
+	}{
+		{"identical full shas", fullHead, fullHead, true},
+		{"note is a 7-char prefix of a 40-char head", "3f2a1b9", fullHead, true},
+		{"note is a mid-length prefix", "3f2a1b9c4d5e", fullHead, true},
+		{"upper case matches", "7F76634", "7f76634def5678901234abcdef56789012abcd", true},
+		{"head abbreviated, note full", fullHead[:9], fullHead, true},
+		{"a 6-char sha is not an abbreviation", "3f2a1b", fullHead, false},
+		{"a 6-char head cannot match", "3f2a1b9", "3f2a1b", false},
+		{"another commit's sha", "ffffffff", "3f2a1b9c4d5e6f708192a3b4c5d6e7f8091a2b3c", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sameSHA(tc.note, tc.head); got != tc.want {
+				t.Fatalf("sameSHA(%q, %q) = %t, want %t", tc.note, tc.head, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCaptureAcceptsAbbreviatedHead: a reviewer writes git's own abbreviation,
+// and the stored row carries the full head so the merge gate's exact comparison
+// keeps working unchanged.
+func TestCaptureAcceptsAbbreviatedHead(t *testing.T) {
+	const head = "3f2a1b9c4d5e6f708192a3b4c5d6e7f8091a2b3c"
+	for _, name := range []string{"lower case", "upper case"} {
+		t.Run(name, func(t *testing.T) {
+			note := "ACCEPT 3f2a1b9"
+			if name == "upper case" {
+				note = "ACCEPT 3F2A1B9"
+			}
+			verdict, rows, err := captureAt(t, head, []forge.Comment{
+				{ID: "1", CreatedAt: "2026-11-12T12:00:00Z", Body: note},
+			})
+			if err != nil || verdict == nil {
+				t.Fatalf("capture = (%+v, %v), want the abbreviated accept captured", verdict, err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("verdict rows = %d, want one", len(rows))
+			}
+			if rows[0].SHA != head {
+				t.Fatalf("stored sha = %s, want the full 40-char head %s", rows[0].SHA, head)
+			}
+		})
+	}
+}
+
+// TestCaptureRejectsAcceptForAnotherSHA: the newest verdict-shaped note is an
+// accept for a sha that does not name the head. It ends the scan with the typed
+// error — an older ACCEPT at the head must not resurface — and stores nothing.
+func TestCaptureRejectsAcceptForAnotherSHA(t *testing.T) {
+	const head = "abc1234def5678"
+	verdict, rows, err := captureAt(t, head, []forge.Comment{
+		{ID: "2", CreatedAt: "2026-11-12T12:30:00Z", Body: "ACCEPT ffffffff"},
+		{ID: "1", CreatedAt: "2026-11-12T12:00:00Z", Body: "ACCEPT " + head},
+	})
+	var unattributed *UnattributedAcceptError
+	if !errors.As(err, &unattributed) {
+		t.Fatalf("err = %v, want an UnattributedAcceptError", err)
+	}
+	if unattributed.Written != "ffffffff" || unattributed.Head != head || unattributed.NoteID != "2" {
+		t.Fatalf("error = %+v, want written=ffffffff head=%s note=2", unattributed, head)
+	}
+	if got := unattributed.Error(); got != "ACCEPT ffffffff does not name head "+head+" (note 2)" {
+		t.Fatalf("Error() = %q", got)
+	}
+	if verdict != nil || len(rows) != 0 {
+		t.Fatalf("verdict = %+v rows = %+v, want nothing stored", verdict, rows)
+	}
+}
+
+// TestCaptureStillErrorsOnRejectForAnotherSHA: the rejection path is untouched —
+// deliberately stricter than the accept, it keeps returning
+// UnattributableVerdictError and stores nothing.
+func TestCaptureStillErrorsOnRejectForAnotherSHA(t *testing.T) {
+	const head = "abc1234def5678"
+	_, rows, err := captureAt(t, head, []forge.Comment{
+		{ID: "2", CreatedAt: "2026-11-12T12:30:00Z", Body: "REJECT ffffffff"},
+		{ID: "1", CreatedAt: "2026-11-12T12:00:00Z", Body: "ACCEPT " + head},
+	})
+	var refusal *UnattributableVerdictError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("err = %v, want an UnattributableVerdictError", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("verdict rows = %+v, want none", rows)
+	}
+}
+
+// TestCaptureKeepsTheNewestVerdict: newest-first still decides. An older reject
+// at the head does not override a newer accept at the same head.
+func TestCaptureKeepsTheNewestVerdict(t *testing.T) {
+	const head = "abc1234def5678"
+	verdict, rows, err := captureAt(t, head, []forge.Comment{
+		{ID: "2", CreatedAt: "2026-11-12T12:30:00Z", Body: "ACCEPT " + head + " (CI green)"},
+		{ID: "1", CreatedAt: "2026-11-12T12:00:00Z", Body: "REJECT " + head},
+	})
+	if err != nil || verdict == nil {
+		t.Fatalf("capture = (%+v, %v), want the newer accept", verdict, err)
+	}
+	if verdict.Decision != "accept" {
+		t.Fatalf("decision = %s, want accept", verdict.Decision)
+	}
+	if len(rows) != 1 || rows[0].Decision != "accept" {
+		t.Fatalf("rows = %+v, want one accept row", rows)
+	}
+}

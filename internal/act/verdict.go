@@ -86,6 +86,35 @@ func (e *UnattributableVerdictError) Error() string {
 
 func (e *UnattributableVerdictError) Is(target error) bool { return target == ErrUnattributableVerdict }
 
+// sameSHA says whether the sha a note wrote names the head under review: the
+// same string, or one an unambiguous prefix of the other. Seven is git's own
+// minimum abbreviation, and a prefix of the head cannot realistically be
+// another commit's abbreviation. Anything shorter is not an abbreviation —
+// it is a typo, and the note parser refuses it before this runs.
+func sameSHA(note, head string) bool {
+	note, head = strings.ToLower(note), strings.ToLower(head)
+	if len(note) < 7 || len(head) < 7 {
+		return false
+	}
+	return strings.HasPrefix(head, note) || strings.HasPrefix(note, head)
+}
+
+// UnattributedAcceptError is returned when the newest verdict-shaped note is an
+// ACCEPT that does not name the head under review. It is its own exported type
+// so the tick can classify it (epic #289), and receiving it ends the scan: an
+// accept that says nothing about this head must not fall through to an older
+// ACCEPT that does — that is #89's guarantee, now covering accepts as well as
+// rejects.
+type UnattributedAcceptError struct {
+	NoteID  string
+	Written string // the sha as the reviewer wrote it
+	Head    string // the head under review
+}
+
+func (e *UnattributedAcceptError) Error() string {
+	return fmt.Sprintf("ACCEPT %s does not name head %s (note %s)", e.Written, e.Head, e.NoteID)
+}
+
 // CapturedVerdict is the verdict stored from a reviewer note.
 type CapturedVerdict struct {
 	VerdictID int64
@@ -103,14 +132,16 @@ type CapturedVerdict struct {
 //   - ACCEPT naming the head is the verdict;
 //   - REJECT naming the head is the verdict;
 //   - anything else that claims to be a verdict is refused, not skipped. An
-//     ACCEPT for a superseded head is harmless and scanning continues; a REJECT
-//     that cannot be tied to this head, or a verdict whose sha does not parse,
-//     stops the merge and names the note.
+//     ACCEPT for another sha ends the scan with an UnattributedAcceptError —
+//     falling through would resurface an older ACCEPT at the head, the exact
+//     mistake #89 fixed for rejections. A REJECT that cannot be tied to this
+//     head, or a verdict whose sha does not parse, stops the merge and names
+//     the note.
 //
 // Refusing matters because of what the alternative does: skipping an
-// unattributable REJECT falls through to an older ACCEPT and merges a change the
-// reviewer said no to. The caller reports the refusal and retries next tick; a
-// reviewer who posts a parseable verdict unblocks it.
+// unattributable note falls through to an older ACCEPT and merges a change the
+// reviewer has since superseded or said no to. The caller reports the refusal
+// and retries next tick; a reviewer who posts a parseable verdict unblocks it.
 func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int, headSHA string, notes []forge.Comment) (*CapturedVerdict, error) {
 	sorted := append([]forge.Comment(nil), notes...)
 	sort.SliceStable(sorted, func(i, j int) bool {
@@ -137,17 +168,31 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 		}
 		decision := strings.ToLower(match[1])
 		sha := strings.ToLower(match[2])
-		if headSHA != "" && sha != headSHA {
+		if headSHA != "" && !sameSHA(sha, headSHA) {
 			if decision == "accept" {
-				// An accept for a superseded head says nothing about this one.
-				continue
+				// An accept for another sha says nothing about this head. It
+				// ends the scan with a typed refusal instead of falling through
+				// to an older note that happens to name the head. Deliberately
+				// milder than the rejection below: the tick retries, and the
+				// scan unblocks when a note names the head.
+				return nil, &UnattributedAcceptError{
+					NoteID: note.ID, Written: match[2], Head: headSHA,
+				}
 			}
 			return nil, &UnattributableVerdictError{
 				NoteID: note.ID, Line: line,
 				Reason: fmt.Sprintf("a rejection names %s, which is not the head under review (%s)", sha, headSHA),
 			}
 		}
-		return a.storeVerdict(ctx, dispatchID, item, note.ID, sha, decision)
+		// The row stores the head, never the abbreviation the note wrote: the
+		// merge gate compares stored shas exactly, and the head is the
+		// canonical spelling of what the note names. With no head under review
+		// the note's own sha is all there is to store.
+		stored := headSHA
+		if stored == "" {
+			stored = sha
+		}
+		return a.storeVerdict(ctx, dispatchID, item, note.ID, stored, decision)
 	}
 	return nil, nil
 }
