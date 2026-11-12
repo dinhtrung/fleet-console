@@ -62,8 +62,8 @@ func TestTickDoesNotRaiseForTheVerdictItJustCaptured(t *testing.T) {
 	if raise == nil {
 		t.Fatalf("plan = %+v, want the no-verdict raise the bug is about", plan)
 	}
-	if raise.Event.Kind != "decision.raise" {
-		t.Fatalf("raise kind = %q, want decision.raise", raise.Event.Kind)
+	if raise.Event.Kind != "decision.no_verdict" {
+		t.Fatalf("raise kind = %q, want decision.no_verdict", raise.Event.Kind)
 	}
 
 	queue := &queueStub{item: &rig.QueueItem{ID: "qitem-should-not-exist", State: "pending"}}
@@ -99,8 +99,8 @@ func TestTickDoesNotRaiseForTheVerdictItJustCaptured(t *testing.T) {
 		t.Fatalf("events: %v", err)
 	}
 	for _, event := range events {
-		if event.Kind == "decision.raise" {
-			t.Fatalf("event %v: a decision.raise reached the ledger", event)
+		if event.Kind == "decision.no_verdict" {
+			t.Fatalf("event %v: a decision.no_verdict reached the ledger", event)
 		}
 	}
 }
