@@ -61,21 +61,27 @@ A verdict is a note whose **first line** starts with the token and a sha: `ACCEP
 Prose that merely mentions a token is not a verdict, and a note is never scanned beyond its first
 line.
 
+**What names the head.** A sha names the head under review when it is the full 40-hex commit id,
+or an abbreviation of at least 7 hex characters that is a prefix of it: `ACCEPT 7f76634` names
+head `7f766346bebb…` and is attributed to it. Fewer than 7 characters never parses as a verdict
+at all, and whatever the note wrote, the stored verdict carries the full sha.
+
 Two outcomes are worth knowing because they stall a merge rather than being silently absorbed:
 
-- **A verdict that cannot be tied to the head blocks.** `REJECT` with a truncated, absent or
-  mistyped sha refuses the merge and names the note in the tick log, rather than falling through
-  to an earlier `ACCEPT`. Before this, a reviewer's withdrawal was dropped whenever the sha did not
-  parse and an older accept merged the change.
-- **A rejection naming another sha blocks too.** An `ACCEPT` for a superseded head is skipped — it
-  says nothing about the current commit — but a `REJECT` for one is treated as a statement that
-  outlives its sha. That is stricter than an accept and it is deliberate: in a multi-attempt thread
-  the reviewer's objection may still stand.
+- **An accept naming another head is skipped and reported.** An `ACCEPT` whose sha is not a
+  prefix of the head says nothing about the current commit, so the scan ends there instead of
+  falling through to an older note that happens to name the head. The tick reports the refusal
+  twice over: one `act-skip: … verdict: ACCEPT <written> does not name head <head> (note <id>)`
+  line per tick in the log, and one `verdict.unattributed` audit event per note on the ledger.
+- **A rejection naming another sha blocks.** A `REJECT` for a sha that is not the head is
+  treated as a statement that outlives its sha: it refuses the merge and names the note. That is
+  stricter than an accept and it is deliberate: in a multi-attempt thread the reviewer's
+  objection may still stand.
 
-Both unblock the same way: post a verdict naming the **full** head sha — the whole 40-hex commit id,
-not an abbreviation. An abbreviated sha is refused like any other unattributable verdict, and one
-that is long enough to parse but is not the head is skipped. Nothing is written to the store for a
-refusal, so the next tick retries and the note stays until it is answered.
+Both unblock the same way: post `ACCEPT <the head>`. The board's Approve button and the reviewer
+brief already emit the full head sha, so the abbreviated form is the exception, not the
+documented path. Nothing is written to the store for a refusal, so the next tick retries and the
+note stays until it is answered.
 
 ### Closing the epic
 
