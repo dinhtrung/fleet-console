@@ -185,6 +185,11 @@ fleet-console --config "$CONFIG" --migrate           # database migrated
 that left the file. It runs again at boot when the service is started with
 `--config`.
 
+The board's Projects table carries the same actions per row — edit, pause and
+delete. A pause lives in the database: it survives a restart and an
+`--apply-config`, and only `--apply-config --sync-onhold` copies the file's
+`onhold:` over it.
+
 **Success:** the four commands exit 0; the second one prints `unchanged my-project`
 and `--compat` shows `"ok": true`.
 

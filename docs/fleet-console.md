@@ -112,3 +112,16 @@ run never un-merges anything.
 ```
 
 Status, then the reason, then the action. Nothing on this screen is a chat message.
+
+### The registry, edited from the board
+
+The Projects surface edits, pauses and deletes a project over the API:
+`PUT /api/projects/{key}`, `PUT /api/projects/{key}/onhold`, and
+`DELETE /api/projects/{key}?confirm=<key>`. The pause writes the database's
+`onhold`, never the file — it survives a restart and an `--apply-config`, and
+only `--apply-config --sync-onhold` copies the file's `onhold:` over it, so a
+file that pins `onhold: true` wins when that flag is passed. A board delete is
+the same cascade as `--prune` for the one project named: the file entry goes
+first, then the project's rows, `event` rows untouched, and it is refused with
+the dispatch id while a dispatch is live. The edit carries the file's own field
+names; the key is immutable, so a rename is a delete and a create.
