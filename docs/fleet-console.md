@@ -45,6 +45,15 @@ picking a winner. Adoption records `change_request.adopted` before the merge and
 and it invents no dispatch row. Readiness stays the integrator's job: the watchdog marks a draft ready and merges,
 but a human still decides what is worth merging.
 
+### Rows that ask a human
+
+A queue row whose destination is a human seat (`human@kernel`, `human-<suffix>@host`) is judged by the person, so the
+daemon requires `summary` and `evidence_ref` on it: the evidence is the durable artifact the row's answer is judged
+against. The app passes the brief path it just wrote for that row — the operator question, permission refusal, silent
+dispatch, ambiguous dispatch and merge-repair raises all carry theirs. `scripts/human-route-probe.sh` is the command
+that proves the daemon agrees: on a throwaway daemon it refuses the create without `--evidence-ref`
+(`human_route_fields_required`), accepts it with the brief path, and reads the ref back off the row.
+
 ### Reading a verdict
 
 A verdict is a note whose **first line** starts with the token and a sha: `ACCEPT <sha>`,
