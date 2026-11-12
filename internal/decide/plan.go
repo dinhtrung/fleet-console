@@ -2,7 +2,9 @@ package decide
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -82,6 +84,23 @@ type Event struct {
 	Detail  string `json:"detail"`
 }
 
+// Audience is who a decision is for. The zero value is the reviewer seat:
+// every decision before the audience split went to the reviewer, so callers
+// that never set the field keep today's behaviour (#265).
+type Audience int
+
+const (
+	AudienceReviewer Audience = iota
+	AudienceOperator
+)
+
+func (a Audience) String() string {
+	if a == AudienceOperator {
+		return "operator"
+	}
+	return "reviewer"
+}
+
 // Intent is one planned action. The decide loop never performs it.
 type Intent struct {
 	Kind    IntentKind `json:"kind"`
@@ -90,7 +109,13 @@ type Intent struct {
 	Seat    string     `json:"seat,omitempty"`
 	QItemID string     `json:"qitem_id,omitempty"`
 	Text    string     `json:"text,omitempty"`
-	Event   Event      `json:"event"`
+	// Audience routes the decision: the reviewer seat, or the operator (#265).
+	Audience Audience `json:"audience,omitempty"`
+	// ChangeRequest and HeadSHA are the facts the raised brief prints
+	// verbatim; the act side does not recompute them (#265).
+	ChangeRequest int    `json:"change_request,omitempty"`
+	HeadSHA       string `json:"head_sha,omitempty"`
+	Event         Event  `json:"event"`
 }
 
 // Plan is one tick's intents and the events they would write.
@@ -264,38 +289,57 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 		}
 	}
 
-	// Incident: a change request is open and no row is live. Three cases: no
-	// verdict at all, a verdict whose sha is no longer the head (D2), or an
-	// accept/reject for the head (nothing to raise).
+	// Incident: a change request is open. Three cases: no verdict at all — the
+	// operator's question (#265, design D3); a verdict whose sha is no longer
+	// the head — the reviewer's re-review (D2); or an accept/reject for the
+	// head — nothing to raise. The dedupe is per (item, head): a live row that
+	// already names this head is the same question standing, a seat's own row
+	// is work in flight, and only a question row for a different head asks
+	// again. Across ticks the act raise's ledger entry is the durable backstop.
 	seen := map[int]bool{}
 	for _, cr := range s.CRs {
 		item, ok := items[cr.Item]
 		if !ok || !item.open() || seen[item.Number] {
 			continue
 		}
-		if cr.Merged || !strings.EqualFold(cr.State, "open") || live[item.Number] != "" {
+		if cr.Merged || !strings.EqualFold(cr.State, "open") {
 			continue
 		}
 		verdict := newestVerdict(s.Verdicts, item.Number)
-		var text, kind string
+		var text, kind, detail string
+		var audience Audience
 		switch {
 		case verdict == nil:
-			kind = "decision.raise"
-			text = fmt.Sprintf("%s #%d: %s has an open change request with no verdict and no live row. Accept it, reject it, or reopen the seat?",
-				key, item.Number, item.Title)
+			if askedForHead(s.Rows, item.Number, cr.HeadSHA) {
+				continue
+			}
+			head := cr.HeadSHA
+			if head == "" {
+				head = "unknown"
+			}
+			kind = "decision.no_verdict"
+			audience = AudienceOperator
+			text = fmt.Sprintf("%s #%d %s: change request #%d has no verdict for head %s. Approve or reject it on the item drawer (POST /api/items/%d/verdict) or reply fleet: accept / fleet: reject on the item.",
+				key, item.Number, item.Title, cr.Number, head, item.Number)
+			detail = fmt.Sprintf("cr=%d head=%s", cr.Number, cr.HeadSHA)
 		case cr.HeadSHA != "" && !strings.EqualFold(verdict.SHA, cr.HeadSHA):
+			if askedForHead(s.Rows, item.Number, cr.HeadSHA) {
+				continue
+			}
 			// D2: a verdict on a moved head asks for a re-review of the new head.
 			kind = "decision.stale"
+			audience = AudienceReviewer
 			text = fmt.Sprintf("%s #%d: verdict stale - %s %s is on %s, head is %s; review %s",
 				key, item.Number, strings.ToUpper(verdict.Decision), verdict.SHA, verdict.SHA, cr.HeadSHA, cr.HeadSHA)
-		}
-		if text == "" {
+			detail = text
+		default:
 			continue
 		}
 		seen[item.Number] = true
 		add(Intent{
 			Kind: IntentRaiseDecision, Project: key, Item: item.Number, Text: text,
-			Event: Event{Actor: "decide", Kind: kind, Subject: fmt.Sprintf("#%d", item.Number), Detail: text},
+			Audience: audience, ChangeRequest: cr.Number, HeadSHA: cr.HeadSHA,
+			Event: Event{Actor: "decide", Kind: kind, Subject: fmt.Sprintf("#%d", item.Number), Detail: detail},
 		})
 	}
 
@@ -343,6 +387,61 @@ func openCRFor(crs []CRState, item int) bool {
 		}
 	}
 	return false
+}
+
+// shaToken matches a git sha as prose carries one: 7 to 40 hex characters on
+// word boundaries. It is the plan's read of "this row is about this head",
+// not a parser — a row whose text names no sha is a seat's own row.
+var shaToken = regexp.MustCompile(`(?i)\b[0-9a-f]{7,40}\b`)
+
+// rowText is the text a row's dedupe reads: the body, trimmed the way the
+// dispatcher's own issue match trims it, plus the summary.
+func rowText(row Row) string {
+	text := row.Body
+	if len(text) > 400 {
+		text = text[:400]
+	}
+	return text + " " + row.Summary
+}
+
+func rowNamesItem(row Row, item int) bool {
+	for _, match := range issueNumber.FindAllStringSubmatch(rowText(row), -1) {
+		if number, err := strconv.Atoi(match[1]); err == nil && number == item {
+			return true
+		}
+	}
+	return false
+}
+
+// askedForHead is the per-(item, head) dedupe the plan can honour without
+// state (#265): the question a raise left behind comes back in the snapshot
+// as a live row, and D3 has the question's body name the head sha. A live row
+// already naming this head is the same question standing; a live row naming
+// no sha is a seat at work and keeps the old quiet; only a question row for a
+// different head — some live row names a sha and none names this one — asks
+// again.
+func askedForHead(rows []Row, item int, head string) bool {
+	naming, asked, question := false, false, false
+	for _, row := range rows {
+		if !rowLive(row) || !rowNamesItem(row, item) {
+			continue
+		}
+		naming = true
+		text := rowText(row)
+		if head != "" && strings.Contains(text, head) {
+			asked = true
+		}
+		if shaToken.MatchString(text) {
+			question = true
+		}
+	}
+	if !naming {
+		return false // no live row: nothing has been asked
+	}
+	if asked {
+		return true // this head's question stands
+	}
+	return !question // a question for another head: ask again; seat work only: stay quiet
 }
 
 func endedDispatchFor(dispatches []DispatchState, item int) bool {

@@ -1,6 +1,7 @@
 package decide
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -171,9 +172,110 @@ func TestIncidentParked(t *testing.T) {
 	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "abc123"}}
 	plan := PlanTick(s, planNow)
 	intents := findIntents(plan, IntentRaiseDecision)
-	want := "test #5: Connection pool has an open change request with no verdict and no live row. Accept it, reject it, or reopen the seat?"
+	want := "test #5 Connection pool: change request #20 has no verdict for head abc123. Approve or reject it on the item drawer (POST /api/items/5/verdict) or reply fleet: accept / fleet: reject on the item."
 	if len(intents) != 1 || intents[0].Text != want {
 		t.Fatalf("intents = %+v, want question %q", plan.Intents, want)
+	}
+}
+
+// TestNoVerdictAsksTheOperator is #265's audience split: a missing verdict is
+// the operator's question, not the reviewer seat's — the intent says who it
+// is for, carries the facts the brief prints verbatim, and its event names
+// the kind and the head the dedupe keys on.
+func TestNoVerdictAsksTheOperator(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "aaaa111"}}
+	plan := PlanTick(s, planNow)
+	intents := findIntents(plan, IntentRaiseDecision)
+	if len(intents) != 1 {
+		t.Fatalf("intents = %+v, want one decision", plan.Intents)
+	}
+	intent := intents[0]
+	if intent.Audience != AudienceOperator {
+		t.Fatalf("audience = %v, want operator", intent.Audience)
+	}
+	if intent.Event.Kind != "decision.no_verdict" {
+		t.Fatalf("event kind = %q, want decision.no_verdict", intent.Event.Kind)
+	}
+	if intent.ChangeRequest != 20 || intent.HeadSHA != "aaaa111" {
+		t.Fatalf("intent = %+v, want the change request and head carried for the brief", intent)
+	}
+	if !strings.Contains(intent.Event.Detail, "head=aaaa111") {
+		t.Fatalf("detail = %q, want head=aaaa111", intent.Event.Detail)
+	}
+	for _, want := range []string{"#5", "#20", "aaaa111", "POST /api/items/5/verdict", "fleet: accept", "fleet: reject"} {
+		if !strings.Contains(intent.Text, want) {
+			t.Fatalf("text = %q, want it to name %q", intent.Text, want)
+		}
+	}
+}
+
+// TestNoVerdictIsAskedOncePerHead is the per-(item, head) dedupe, as the plan
+// can see it: the question a raise left behind is a live row in the snapshot,
+// and the same head stays quiet while a moved head asks again.
+func TestNoVerdictIsAskedOncePerHead(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "aaaa111"}}
+	plan := PlanTick(s, planNow)
+	asked := findIntents(plan, IntentRaiseDecision)
+	if len(asked) != 1 || !strings.Contains(asked[0].Text, "aaaa111") {
+		t.Fatalf("intents = %+v, want one question naming aaaa111", plan.Intents)
+	}
+	// The raise happened: the operator's row is live and its body names the
+	// head, the way D3's question body does.
+	s.Rows = append(s.Rows, Row{QItemID: "qitem-op-1", State: "pending", Pickup: "unclaimed",
+		Destination: "human@kernel", Body: asked[0].Text})
+	plan = PlanTick(s, planNow)
+	if len(findIntents(plan, IntentRaiseDecision)) != 0 {
+		t.Fatalf("intents = %+v, want none while the same head's question stands", plan.Intents)
+	}
+	// The head moves: the standing question is about a different commit, so
+	// one new question names the new sha.
+	s.CRs[0].HeadSHA = "bbbb222"
+	plan = PlanTick(s, planNow)
+	moved := findIntents(plan, IntentRaiseDecision)
+	if len(moved) != 1 || !strings.Contains(moved[0].Text, "bbbb222") {
+		t.Fatalf("intents = %+v, want one question naming bbbb222", plan.Intents)
+	}
+	if moved[0].HeadSHA != "bbbb222" || moved[0].ChangeRequest != 20 {
+		t.Fatalf("intent = %+v, want the new head carried for the brief", moved[0])
+	}
+}
+
+// TestStaleVerdictAsksTheReviewerOncePerHead: the re-review stays the
+// reviewer's job (D4) and is deduped per (item, head) the same way — quiet
+// while the standing row names this head, asked again when the head moves.
+func TestStaleVerdictAsksTheReviewerOncePerHead(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "bbbb222"}}
+	s.Verdicts = []VerdictState{{Item: 5, SHA: "aaaa111", Decision: "accept"}}
+	plan := PlanTick(s, planNow)
+	asked := findIntents(plan, IntentRaiseDecision)
+	if len(asked) != 1 {
+		t.Fatalf("intents = %+v, want one re-review question", plan.Intents)
+	}
+	if asked[0].Audience != AudienceReviewer {
+		t.Fatalf("audience = %v, want reviewer", asked[0].Audience)
+	}
+	if asked[0].Event.Kind != "decision.stale" {
+		t.Fatalf("event kind = %q, want decision.stale", asked[0].Event.Kind)
+	}
+	// The re-review row is live and its text names both shas, the old verdict
+	// and the head it asks about.
+	s.Rows = append(s.Rows, Row{QItemID: "qitem-rr-1", State: "pending", Pickup: "unclaimed",
+		Destination: "dev-review@r", Body: asked[0].Text})
+	plan = PlanTick(s, planNow)
+	if len(findIntents(plan, IntentRaiseDecision)) != 0 {
+		t.Fatalf("intents = %+v, want none while the same head's re-review stands", plan.Intents)
+	}
+	s.CRs[0].HeadSHA = "cccc333"
+	plan = PlanTick(s, planNow)
+	moved := findIntents(plan, IntentRaiseDecision)
+	if len(moved) != 1 || !strings.Contains(moved[0].Text, "cccc333") {
+		t.Fatalf("intents = %+v, want one re-review naming cccc333", plan.Intents)
+	}
+	if moved[0].Audience != AudienceReviewer {
+		t.Fatalf("audience = %v, want reviewer", moved[0].Audience)
 	}
 }
 
