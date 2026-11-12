@@ -140,6 +140,7 @@ func (a *Actions) RaisePermissionDecision(ctx context.Context, in PermissionInpu
 		Destination: "human@kernel",
 		Summary:     fmt.Sprintf("#%d: forge refused %s (permission denied)", in.Item, operation),
 		BodyFile:    path,
+		EvidenceRef: path,
 		Source:      "human@kernel",
 	})
 	if err != nil {

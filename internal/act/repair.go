@@ -69,6 +69,7 @@ func (a *Actions) RaiseMergeRepair(ctx context.Context, projectKey string, failu
 		Destination: "human@kernel",
 		Summary:     summary,
 		BodyFile:    path,
+		EvidenceRef: path,
 		Source:      "human@kernel",
 	})
 	if err != nil {

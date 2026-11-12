@@ -196,7 +196,10 @@ func (a *Adapter) QueueShow(ctx context.Context, id string) (*QueueItem, error) 
 	return wire.item()
 }
 
-// CreateRequest is the create surface the dispatcher needs.
+// CreateRequest is the create surface the dispatcher needs. EvidenceRef is the
+// durable artifact a human judges — the brief path the row's body was rendered
+// from; it is mandatory for a human-routed destination and refused locally
+// without one (convention C3).
 type CreateRequest struct {
 	Destination string
 	Summary     string
@@ -204,12 +207,16 @@ type CreateRequest struct {
 	Source      string
 	Priority    string
 	Tags        []string
+	EvidenceRef string
 }
 
 // QueueCreate creates a row and returns it.
 func (a *Adapter) QueueCreate(ctx context.Context, req CreateRequest) (*QueueItem, error) {
 	if req.Destination == "" || req.Summary == "" || req.BodyFile == "" {
 		return nil, fmt.Errorf("queue create: destination, summary and body file are required")
+	}
+	if err := guardHumanCreate(req); err != nil {
+		return nil, err
 	}
 	args := []string{"queue", "create", "--destination", req.Destination, "--summary", req.Summary, "--body-file", req.BodyFile, "--json"}
 	if req.Source != "" {
@@ -220,6 +227,9 @@ func (a *Adapter) QueueCreate(ctx context.Context, req CreateRequest) (*QueueIte
 	}
 	if len(req.Tags) > 0 {
 		args = append(args, "--tags", strings.Join(req.Tags, ","))
+	}
+	if ref := strings.TrimSpace(req.EvidenceRef); ref != "" {
+		args = append(args, "--evidence-ref", ref)
 	}
 	return a.writeItem(ctx, "queue create", args...)
 }
@@ -304,6 +314,23 @@ type runnerFunc func(ctx context.Context, args ...string) ([]byte, error)
 // Run implements Runner.
 func (f runnerFunc) Run(ctx context.Context, args ...string) ([]byte, error) { return f(ctx, args...) }
 
+// RefusalError is the daemon's structured refusal of a queue write: the CLI
+// exited non-zero but printed its JSON error to stdout, which ExecRunner keeps.
+// Missing names the fields the daemon demanded, so the caller can fix the
+// request instead of re-reading a wrapped exit status.
+type RefusalError struct {
+	Code    string
+	Missing []string
+	Command string
+	Cause   error
+}
+
+func (e *RefusalError) Error() string {
+	return fmt.Sprintf("%s: daemon refused: %s (missing: %s)", e.Command, e.Code, strings.Join(e.Missing, ", "))
+}
+
+func (e *RefusalError) Unwrap() error { return e.Cause }
+
 // writeItemRunner runs one write through an explicit runner and decodes the
 // queue item it closed or created.
 func (a *Adapter) writeItemRunner(runner Runner, ctx context.Context, command string, args ...string) (*QueueItem, error) {
@@ -312,6 +339,13 @@ func (a *Adapter) writeItemRunner(runner Runner, ctx context.Context, command st
 	}
 	data, err := runner.Run(ctx, args...)
 	if err != nil {
+		var refusal struct {
+			Error         string   `json:"error"`
+			MissingFields []string `json:"missingFields"`
+		}
+		if decodeErr := decode(data, &refusal); decodeErr == nil && refusal.Error != "" {
+			return nil, &RefusalError{Code: refusal.Error, Missing: refusal.MissingFields, Command: command, Cause: err}
+		}
 		return nil, err
 	}
 	var envelope struct {
