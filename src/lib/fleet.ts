@@ -160,7 +160,17 @@ export interface Project {
   runtime?: string;
   rig_template?: string;
   labels?: Record<string, string>;
-  onhold?: boolean | null;
+  /** The DB-owned pause (design D5): true means the act loop skips this project. The file's
+   *  `onhold:` is folded in by the boot pass, so the board reads one flag. */
+  onhold: boolean;
+  /** The merged view's facts, from the list read alone (design D7). `source` says where the row
+   *  lives — `both` is the ordinary case, `db` a store-only project the file no longer names, and
+   *  an edit is refused for one of those because the file is the source of an edit. */
+  source: "file" | "both" | "db";
+  enabled: boolean;
+  items: number;
+  dispatches: number;
+  live_dispatch: number;
   gate_cmd?: string;
 }
 
@@ -306,6 +316,46 @@ export const createProject = (input: CreateProjectInput) =>
     method: "POST",
     body: JSON.stringify(input),
   });
+
+/** The edit's answer: the stored project, the field names that changed and the loader's warnings. */
+export interface UpdateProjectResponse {
+  project: Project;
+  changed: string[];
+  warnings: string[] | null;
+}
+
+/** Replaces the whole definition (design D2). The key is immutable — a body naming a different one
+ *  is a `422` on `key` — and an identity change under a live dispatch is a `409` whose message
+ *  carries the remedy: pause the project, wait for the row to end, then retry (design D3). */
+export const updateProject = (key: string, input: CreateProjectInput) =>
+  request<UpdateProjectResponse>(`/api/projects/${encodeURIComponent(key)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+
+/** The DB-owned pause (design D5). Never writes the config file, so the pause survives a boot. */
+export const setProjectOnhold = (key: string, onhold: boolean) =>
+  request<UpdateProjectResponse>(`/api/projects/${encodeURIComponent(key)}/onhold`, {
+    method: "PUT",
+    body: JSON.stringify({ onhold }),
+  });
+
+/** What a delete removed — the same numbers the dialog warned with (design D7). */
+export interface DeleteProjectResponse {
+  deleted: {
+    items: number;
+    dispatches: number;
+    verdicts: number;
+  };
+}
+
+/** Deletes the file entry and the store's rows for it (design D1's order). `confirm` must equal the
+ *  key; a live dispatch refuses with the remedy, and a half-finished delete resumes on retry. */
+export const deleteProject = (key: string, confirm: string) =>
+  request<DeleteProjectResponse>(
+    `/api/projects/${encodeURIComponent(key)}?confirm=${encodeURIComponent(confirm)}`,
+    { method: "DELETE" },
+  );
 
 /** The four checks for a registered project. */
 export const getPreflight = (key: string) =>

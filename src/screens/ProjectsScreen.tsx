@@ -1,19 +1,32 @@
-/** Projects: the registry the dispatcher reads, and the one form that adds to it.
+/** Projects: the registry the dispatcher reads, and the surface that keeps it true.
  *
- *  The list comes from `GET /api/projects`; the dialog posts the config file's own field names and
- *  puts a `422` on the input it names. Client-side rules mirror the server's, so the common mistake
+ *  The list comes from `GET /api/projects`; the dialogs post the config file's own field names and
+ *  put a `422` on the input it names. Client-side rules mirror the server's, so the common mistake
  *  costs no round trip — and a field the server refuses still wins, because its message replaces
  *  the local one. A create that succeeds but warns (a `paths.main` that does not exist yet) keeps
- *  the dialog open with the note: the project exists, and the operator still has to clone it. */
+ *  the dialog open with the note: the project exists, and the operator still has to clone it.
+ *
+ *  Each row carries its own actions. Edit reuses the create form with the key pinned — the key is
+ *  immutable, so a rename is a delete and a create. Pause flips the DB-owned flag the dispatcher
+ *  reads, never the file. Delete counts what it removes from the list row itself (design D7) and
+ *  asks for the key to be typed; a live dispatch refuses both with the remedy in the message. */
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
-import { createProject, getProjects, isApiError } from "../lib/fleet";
-import type { CreateProjectInput, Project } from "../lib/fleet";
+import { Pause, Pencil, Play, Plus, Trash2 } from "lucide-react";
+import {
+  createProject,
+  deleteProject,
+  getProjects,
+  isApiError,
+  setProjectOnhold,
+  updateProject,
+} from "../lib/fleet";
+import type { ApiError, CreateProjectInput, Project } from "../lib/fleet";
 import {
   Badge,
   Button,
+  ConfirmDialog,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -126,16 +139,52 @@ function splitRigs(value: string): string[] {
     .filter(Boolean);
 }
 
+/** What the delete dialog says, from the list row alone (design D7: one set of numbers, from the
+ *  list to the cascade). The rigs are named because deleting a registration does not stop a seat —
+ *  it only stops the dispatcher planning work for them. */
+function deleteDescription(project: Project): string {
+  const rows =
+    `${project.items} ${project.items === 1 ? "item" : "items"} and ` +
+    `${project.dispatches} ${project.dispatches === 1 ? "dispatch" : "dispatches"} would be removed.`;
+  const rigs =
+    project.rigs.length > 0
+      ? `Rigs ${project.rigs.map((rig) => `“${rig}”`).join(", ")} keep running — only the registration goes.`
+      : "No rig is registered on it.";
+  return `${rows} ${rigs}`;
+}
+
+/** The draft as the edit dialog opens it: the row itself, read back into the form's shape. */
+function draftFromProject(project: Project): Draft {
+  return {
+    key: project.key,
+    name: project.name,
+    forge: project.forge === "gitlab" ? "gitlab" : "github",
+    repo: project.repo,
+    default_branch: project.default_branch,
+    rigs: project.rigs.join(", "),
+    concurrency_cap: String(project.concurrency_cap),
+    runtime: project.runtime ?? "omp",
+    paths_main: project.paths?.main ?? "",
+    paths_worktrees: project.paths?.worktrees ?? "",
+  };
+}
+
 /** The rules the loader applies, so the common mistake costs no round trip. `existing` is the
- *  registry as listed: the loader also refuses a rig claimed by two projects, and a file it refuses
- *  is a registry the service can no longer list. */
-function validate(draft: Draft, existing: Project[]): Record<string, string> {
+ *  registry as listed — the edit dialog passes it without the project being edited, so a rig the
+ *  project already holds does not read as a collision with itself — and `editing` skips the key
+ *  checks, because the key cannot change on an edit. A file the loader refuses is a registry the
+ *  service can no longer list. */
+function validate(draft: Draft, existing: Project[], editing: boolean): Record<string, string> {
   const errors: Record<string, string> = {};
-  if (!draft.key.trim()) errors.key = "A key is required.";
-  else if (!KEY_RE.test(draft.key.trim()))
-    errors.key = "Lowercase letters, digits and hyphens only, up to 32 characters, starting with a letter or digit.";
-  else if (existing.some((project) => project.key === draft.key.trim()))
-    errors.key = "A project with that key is already registered.";
+  if (editing) {
+    if (!draft.key.trim()) errors.key = "A key is required.";
+  } else {
+    if (!draft.key.trim()) errors.key = "A key is required.";
+    else if (!KEY_RE.test(draft.key.trim()))
+      errors.key = "Lowercase letters, digits and hyphens only, up to 32 characters, starting with a letter or digit.";
+    else if (existing.some((project) => project.key === draft.key.trim()))
+      errors.key = "A project with that key is already registered.";
+  }
   if (!draft.name.trim()) errors.name = "A name is required.";
   if (!draft.repo.trim()) errors.repo = "A repo is required, as owner/name.";
   if (!draft.default_branch.trim()) errors.default_branch = "A default branch is required.";
@@ -168,16 +217,39 @@ export function ProjectsScreen() {
   // The project whose preflight is open. A row is the entry point: the surface exists to answer
   // "will this dispatch?", and that question belongs to one project, not to the list.
   const [inspecting, setInspecting] = useState<Project | null>(null);
+  // The row whose edit dialog is open; null means the dialog (when open) is a create. The same
+  // form serves both — the fields are the file's fields either way.
+  const [editing, setEditing] = useState<Project | null>(null);
+  // The row whose delete dialog is open, and the refusal it last answered.
+  const [confirming, setConfirming] = useState<Project | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // The board lists projects from its own query; refreshing both means a change is there without a
+  // reload (`design.md` §6). Every success path below waits on it.
+  const refreshBoth = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["projects"] }),
+      queryClient.invalidateQueries({ queryKey: ["board"] }),
+    ]);
+  };
+
+  // A `422` names its field; put each message on the input it belongs to and keep anything else as
+  // a dialog-level sentence. Create and edit share it, so the two dialogs cannot drift.
+  const applyFieldErrors = (error: ApiError) => {
+    const onField: Record<string, string> = {};
+    const rest: string[] = [];
+    for (const [field, message] of Object.entries(error.fieldErrors)) {
+      if (FIELD_KEYS[field]) onField[field] = message;
+      else rest.push(message);
+    }
+    setErrors(onField);
+    setFormError(rest.length > 0 ? rest.join(" ") : null);
+  };
 
   const create = useMutation({
     mutationFn: (input: CreateProjectInput) => createProject(input),
     onSuccess: async (response) => {
-      // The board lists projects from its own query; refreshing both means the new project is there
-      // without a reload (`design.md` §6).
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["projects"] }),
-        queryClient.invalidateQueries({ queryKey: ["board"] }),
-      ]);
+      await refreshBoth();
       setDraft(BLANK);
       setErrors({});
       setFormError(null);
@@ -191,21 +263,77 @@ export function ProjectsScreen() {
     },
     onError: (error) => {
       if (isApiError(error) && Object.keys(error.fieldErrors).length > 0) {
-        const onField: Record<string, string> = {};
-        const rest: string[] = [];
-        for (const [field, message] of Object.entries(error.fieldErrors)) {
-          if (FIELD_KEYS[field]) onField[field] = message;
-          else rest.push(message);
-        }
-        setErrors(onField);
-        setFormError(rest.length > 0 ? rest.join(" ") : null);
+        applyFieldErrors(error);
         return;
       }
       setFormError(isApiError(error) ? error.message : "The service could not be reached.");
     },
   });
 
-  const busy = create.isPending;
+  const update = useMutation({
+    mutationFn: ({ key, input }: { key: string; input: CreateProjectInput }) =>
+      updateProject(key, input),
+    onSuccess: async (response) => {
+      await refreshBoth();
+      setOpen(false);
+      setEditing(null);
+      setErrors({});
+      setFormError(null);
+      const changed =
+        response.changed.length > 0 ? `changed: ${response.changed.join(", ")}` : "no field changed";
+      const warnings = response.warnings ?? [];
+      toast.done(
+        `“${response.project.name}” updated`,
+        warnings.length > 0 ? `${changed}. ${warnings.join(" ")}` : changed,
+      );
+    },
+    onError: (error) => {
+      if (isApiError(error) && Object.keys(error.fieldErrors).length > 0) {
+        applyFieldErrors(error);
+        return;
+      }
+      // A `409` is dialog-level on purpose: the server's message names the dispatch, the item and
+      // the branch, and carries the remedy — pause the project, wait for the row to end, then edit.
+      setFormError(isApiError(error) ? error.message : "The service could not be reached.");
+    },
+  });
+
+  const pause = useMutation({
+    mutationFn: (project: Project) => setProjectOnhold(project.key, !project.onhold),
+    onSuccess: async (response) => {
+      await refreshBoth();
+      toast.done(
+        response.project.onhold ? `“${response.project.name}” paused` : `“${response.project.name}” resumed`,
+        response.project.onhold
+          ? "The dispatcher will not plan new work for it."
+          : "The dispatcher plans work for it again.",
+      );
+    },
+    onError: (error) => {
+      toast.problem(isApiError(error) ? error.message : "The service could not be reached.");
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: (project: Project) =>
+      deleteProject(project.key, project.key).then((response) => ({ project, response })),
+    onSuccess: async ({ project, response }) => {
+      await refreshBoth();
+      setConfirming(null);
+      setDeleteError(null);
+      toast.done(
+        `“${project.name}” deleted`,
+        `items=${response.deleted.items}, dispatches=${response.deleted.dispatches}, verdicts=${response.deleted.verdicts} removed.`,
+      );
+    },
+    onError: (error) => {
+      // Shown inside the dialog: a live dispatch refuses with the remedy — pause first, wait for
+      // the row to end, then delete — and a step failure names the step it stopped at.
+      setDeleteError(isApiError(error) ? error.message : "The service could not be reached.");
+    },
+  });
+
+  const busy = create.isPending || update.isPending;
 
   const change = (field: keyof Draft, value: string) => {
     setDraft((current) => ({ ...current, [field]: value }));
@@ -219,7 +347,17 @@ export function ProjectsScreen() {
   };
 
   const openDialog = () => {
+    setEditing(null);
     setDraft(BLANK);
+    setErrors({});
+    setFormError(null);
+    setCreated(null);
+    setOpen(true);
+  };
+
+  const openEditDialog = (project: Project) => {
+    setEditing(project);
+    setDraft(draftFromProject(project));
     setErrors({});
     setFormError(null);
     setCreated(null);
@@ -229,17 +367,28 @@ export function ProjectsScreen() {
   const closeDialog = () => {
     if (busy) return;
     setOpen(false);
+    setEditing(null);
     setCreated(null);
     setFormError(null);
     setErrors({});
   };
 
+  const openDeleteDialog = (project: Project) => {
+    setConfirming(project);
+    setDeleteError(null);
+  };
+
   const submit = () => {
-    const found = validate(draft, projects.data?.projects ?? []);
+    // The edit compares against the registry without the project itself, so its own rigs and key
+    // do not read as collisions with themselves.
+    const listed = projects.data?.projects ?? [];
+    const others = editing ? listed.filter((project) => project.key !== editing.key) : listed;
+    const found = validate(draft, others, !!editing);
     setErrors(found);
     setFormError(null);
     if (Object.keys(found).length > 0) return;
-    create.mutate(draftInput(draft));
+    if (editing) update.mutate({ key: editing.key, input: draftInput(draft) });
+    else create.mutate(draftInput(draft));
   };
 
   const list = projects.data?.projects ?? [];
@@ -301,6 +450,7 @@ export function ProjectsScreen() {
                     <th className="label px-3 py-1.5 font-medium text-ink-muted">Repo</th>
                     <th className="label px-3 py-1.5 font-medium text-ink-muted">Rigs</th>
                     <th className="label px-3 py-1.5 text-right font-medium text-ink-muted">Cap</th>
+                    <th className="label px-3 py-1.5 text-right font-medium text-ink-muted">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -341,6 +491,57 @@ export function ProjectsScreen() {
                       <td className="num px-3 py-[var(--density-row-pad-y)] text-right text-ink">
                         {project.concurrency_cap}
                       </td>
+                      <td
+                        className="px-3 py-[var(--density-row-pad-y)] text-right"
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => event.stopPropagation()}
+                      >
+                        <span className="inline-flex items-center justify-end gap-1">
+                          <Button
+                            variant="quiet"
+                            size="sm"
+                            icon={<Pencil size={13} aria-hidden="true" />}
+                            disabled={project.source === "db"}
+                            title={
+                              project.source === "db"
+                                ? "This project lives only in the database. The config file is the source of an edit, so only delete applies here."
+                                : "Edit this project"
+                            }
+                            onClick={() => openEditDialog(project)}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            variant="quiet"
+                            size="sm"
+                            icon={
+                              project.onhold ? (
+                                <Play size={13} aria-hidden="true" />
+                              ) : (
+                                <Pause size={13} aria-hidden="true" />
+                              )
+                            }
+                            title={
+                              project.onhold
+                                ? "Let the dispatcher plan work for it again"
+                                : "Stop the dispatcher from planning new work for it"
+                            }
+                            onClick={() => pause.mutate(project)}
+                            busy={pause.isPending && pause.variables?.key === project.key}
+                          >
+                            {project.onhold ? "Resume" : "Pause"}
+                          </Button>
+                          <Button
+                            variant="quiet"
+                            size="sm"
+                            icon={<Trash2 size={13} aria-hidden="true" />}
+                            title="Delete this project"
+                            onClick={() => openDeleteDialog(project)}
+                          >
+                            Delete
+                          </Button>
+                        </span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -358,11 +559,15 @@ export function ProjectsScreen() {
       >
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{created ? "Project created" : "New project"}</DialogTitle>
+            <DialogTitle>
+              {created ? "Project created" : editing ? `Edit ${editing.name}` : "New project"}
+            </DialogTitle>
             <DialogDescription>
               {created
                 ? "The project is written and on the board. Below is what the service could not check yet."
-                : "Every field here is a field in config.yaml. The service validates the same rules and names the field it refuses."}
+                : editing
+                  ? "The same fields the create form validates, written back over the entry in config.yaml. The service validates the same rules and names the field it refuses."
+                  : "Every field here is a field in config.yaml. The service validates the same rules and names the field it refuses."}
             </DialogDescription>
           </DialogHeader>
 
@@ -395,7 +600,12 @@ export function ProjectsScreen() {
                   value={draft.key}
                   onChange={(event) => change("key", event.target.value)}
                   error={errors.key}
-                  hint="Lowercase, hyphenated — the name the other surfaces use."
+                  hint={
+                    editing
+                      ? "Immutable — delete and recreate to change it."
+                      : "Lowercase, hyphenated — the name the other surfaces use."
+                  }
+                  disabled={!!editing}
                   autoComplete="off"
                 />
                 <TextInput
@@ -495,7 +705,7 @@ export function ProjectsScreen() {
                   Cancel
                 </Button>
                 <Button variant="primary" onClick={submit} busy={busy}>
-                  Create project
+                  {editing ? "Save changes" : "Create project"}
                 </Button>
               </>
             )}
@@ -503,9 +713,24 @@ export function ProjectsScreen() {
           {/* The live panel: it runs against the draft, and creation stays enabled whatever it
               says. Refusing to write a half-configured project is how the registry starts lying
               about what exists. */}
-          {!created && draft.key.trim() ? <DraftPreflight input={draftInput(draft)} enabled /> : null}
+          {!created && !editing && draft.key.trim() ? <DraftPreflight input={draftInput(draft)} enabled /> : null}
         </DialogContent>
       </Dialog>
+
+      {confirming ? (
+        <ConfirmDialog
+          open
+          onClose={() => setConfirming(null)}
+          onConfirm={() => remove.mutate(confirming)}
+          title={`Delete “${confirming.name}”?`}
+          description={deleteDescription(confirming)}
+          confirmLabel="Delete project"
+          requireTyped={confirming.key}
+          typedLabel={`Type “${confirming.key}” to confirm`}
+          busy={remove.isPending}
+          error={deleteError ?? undefined}
+        />
+      ) : null}
     </div>
   );
 }
