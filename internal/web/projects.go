@@ -1,11 +1,15 @@
 package web
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/dinhtrung/fleet-console/internal/config"
@@ -52,7 +56,11 @@ type ProjectRequest struct {
 	} `json:"paths"`
 }
 
-// ProjectResponse is one project as the board reads it back.
+// ProjectResponse is one project as the board reads it. Enabled and OnHold are
+// the store's own view — the DB-owned pause, not the file's `onhold:` — for any
+// project that has a row; counts come from one grouped query, never a
+// per-project loop (design D7). A file-only project reports enabled and its
+// file-pinned onhold, with zero counts.
 type ProjectResponse struct {
 	Key            string            `json:"key"`
 	Name           string            `json:"name"`
@@ -64,7 +72,11 @@ type ProjectResponse struct {
 	ConcurrencyCap int               `json:"concurrency_cap"`
 	GateCmd        string            `json:"gate_cmd"`
 	Labels         map[string]string `json:"labels"`
-	OnHold         *bool             `json:"onhold"`
+	Enabled        bool              `json:"enabled"`
+	OnHold         bool              `json:"onhold"`
+	Items          int64             `json:"items"`
+	Dispatches     int64             `json:"dispatches"`
+	LiveDispatch   int64             `json:"live_dispatch"`
 	CultureFile    string            `json:"culture_file"`
 	Paths          struct {
 		Main      string `json:"main"`
@@ -82,31 +94,181 @@ type CreateProjectResponse struct {
 	Warnings []string        `json:"warnings"`
 }
 
+// EditProjectResponse is PUT /api/projects/{key}'s answer: the stored project,
+// the field names that changed, and the loader's warnings.
+type EditProjectResponse struct {
+	Project  ProjectResponse `json:"project"`
+	Changed  []string        `json:"changed"`
+	Warnings []string        `json:"warnings"`
+}
+
+// OnHoldRequest is PUT /api/projects/{key}/onhold's body. OnHold stays
+// untyped on purpose: a strict *bool decode turns a non-boolean into 400
+// malformed JSON, and the contract here is 422 on the `onhold` field.
+type OnHoldRequest struct {
+	OnHold any `json:"onhold"`
+}
+
+// DeleteCounts is what the delete removed — the same numbers the dialog warned
+// with (design D7: one set of numbers, from the list to the cascade).
+type DeleteCounts struct {
+	Items      int64 `json:"items"`
+	Dispatches int64 `json:"dispatches"`
+	Verdicts   int64 `json:"verdicts"`
+}
+
+type DeleteProjectResponse struct {
+	Deleted DeleteCounts `json:"deleted"`
+}
+
 type ErrorResponse struct {
 	Error  string            `json:"error"`
 	Errors map[string]string `json:"errors,omitempty"`
 }
 
-// RegisterProjectsRoutes registers GET /api/projects and POST /api/projects
-// inside the authenticated API group.
+// RegisterProjectsRoutes registers the projects surface inside the
+// authenticated API group: the merged list, the create, the edit, the
+// DB-owned pause and the delete (tasks §3).
 func RegisterProjectsRoutes(api fiber.Router, cfg Config, configPath string) {
 	write := cfg.WriteProject
 	if write == nil {
 		write = configfile.UpsertProject
 	}
-	api.Get("/projects", listProjects(configPath))
+	update := cfg.UpdateProject
+	if update == nil {
+		update = configfile.UpdateProject
+	}
+	remove := cfg.RemoveProject
+	if remove == nil {
+		remove = configfile.RemoveProject
+	}
+	api.Get("/projects", listProjects(cfg.Store, configPath))
 	api.Post("/projects", createProject(cfg.Store, configPath, write))
+	api.Put("/projects/:key", editProject(cfg.Store, configPath, update))
+	api.Put("/projects/:key/onhold", setProjectOnHold(cfg.Store, configPath))
+	api.Delete("/projects/:key", deleteProject(cfg.Store, configPath, remove))
 }
 
-func listProjects(configPath string) fiber.Handler {
+// mergedView is one read of both layers, joined on key. The list, the pause
+// and the delete all start here, so every route answers from the same picture.
+type mergedView struct {
+	eff    *config.Effective
+	rows   map[string]*store.ProjectRow
+	counts map[int64]store.ProjectCount
+}
+
+func loadMergedView(ctx context.Context, st *store.Store, configPath string) (*mergedView, error) {
+	eff, err := config.Load(config.Options{FlagPath: configPath})
+	if err != nil {
+		return nil, err
+	}
+	rows, err := st.Projects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := st.ProjectCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	view := &mergedView{eff: eff, rows: make(map[string]*store.ProjectRow, len(rows)), counts: counts}
+	for index := range rows {
+		view.rows[rows[index].Key] = &rows[index]
+	}
+	return view, nil
+}
+
+// entry returns the file's definition for a key, if the file names it.
+func (v *mergedView) entry(key string) (config.Project, bool) {
+	return findProject(v.eff.Projects, key)
+}
+
+// sourceClassifies where a project lives (design D7's table).
+func (v *mergedView) source(key string) string {
+	_, inFile := v.entry(key)
+	_, inStore := v.rows[key]
+	switch {
+	case inFile && inStore:
+		return "both"
+	case inFile:
+		return "file"
+	default:
+		return "db"
+	}
+}
+
+// render builds one board row from the merged view: the file's definition when
+// there is one, the store's enabled/onhold and counts when there is a row.
+func (v *mergedView) render(key string) ProjectResponse {
+	project, inFile := v.entry(key)
+	row := v.rows[key]
+	if !inFile {
+		return renderRow(row, v.counts[row.ID], v.source(key))
+	}
+	out := projectResponse(project, v.source(key))
+	if row != nil {
+		out.Enabled = row.Enabled
+		out.OnHold = row.OnHold
+		if count, ok := v.counts[row.ID]; ok {
+			out.Items, out.Dispatches, out.LiveDispatch = count.Items, count.Dispatches, count.LiveDispatch
+		}
+	}
+	return out
+}
+
+// renderRow is the board row of a store-only project: the row is everything
+// the board knows.
+func renderRow(row *store.ProjectRow, count store.ProjectCount, source string) ProjectResponse {
+	out := ProjectResponse{
+		Key:            row.Key,
+		Name:           row.Name,
+		Forge:          row.ForgeKind,
+		Repo:           row.ForgeProject,
+		DefaultBranch:  row.DefaultBranch,
+		Rigs:           row.Rigs,
+		RigTemplate:    row.RigTemplate,
+		ConcurrencyCap: row.ConcurrencyCap,
+		Enabled:        row.Enabled,
+		OnHold:         row.OnHold,
+		Items:          count.Items,
+		Dispatches:     count.Dispatches,
+		LiveDispatch:   count.LiveDispatch,
+		Source:         source,
+	}
+	if out.Rigs == nil {
+		out.Rigs = []string{}
+	}
+	if out.Labels == nil {
+		out.Labels = map[string]string{}
+	}
+	return out
+}
+
+// listProjects answers GET /api/projects: config.Load ∪ store.Projects joined
+// on key, with counts from one grouped query. The route makes no forge call —
+// the list renders on every visit and a per-project forge read would put the
+// board's own traffic into the mirror's rate-limit budget (design D7).
+func listProjects(st *store.Store, configPath string) fiber.Handler {
 	return func(c fiber.Ctx) error {
-		eff, err := config.Load(config.Options{FlagPath: configPath})
+		if configPath == "" {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: "config.yaml path is not configured"})
+		}
+		view, err := loadMergedView(c.Context(), st, configPath)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
 		}
-		projects := make([]ProjectResponse, 0, len(eff.Projects))
-		for _, project := range eff.Projects {
-			projects = append(projects, projectResponse(project, eff.Sources["projects"]))
+		projects := make([]ProjectResponse, 0, len(view.eff.Projects)+len(view.rows))
+		seen := make(map[string]bool, len(view.eff.Projects))
+		for _, project := range view.eff.Projects {
+			projects = append(projects, view.render(project.Key))
+			seen[project.Key] = true
+		}
+		// The store-only rows follow, in the store's own order, so a row the
+		// file does not name is still listed (design D7: it is a --prune
+		// candidate the operator must see).
+		for _, row := range view.rows {
+			if !seen[row.Key] {
+				projects = append(projects, view.render(row.Key))
+			}
 		}
 		return c.JSON(ProjectsListResponse{Projects: projects})
 	}
@@ -156,24 +318,7 @@ func createProject(st *store.Store, configPath string, write func(string, config
 		}
 		expected := sha256.Sum256(data)
 
-		written := configfile.Project{
-			Key:            project.Key,
-			Name:           project.Name,
-			Forge:          project.Forge,
-			Repo:           project.Repo,
-			DefaultBranch:  project.DefaultBranch,
-			Rigs:           project.Rigs.Names(),
-			RigTemplate:    project.RigTemplate,
-			ConcurrencyCap: project.ConcurrencyCap,
-			GateCmd:        project.GateCmd,
-			Labels:         project.Labels,
-			OnHold:         project.OnHold,
-			CultureFile:    project.CultureFile,
-		}
-		written.Paths.Main = project.Paths.Main
-		written.Paths.Worktrees = project.Paths.Worktrees
-
-		outcome, err := write(configPath, written, &expected)
+		outcome, err := write(configPath, writtenProject(project), &expected)
 		if err != nil {
 			return writeFailure(c, configPath, err)
 		}
@@ -201,10 +346,407 @@ func createProject(st *store.Store, configPath string, write func(string, config
 		}
 
 		return c.Status(fiber.StatusCreated).JSON(CreateProjectResponse{
-			Project:  projectResponse(created, eff.Sources["projects"]),
+			Project:  projectWithRow(c.Context(), st, created, "both"),
 			Warnings: warningsFor(eff.Warnings, created),
 		})
 	}
+}
+
+// editProject answers PUT /api/projects/{key}: a whole-definition PUT of the
+// file's project shape (design D2). The key is immutable (D8); an identity
+// change is refused while a dispatch is live (D3); a repo or forge change
+// clears the mirrored items in the same request (D4); one audit row per write
+// (D10). The refusal checks run before the write, so a refused edit writes
+// neither layer — the spec requirement and the unchanged-mtime test both.
+func editProject(st *store.Store, configPath string, write func(string, configfile.Project, *[32]byte) (configfile.Outcome, error)) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		if configPath == "" {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: "config.yaml path is not configured"})
+		}
+		key := c.Params("key")
+		var req ProjectRequest
+		if err := c.Bind().JSON(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{Error: "malformed JSON"})
+		}
+		// D8: a rename is a delete and a create, and both routes say so.
+		if req.Key != "" && req.Key != key {
+			return c.Status(fiber.StatusUnprocessableEntity).JSON(ErrorResponse{
+				Error:  "validation failed",
+				Errors: map[string]string{"key": "key is immutable; delete and recreate"},
+			})
+		}
+		req.Key = key
+
+		dir := filepath.Dir(configPath)
+		project := requestProject(req)
+		if err := config.ValidateProject(&project, dir, homeDir()); err != nil {
+			return validationFailure(c, err)
+		}
+
+		view, err := loadMergedView(c.Context(), st, configPath)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+		}
+		oldEntry, inFile := view.entry(key)
+		row, inStore := view.rows[key]
+		if !inFile && !inStore {
+			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
+				Error: fmt.Sprintf("project %q is not registered", key),
+			})
+		}
+		if !inFile {
+			// D7: a store-only project is a --prune candidate; the file is the
+			// source of an edit, so the edit refuses naming it.
+			return c.Status(fiber.StatusConflict).JSON(ErrorResponse{
+				Error: fmt.Sprintf("project %q lives only in the database; %s is the source of an edit", key, filepath.Base(configPath)),
+			})
+		}
+
+		// D3, before any write: an identity field change under a live dispatch
+		// loses the builder's work at merge time, so it is refused naming the
+		// dispatch, the item and the branch.
+		if _, identity := projectDiff(oldEntry, project); len(identity) > 0 && inStore {
+			if refusal, ok, err := liveDispatchRefusal(c.Context(), st, row.ID); err != nil {
+				return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+			} else if ok {
+				return c.Status(fiber.StatusConflict).JSON(ErrorResponse{Error: refusal})
+			}
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+		}
+		expected := sha256.Sum256(data)
+
+		if _, err := write(configPath, writtenProject(project), &expected); err != nil {
+			return writeFailure(c, configPath, err)
+		}
+
+		eff, err := config.Load(config.Options{FlagPath: configPath})
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+		}
+		newEntry, found := findProject(eff.Projects, key)
+		if !found {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: "project not found after write"})
+		}
+
+		changed, _ := projectDiff(oldEntry, newEntry)
+		if changed == nil {
+			changed = []string{}
+		}
+		if _, err := registry.ApplyOne(c.Context(), st, newEntry, false); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+		}
+
+		// D4: items mirrored from the old repository must not be planned or
+		// dispatched against the new one, so the change clears them in the same
+		// request, after the store upsert and before the response.
+		if slices.Contains(changed, "forge") || slices.Contains(changed, "repo") {
+			fresh, err := st.ProjectByKey(c.Context(), key)
+			if err != nil {
+				return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+			}
+			if fresh != nil {
+				if err := st.ClearItems(c.Context(), fresh.ID); err != nil {
+					return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+				}
+			}
+		}
+
+		if len(changed) > 0 {
+			if _, err := st.AppendEvent(c.Context(), store.Event{
+				Actor: "board", Kind: "project.edit", Subject: "project:" + key,
+				Detail: diffDetail(oldEntry, newEntry, changed),
+			}); err != nil {
+				return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+			}
+		}
+		log.Printf("projects: edit key=%s changed=%s", key, strings.Join(changed, ","))
+
+		return c.JSON(EditProjectResponse{
+			Project:  projectWithRow(c.Context(), st, newEntry, "both"),
+			Changed:  changed,
+			Warnings: warningsFor(eff.Warnings, newEntry),
+		})
+	}
+}
+
+// setProjectOnHold answers PUT /api/projects/{key}/onhold: the DB-owned pause
+// (design D5). It never writes the config file — `enabled` is the flag every
+// upsert resets, `onhold` is the one that survives the boot pass.
+func setProjectOnHold(st *store.Store, configPath string) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		key := c.Params("key")
+		var req OnHoldRequest
+		if err := c.Bind().JSON(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{Error: "malformed JSON"})
+		}
+		onhold, ok := req.OnHold.(bool)
+		if !ok {
+			return c.Status(fiber.StatusUnprocessableEntity).JSON(ErrorResponse{
+				Error:  "validation failed",
+				Errors: map[string]string{"onhold": "onhold must be a boolean"},
+			})
+		}
+		row, err := st.ProjectByKey(c.Context(), key)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+		}
+		if row == nil {
+			return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{
+				Error: fmt.Sprintf("project %q is not registered in the store; the boot pass creates the row the pause sets", key),
+			})
+		}
+		if _, err := st.SetProjectOnHold(c.Context(), row.ID, onhold); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+		}
+		if _, err := st.AppendEvent(c.Context(), store.Event{
+			Actor: "board", Kind: "project.onhold", Subject: "project:" + key,
+			Detail: fmt.Sprintf("onhold %t → %t", row.OnHold, onhold),
+		}); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+		}
+		log.Printf("projects: onhold key=%s onhold=%t", key, onhold)
+		view, err := loadMergedView(c.Context(), st, configPath)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+		}
+		return c.JSON(EditProjectResponse{Project: view.render(key)})
+	}
+}
+
+// deleteProject answers DELETE /api/projects/{key}?confirm=: D1's order —
+// refuse on a live dispatch, pause, remove the file entry, delete the rows —
+// because that is the only order whose half-finished state is safe. Every step
+// is idempotent, so a retry after a failure resumes instead of starting over.
+func deleteProject(st *store.Store, configPath string, remove func(path, key string, expected *[32]byte) (configfile.Outcome, error)) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		if configPath == "" {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: "config.yaml path is not configured"})
+		}
+		key := c.Params("key")
+		// The typed confirmation is the guard against deleting the wrong row.
+		if confirm := c.Query("confirm"); confirm != key {
+			return c.Status(fiber.StatusBadRequest).JSON(ErrorResponse{
+				Error: "confirm must equal the key to delete",
+			})
+		}
+
+		view, err := loadMergedView(c.Context(), st, configPath)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+		}
+		_, inFile := view.entry(key)
+		row, inStore := view.rows[key]
+
+		// D9's replay rule: a delete that already happened is not an error the
+		// client should have to distinguish from a typo when it carries the
+		// right confirm.
+		var counts DeleteCounts
+		if inStore {
+			if count, ok := view.counts[row.ID]; ok {
+				counts = DeleteCounts{Items: count.Items, Dispatches: count.Dispatches, Verdicts: count.Verdicts}
+			}
+		}
+
+		if inStore {
+			if refusal, ok, err := liveDispatchRefusal(c.Context(), st, row.ID); err != nil {
+				return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+			} else if ok {
+				return c.Status(fiber.StatusConflict).JSON(ErrorResponse{Error: refusal})
+			}
+			// Step 1, the pause: the act loop skips an onhold project, so a
+			// failure later in this request cannot leave it planning work.
+			if _, err := st.SetProjectOnHold(c.Context(), row.ID, true); err != nil {
+				return stepFailure(c, "pause", key, err)
+			}
+		}
+
+		// Step 2, the file: the entry must go before the rows, or the next
+		// boot or --apply-config upserts the project back (design D1).
+		if inFile {
+			data, err := os.ReadFile(configPath)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
+			}
+			expected := sha256.Sum256(data)
+			if _, err := remove(configPath, key, &expected); err != nil && !errors.Is(err, configfile.ErrNotFound) {
+				if errors.Is(err, configfile.ErrStaleRead) {
+					return c.Status(fiber.StatusConflict).JSON(ErrorResponse{
+						Error: fmt.Sprintf("%s changed on disk; reload and retry", filepath.Base(configPath)),
+					})
+				}
+				return stepFailure(c, "config file", key, err)
+			}
+		}
+
+		// Step 3, the rows: one transaction over the project's families. Event
+		// rows survive it, by design (D6).
+		if inStore {
+			if err := st.DeleteProject(c.Context(), row.ID); err != nil {
+				return stepFailure(c, "store rows", key, err)
+			}
+		}
+
+		if _, err := st.AppendEvent(c.Context(), store.Event{
+			Actor: "board", Kind: "project.delete", Subject: "project:" + key,
+			Detail: fmt.Sprintf("items=%d dispatches=%d verdicts=%d", counts.Items, counts.Dispatches, counts.Verdicts),
+		}); err != nil {
+			return stepFailure(c, "audit", key, err)
+		}
+		log.Printf("projects: delete key=%s items=%d dispatches=%d verdicts=%d", key, counts.Items, counts.Dispatches, counts.Verdicts)
+
+		return c.JSON(DeleteProjectResponse{Deleted: counts})
+	}
+}
+
+// stepFailure answers 500 naming the step that failed. D1's contract: the
+// project is already paused, so the half-finished state is safe, and the same
+// request retried completes it.
+func stepFailure(c fiber.Ctx, step, key string, err error) error {
+	return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{
+		Error: fmt.Sprintf("delete of %q stopped at the %s step: %v", key, step, err),
+	})
+}
+
+// liveDispatchRefusal is the operator's instruction, not just a status: it
+// names the dispatch, the item and the branch, and the next step. ok is false
+// when no dispatch is live.
+func liveDispatchRefusal(ctx context.Context, st *store.Store, projectID int64) (string, bool, error) {
+	id, live, err := st.LiveDispatch(ctx, projectID)
+	if err != nil || !live {
+		return "", false, err
+	}
+	dispatches, err := st.DispatchesForProject(ctx, projectID)
+	if err != nil {
+		return "", false, err
+	}
+	for _, dispatch := range dispatches {
+		if dispatch.ID != id {
+			continue
+		}
+		return fmt.Sprintf("dispatch %d on item #%d (branch %s) is live; pause the project, wait for the row to end, then retry",
+			dispatch.ID, dispatch.ItemNumber, dispatch.Branch), true, nil
+	}
+	return fmt.Sprintf("dispatch %d is live; pause the project, wait for the row to end, then retry", id), true, nil
+}
+
+// requestProject is the wire shape as the loader's config.Project.
+func requestProject(req ProjectRequest) config.Project {
+	project := config.Project{
+		Key:            req.Key,
+		Name:           req.Name,
+		Forge:          req.Forge,
+		Repo:           req.Repo,
+		DefaultBranch:  req.DefaultBranch,
+		Rigs:           rigRefsFromNames(req.Rigs),
+		RigTemplate:    req.RigTemplate,
+		ConcurrencyCap: req.ConcurrencyCap,
+		GateCmd:        req.GateCmd,
+		Labels:         req.Labels,
+		OnHold:         req.OnHold,
+		CultureFile:    req.CultureFile,
+	}
+	project.Paths.Main = req.Paths.Main
+	project.Paths.Worktrees = req.Paths.Worktrees
+	return project
+}
+
+// writtenProject is the config-file shape of a validated definition, the same
+// conversion the create route has always made.
+func writtenProject(project config.Project) configfile.Project {
+	written := configfile.Project{
+		Key:            project.Key,
+		Name:           project.Name,
+		Forge:          project.Forge,
+		Repo:           project.Repo,
+		DefaultBranch:  project.DefaultBranch,
+		Rigs:           project.Rigs.Names(),
+		RigTemplate:    project.RigTemplate,
+		ConcurrencyCap: project.ConcurrencyCap,
+		GateCmd:        project.GateCmd,
+		Labels:         project.Labels,
+		OnHold:         project.OnHold,
+		CultureFile:    project.CultureFile,
+	}
+	written.Paths.Main = project.Paths.Main
+	written.Paths.Worktrees = project.Paths.Worktrees
+	return written
+}
+
+// projectDiff compares two file entries on the fields the API carries and
+// classifies each as identity (frozen while a dispatch is live, design D3) or
+// harmless. Fields the API does not carry — repo_url, runtime, lifecycle —
+// pass through the write unchanged and are never in the diff.
+func projectDiff(oldEntry, newEntry config.Project) (changed, identity []string) {
+	add := func(name string, isIdentity bool, equal bool) {
+		if equal {
+			return
+		}
+		changed = append(changed, name)
+		if isIdentity {
+			identity = append(identity, name)
+		}
+	}
+	add("name", false, oldEntry.Name == newEntry.Name)
+	add("forge", true, oldEntry.Forge == newEntry.Forge)
+	add("repo", true, oldEntry.Repo == newEntry.Repo)
+	add("default_branch", true, oldEntry.DefaultBranch == newEntry.DefaultBranch)
+	add("rigs", true, slices.Equal(oldEntry.Rigs.Names(), newEntry.Rigs.Names()))
+	add("concurrency_cap", false, oldEntry.ConcurrencyCap == newEntry.ConcurrencyCap)
+	add("rig_template", false, oldEntry.RigTemplate == newEntry.RigTemplate)
+	add("gate_cmd", false, oldEntry.GateCmd == newEntry.GateCmd)
+	add("labels", false, maps.Equal(oldEntry.Labels, newEntry.Labels))
+	add("culture_file", false, oldEntry.CultureFile == newEntry.CultureFile)
+	add("paths.main", true, oldEntry.Paths.Main == newEntry.Paths.Main)
+	add("paths.worktrees", true, oldEntry.Paths.Worktrees == newEntry.Paths.Worktrees)
+	return changed, identity
+}
+
+// diffDetail is the audit row's detail: the changed fields with their old and
+// new values, `field old → new` (design D10).
+func diffDetail(oldEntry, newEntry config.Project, changed []string) string {
+	oldValues := map[string]any{
+		"name": oldEntry.Name, "forge": oldEntry.Forge, "repo": oldEntry.Repo,
+		"default_branch": oldEntry.DefaultBranch, "rigs": oldEntry.Rigs.Names(),
+		"concurrency_cap": oldEntry.ConcurrencyCap, "rig_template": oldEntry.RigTemplate,
+		"gate_cmd": oldEntry.GateCmd, "labels": oldEntry.Labels,
+		"culture_file": oldEntry.CultureFile,
+		"paths.main": oldEntry.Paths.Main, "paths.worktrees": oldEntry.Paths.Worktrees,
+	}
+	newValues := map[string]any{
+		"name": newEntry.Name, "forge": newEntry.Forge, "repo": newEntry.Repo,
+		"default_branch": newEntry.DefaultBranch, "rigs": newEntry.Rigs.Names(),
+		"concurrency_cap": newEntry.ConcurrencyCap, "rig_template": newEntry.RigTemplate,
+		"gate_cmd": newEntry.GateCmd, "labels": newEntry.Labels,
+		"culture_file": newEntry.CultureFile,
+		"paths.main": newEntry.Paths.Main, "paths.worktrees": newEntry.Paths.Worktrees,
+	}
+	parts := make([]string, 0, len(changed))
+	for _, field := range changed {
+		parts = append(parts, fmt.Sprintf("%s %v → %v", field, oldValues[field], newValues[field]))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// projectWithRow answers the stored project as the merged view renders it: the
+// file's resolved definition plus the store's enabled/onhold and counts.
+func projectWithRow(ctx context.Context, st *store.Store, project config.Project, source string) ProjectResponse {
+	out := projectResponse(project, source)
+	row, err := st.ProjectByKey(ctx, project.Key)
+	if err != nil || row == nil {
+		return out
+	}
+	out.Enabled = row.Enabled
+	out.OnHold = row.OnHold
+	if counts, err := st.ProjectCounts(ctx); err == nil {
+		if count, ok := counts[row.ID]; ok {
+			out.Items, out.Dispatches, out.LiveDispatch = count.Items, count.Dispatches, count.LiveDispatch
+		}
+	}
+	return out
 }
 
 // validationFailure answers 422 with one message per field.
@@ -242,6 +784,8 @@ func writeFailure(c fiber.Ctx, configPath string, err error) error {
 		})
 	case errors.Is(err, configfile.ErrDuplicateKey):
 		return c.Status(fiber.StatusConflict).JSON(ErrorResponse{Error: err.Error()})
+	case errors.Is(err, configfile.ErrNotFound):
+		return c.Status(fiber.StatusNotFound).JSON(ErrorResponse{Error: err.Error()})
 	default:
 		return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
 	}
@@ -298,7 +842,8 @@ func projectResponse(project config.Project, source string) ProjectResponse {
 		ConcurrencyCap: project.ConcurrencyCap,
 		GateCmd:        project.GateCmd,
 		Labels:         project.Labels,
-		OnHold:         project.OnHold,
+		Enabled:        true,
+		OnHold:         project.OnHold != nil && *project.OnHold,
 		CultureFile:    project.CultureFile,
 		Source:         source,
 	}

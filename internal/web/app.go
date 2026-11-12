@@ -32,6 +32,16 @@ type Config struct {
 	// A test installs a wrapper here to hand-edit the file between the request's
 	// read and its write, which is the stale-read case.
 	WriteProject func(path string, in configfile.Project, expected *[32]byte) (configfile.Outcome, error)
+	// UpdateProject is the config editor the edit route uses, defaulting to
+	// configfile.UpdateProject — an edit replaces its entry in place; routing
+	// it through UpsertProject would insert a duplicate key. A test installs
+	// the same wrapper WriteProject takes, for the stale-read case.
+	UpdateProject func(path string, in configfile.Project, expected *[32]byte) (configfile.Outcome, error)
+	// RemoveProject is the config-file remover, defaulting to
+	// configfile.RemoveProject. The delete's failure test installs a wrapper
+	// that refuses the file step after the pause, which is design D1's
+	// half-finished state, without permissions games.
+	RemoveProject func(path, key string, expected *[32]byte) (configfile.Outcome, error)
 	// WriteSettings is the settings writer, defaulting to configfile.UpdateSettings.
 	// A test installs a wrapper here to hand-edit the file between the request's
 	// read and its write, which is the stale-read case.
