@@ -129,6 +129,7 @@ Seat transcript directory: %s (one file per occupant account)
 		Destination: "human@kernel",
 		Summary:     fmt.Sprintf("#%d: dispatch produced no change request in %d minutes", in.Item, minutes),
 		BodyFile:    path,
+		EvidenceRef: path,
 		Source:      "human@kernel",
 	})
 	if err != nil {

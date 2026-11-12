@@ -148,7 +148,7 @@ func (a *Actions) RaiseOperatorQuestion(ctx context.Context, project store.Proje
 		summary = summary[:120]
 	}
 	row, err := a.Rig.QueueCreate(ctx, rig.CreateRequest{
-		Destination: "human@kernel", Summary: summary, BodyFile: path, Source: "human@kernel",
+		Destination: "human@kernel", Summary: summary, BodyFile: path, Source: "human@kernel", EvidenceRef: path,
 	})
 	if err != nil {
 		return nil, err

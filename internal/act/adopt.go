@@ -178,6 +178,7 @@ func raiseAdoptionDecision(ctx context.Context, rg AdoptionRig, project store.Pr
 		Destination: "human@kernel",
 		Summary:     fmt.Sprintf("ambiguous dispatch: #%d has %d queue rows", dispatch.ItemNumber, len(matches)),
 		BodyFile:    path,
+		EvidenceRef: path,
 		Source:      "human@kernel",
 	})
 	if err != nil {

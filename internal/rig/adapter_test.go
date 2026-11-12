@@ -2,6 +2,7 @@ package rig
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -293,5 +294,85 @@ func TestQueueHandoffEnvelope(t *testing.T) {
 	}
 	if got.ID != "qitem-20261028164026-242c10cda7e2c6b3" {
 		t.Fatalf("handoff must return the created row, got %+v", got)
+	}
+}
+
+// TestQueueCreateSendsEvidenceRef: a human-routed create carries the evidence
+// the human judges — the brief path — and a seat-routed create sends no
+// --evidence-ref flag at all.
+func TestQueueCreateSendsEvidenceRef(t *testing.T) {
+	runner := &scriptedRunner{fn: func([]string) ([]byte, error) {
+		return fixtureBytes(t, "queue-show.json"), nil
+	}}
+	adapter := NewAdapter(runner)
+	ctx := context.Background()
+	if _, err := adapter.QueueCreate(ctx, CreateRequest{Destination: "human@kernel", Summary: "s",
+		BodyFile: "/tmp/b", EvidenceRef: "/tmp/qa-282-brief.md"}); err != nil {
+		t.Fatalf("human create: %v", err)
+	}
+	last := runner.calls[0]
+	if last[len(last)-2] != "--evidence-ref" || last[len(last)-1] != "/tmp/qa-282-brief.md" {
+		t.Fatalf("human create argv must end --evidence-ref <path>: %v", last)
+	}
+
+	if _, err := adapter.QueueCreate(ctx, CreateRequest{Destination: "dev-review@rig", Summary: "s",
+		BodyFile: "/tmp/b"}); err != nil {
+		t.Fatalf("seat create: %v", err)
+	}
+	for _, arg := range runner.calls[1] {
+		if arg == "--evidence-ref" {
+			t.Fatalf("seat create sent --evidence-ref: %v", runner.calls[1])
+		}
+	}
+}
+
+// TestQueueCreateRefusesHumanDestinationWithoutEvidence: the refusal happens
+// locally, before argv is built and without running the CLI, so the caller
+// gets errors.Is(rig.ErrMissingEvidenceRef) instead of the daemon's bare 400.
+func TestQueueCreateRefusesHumanDestinationWithoutEvidence(t *testing.T) {
+	runner := &scriptedRunner{fn: func([]string) ([]byte, error) {
+		return fixtureBytes(t, "queue-show.json"), nil
+	}}
+	adapter := NewAdapter(runner)
+	ctx := context.Background()
+	for _, destination := range []string{"human@kernel", "human-alice@host"} {
+		_, err := adapter.QueueCreate(ctx, CreateRequest{Destination: destination, Summary: "s", BodyFile: "/tmp/b"})
+		if !errors.Is(err, ErrMissingEvidenceRef) {
+			t.Fatalf("create for %s = %v; want ErrMissingEvidenceRef", destination, err)
+		}
+		if runner.count() != 0 {
+			t.Fatalf("the refusal ran the CLI anyway: %v", runner.calls)
+		}
+	}
+	if _, err := adapter.QueueCreate(ctx, CreateRequest{Destination: "dev-review@rig", Summary: "s", BodyFile: "/tmp/b"}); err != nil {
+		t.Fatalf("a seat create needs no evidence_ref: %v", err)
+	}
+}
+
+// TestWriteItemParsesPreWriteRefusal: the CLI prints its structured refusal to
+// stdout and exits non-zero, which ExecRunner keeps, so the write surfaces a
+// RefusalError instead of a bare wrapped exit status.
+func TestWriteItemParsesPreWriteRefusal(t *testing.T) {
+	runner := &scriptedRunner{fn: func([]string) ([]byte, error) {
+		return []byte(`{"error":"human_route_fields_required","missingFields":["evidence_ref"]}`),
+			fmt.Errorf("queue create ...: exit status 1")
+	}}
+	_, err := NewAdapter(runner).QueueCreate(context.Background(), CreateRequest{Destination: "dev-review@rig",
+		Summary: "s", BodyFile: "/tmp/b"})
+	var refusal *RefusalError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("err = %v; want a RefusalError", err)
+	}
+	if refusal.Code != "human_route_fields_required" {
+		t.Fatalf("code = %q", refusal.Code)
+	}
+	if len(refusal.Missing) != 1 || refusal.Missing[0] != "evidence_ref" {
+		t.Fatalf("missing = %v", refusal.Missing)
+	}
+	if refusal.Command != "queue create" {
+		t.Fatalf("command = %q", refusal.Command)
+	}
+	if refusal.Unwrap() == nil || !strings.Contains(refusal.Error(), "daemon refused: human_route_fields_required (missing: evidence_ref)") {
+		t.Fatalf("render = %q", refusal.Error())
 	}
 }
