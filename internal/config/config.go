@@ -60,10 +60,34 @@ type Project struct {
 	// board derives it from the first rig; the loader resolves ~ here so the
 	// running service never has to guess at a home directory.
 	CultureFile string `yaml:"culture_file"`
-	Paths       struct {
+	// VerdictRelay is the per-project verdict relay (verdict-relay, design D8).
+	// It is a pointer so an absent block is distinguishable from an empty one:
+	// both are off, but an empty block is still validated. Off means today's
+	// behaviour — no relay rows, operator questions stay on human@kernel.
+	VerdictRelay *VerdictRelay `yaml:"verdict_relay,omitempty"`
+	Paths        struct {
 		Main      string `yaml:"main"`
 		Worktrees string `yaml:"worktrees"`
 	} `yaml:"paths"`
+}
+
+// Relay modes. The relay is off unless a project names one of these in its
+// verdict_relay block; there is no default (D8 — an upgraded binary must not
+// start creating rows to a seat that may not exist).
+const (
+	// RelayModeScribe routes a relayed verdict to a seat of the project's own
+	// rig; operator questions keep going to human@kernel.
+	RelayModeScribe = "scribe"
+	// RelayModeOperator additionally routes the project's operator questions to
+	// the configured seat instead of human@kernel.
+	RelayModeOperator = "operator"
+)
+
+// VerdictRelay is the verdict_relay block. Seat is required whenever Mode is
+// set — no suffixing, no default — and an empty block means off.
+type VerdictRelay struct {
+	Mode string `yaml:"mode"`
+	Seat string `yaml:"seat"`
 }
 
 // File is the YAML shape. KnownFields rejects anything else.
@@ -666,6 +690,30 @@ func (e *Effective) Print() ([]byte, error) {
 	return yaml.Marshal(out)
 }
 
+// RelayFor resolves a project's verdict_relay block (verdict-relay, design D8)
+// into the (mode, seat) pair. A project with no block, or a block that names
+// no mode, is ("", "") — off. This is the one lookup path: the decide arm
+// (T2) and the act raise (T3) both call it, so the running process answers
+// this pair and no other.
+func (e *Effective) RelayFor(projectKey string) (mode, seat string) {
+	project := findProjectByKey(e.Projects, projectKey)
+	if project == nil || project.VerdictRelay == nil || project.VerdictRelay.Mode == "" {
+		return "", ""
+	}
+	return project.VerdictRelay.Mode, project.VerdictRelay.Seat
+}
+
+// findProjectByKey is the linear lookup by key. findProject in
+// internal/web carries a different return shape, so config owns its own.
+func findProjectByKey(projects []Project, key string) *Project {
+	for index := range projects {
+		if projects[index].Key == key {
+			return &projects[index]
+		}
+	}
+	return nil
+}
+
 // validateCultureFile resolves a project's culture_file against the config's
 // directory and home, and refuses a value the board could not edit: it must name
 // a markdown file, not a directory, absolute or ~-rooted. An unset key is the
@@ -814,6 +862,22 @@ func ValidateProject(p *Project, dir, home string) error {
 	case "", "on", "off":
 	default:
 		add("lifecycle", "lifecycle must be on or off, not %q", p.Lifecycle)
+	}
+	// verdict_relay (verdict-relay, design D8): a mode outside the two
+	// constants is refused on verdict_relay.mode; a mode with an empty seat is
+	// refused on verdict_relay.seat. An absent or empty block is off, not an
+	// error. No default seat, no default mode, no global setting.
+	if relay := p.VerdictRelay; relay != nil {
+		relay.Mode = strings.TrimSpace(relay.Mode)
+		relay.Seat = strings.TrimSpace(relay.Seat)
+		switch relay.Mode {
+		case "", RelayModeScribe, RelayModeOperator:
+		default:
+			add("verdict_relay.mode", "verdict_relay.mode must be %s or %s, not %q", RelayModeScribe, RelayModeOperator, relay.Mode)
+		}
+		if relay.Mode != "" && relay.Seat == "" {
+			add("verdict_relay.seat", "verdict_relay.seat is required when verdict_relay.mode is set")
+		}
 	}
 	if p.RigTemplate == "" {
 		p.RigTemplate = "default"

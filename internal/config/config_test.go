@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -465,4 +466,121 @@ func TestRuntimeEnum(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestVerdictRelay: the block's six shapes (verdict-relay tasks §1.1/§1.2, design D8).
+// Absent and empty are off; scribe and operator resolve through RelayFor; an
+// unknown mode and a mode without a seat are field errors; and --print-config
+// shows the effective mode and seat an operator can prove the process read.
+func TestVerdictRelay(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("absent is off", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "projects:\n  - {key: a, forge: github, repo: o/r, rigs: [r]}\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if eff.Projects[0].VerdictRelay != nil {
+			t.Fatalf("VerdictRelay = %+v, want nil (absent block)", eff.Projects[0].VerdictRelay)
+		}
+		mode, seat := eff.RelayFor("a")
+		if mode != "" || seat != "" {
+			t.Fatalf("RelayFor = (%q, %q), want (\"\", \"\")", mode, seat)
+		}
+	})
+
+	t.Run("empty block is off, not an error", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    verdict_relay: {}\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if eff.Projects[0].VerdictRelay == nil {
+			t.Fatalf("VerdictRelay = nil, want an empty block (distinguishable from absent)")
+		}
+		mode, seat := eff.RelayFor("a")
+		if mode != "" || seat != "" {
+			t.Fatalf("RelayFor = (%q, %q), want (\"\", \"\")", mode, seat)
+		}
+	})
+
+	t.Run("scribe and operator resolve", func(t *testing.T) {
+		for name, mode := range map[string]string{"scribe": RelayModeScribe, "operator": RelayModeOperator} {
+			t.Run(name, func(t *testing.T) {
+				path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    verdict_relay:\n      mode: "+mode+"\n      seat: relay-seat@my-rig\n")
+				eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+				if err != nil {
+					t.Fatalf("load: %v", err)
+				}
+				gotMode, seat := eff.RelayFor("a")
+				if gotMode != mode || seat != "relay-seat@my-rig" {
+					t.Fatalf("RelayFor = (%q, %q), want (%q, relay-seat@my-rig)", gotMode, seat, mode)
+				}
+			})
+		}
+	})
+
+	t.Run("unknown mode is a field error on verdict_relay.mode", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    verdict_relay:\n      mode: broadcast\n      seat: relay-seat@my-rig\n")
+		_, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err == nil {
+			t.Fatalf("load accepted an unknown mode")
+		}
+		fields := validationFields(t, err)
+		if fields["verdict_relay.mode"] == "" {
+			t.Fatalf("errors = %v, want one on verdict_relay.mode", fields)
+		}
+	})
+
+	t.Run("mode without seat is a field error on verdict_relay.seat", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    verdict_relay:\n      mode: scribe\n")
+		_, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err == nil {
+			t.Fatalf("load accepted a mode without a seat")
+		}
+		fields := validationFields(t, err)
+		if fields["verdict_relay.seat"] == "" {
+			t.Fatalf("errors = %v, want one on verdict_relay.seat", fields)
+		}
+	})
+
+	t.Run("unknown key inside the block is a strict-decode error", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    verdict_relay:\n      mode: scribe\n      seat: relay-seat@my-rig\n      queue: side\n")
+		_, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err == nil {
+			t.Fatalf("load accepted an unknown key inside verdict_relay")
+		}
+		if !strings.Contains(err.Error(), "queue") {
+			t.Fatalf("error = %v, want it to name the unknown key", err)
+		}
+	})
+
+	t.Run("print-config shows the mode and seat per project", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    verdict_relay:\n      mode: scribe\n      seat: relay-seat@my-rig\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		printed, err := eff.Print()
+		if err != nil {
+			t.Fatalf("print: %v", err)
+		}
+		if !strings.Contains(string(printed), "verdict_relay") ||
+			!strings.Contains(string(printed), "mode: scribe") ||
+			!strings.Contains(string(printed), "seat: relay-seat@my-rig") {
+			t.Fatalf("print lacks the resolved block:\n%s", printed)
+		}
+	})
+}
+
+// validationFields returns the per-field messages of a ValidationError, or a
+// map with only "config" for a non-validation error.
+func validationFields(t *testing.T, err error) map[string]string {
+	t.Helper()
+	var invalid *ValidationError
+	if errors.As(err, &invalid) {
+		return invalid.Fields()
+	}
+	return map[string]string{"config": err.Error()}
 }
