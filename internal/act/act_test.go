@@ -200,16 +200,42 @@ func TestVerdictCapture(t *testing.T) {
 			{ID: "2", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T11:00:00Z"},
 			{ID: "1", Body: "REJECT deadbee", CreatedAt: "2026-10-29T10:00:00Z"},
 		}, "accept", false},
-		// The defect this contract fixes: a rejection that cannot be tied to the
-		// head stops the merge instead of falling through to an older accept.
-		{"truncated sha in a rejection blocks", "abc1234", []forge.Comment{
+		// A sha shorter than seven characters still names this head when it is a
+		// prefix of it: "abc12" is a claim about abc1234 and nothing else. Short
+		// and *not* a prefix names no commit, so the note is skipped.
+		{"short sha that prefixes the head rejects", "abc1234", []forge.Comment{
 			{ID: "2", Body: "REJECT abc12", CreatedAt: "2026-10-29T11:00:00Z"},
 			{ID: "1", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
-		}, "", true},
-		{"rejection with no sha blocks", "abc1234", []forge.Comment{
+		}, "reject", false},
+		// A rejection that names no commit cannot be attributed: it does not
+		// fall through to the older accept (the merge stays stopped) and it does
+		// not refuse with a sha the note never wrote — it asks the operator (D3).
+		{"rejection with no sha refuses, the tick asks", "abc1234", []forge.Comment{
 			{ID: "2", Body: "REJECT", CreatedAt: "2026-10-29T11:00:00Z"},
 			{ID: "1", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
 		}, "", true},
+		// The shapes a model actually wraps a verdict in (#368/#369).
+		{"qa label", "abc1234", []forge.Comment{
+			{ID: "1", Body: "QA ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "accept", false},
+		{"icon and bold", "abc1234", []forge.Comment{
+			{ID: "1", Body: "✅ **ACCEPT abc1234**", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "accept", false},
+		{"link text", "abc1234", []forge.Comment{
+			{ID: "1", Body: "[ACCEPT](https://example.test/commit/deadbee) abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "accept", false},
+		{"label on its own line, sha below", "abc1234", []forge.Comment{
+			{ID: "1", Body: "Verdict\nACCEPT\nabc1234", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "accept", false},
+		{"both polarities ask the operator", "abc1234", []forge.Comment{
+			{ID: "1", Body: "ACCEPT abc1234\n\nREJECT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "question", false},
+		{"a negated verdict asks the operator", "abc1234", []forge.Comment{
+			{ID: "1", Body: "Verdict: not ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "question", false},
+		{"a short sha that is not the head", "abc1234", []forge.Comment{
+			{ID: "1", Body: "ACCEPT ffff", CreatedAt: "2026-10-29T10:00:00Z"},
+		}, "none", false},
 		{"rejection of another sha blocks", "abc1234", []forge.Comment{
 			{ID: "2", Body: "REJECT ffffffff", CreatedAt: "2026-10-29T11:00:00Z"},
 			{ID: "1", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
@@ -237,6 +263,22 @@ func TestVerdictCapture(t *testing.T) {
 			}
 			actions := &Actions{Store: st, Now: func() time.Time { return now }}
 			captured, err := actions.CaptureVerdict(ctx, dispatchID, 5, test.head, test.notes)
+			if test.want == "question" {
+				var unresolved *UnresolvedVerdictError
+				if !errors.As(err, &unresolved) {
+					t.Fatalf("err = %v, want UnresolvedVerdictError", err)
+				}
+				if captured != nil {
+					t.Fatalf("captured = %+v, want none on a question", captured)
+				}
+				return
+			}
+			if test.want == "none" {
+				if err != nil || captured != nil {
+					t.Fatalf("captured = %+v, err = %v, want neither", captured, err)
+				}
+				return
+			}
 			if test.wantErr {
 				if !errors.Is(err, ErrUnattributableVerdict) {
 					t.Fatalf("err = %v, want ErrUnattributableVerdict", err)

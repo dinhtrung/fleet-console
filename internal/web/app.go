@@ -83,7 +83,7 @@ func New(cfg Config) (*fiber.App, error) {
 		IdleTimeout:  60 * time.Second,
 	})
 	hub := NewHub()
-	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor}
+	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor, Waker: cfg.Waker}
 
 	app.Use(idempotency())
 	app.Get("/api/health", func(c fiber.Ctx) error {

@@ -117,6 +117,9 @@ func (f *Fleet) ItemVerdict(c fiber.Ctx) error {
 			f.raisePermission(ctx, project, item, request, "comment", err, attempt)
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
+		// The verdict is on the forge; the tick that reads it should not wait out
+		// the idle backoff (up to idle_poll_max) to capture and merge on it.
+		wake(f.Waker)
 		ready := false
 		if verdict == "accept" && request.Draft {
 			if err := source.Ready(ctx, request.Number); err != nil {

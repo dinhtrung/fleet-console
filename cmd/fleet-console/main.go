@@ -882,12 +882,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 				}
 				gitRunner := act.ExecGit{RepoPath: source.RepoPath, DefaultBranch: project.DefaultBranch}
 				projectKey := project.Key
+				// The project's verdict_relay resolution: the seat a relay is
+				// asked to write into, and the destination an operator question
+				// goes to. Read once per tick from the effective config, so a
+				// project that sets no block keeps human@kernel.
+				relayMode, relaySeat := eff.RelayFor(projectKey)
 				report, err := act.RunTick(ctx, act.TickInput{
 					Store: db, Project: project, Forge: source.Forge,
 					Rig: rig.NewAdapter(rigRunner), Git: gitRunner, Gate: gate, Apply: true,
 					Items: projectRead.Items, CRs: projectRead.CRs, Rows: projectRead.Rows,
 					Plan: plan, WorktreeRoot: worktreeRoot(eff, project, source),
-					LifecycleFailed: lifecycleFailed,
+					LifecycleFailed: lifecycleFailed, RelayMode: relayMode, RelaySeat: relaySeat,
 					// A raised decision reaches the phone from here: the tick
 					// knows the row exists, and the notifier owns the transport.
 					// The note goes on the item first when decision_notes is on, so

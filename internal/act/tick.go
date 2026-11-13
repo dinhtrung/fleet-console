@@ -230,6 +230,15 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 				alreadyNoted = noteMalformedVerdict(ctx, actions, item, keyFor(malformed.NoteID),
 					fmt.Sprintf("%s head=%s; line=%s", keyFor(malformed.NoteID), request.HeadSHA, firstLine(malformed.Line)))
 			}
+			// Nothing below this line resolves a note the gate cannot read, so
+			// the tick asks the operator seat once per (note, head) instead of
+			// leaving the merge parked for a human to notice (design D3).
+			if question, asks := questionFromError(err, request.HeadSHA); asks {
+				if _, raiseErr := actions.RaiseVerdictQuestion(ctx, in.Project.Key, item, request.Number, question,
+					operatorDestination(in.RelayMode, in.RelaySeat), in.WorktreeRoot); raiseErr != nil {
+					report.Skipped = append(report.Skipped, fmt.Sprintf("#%d verdict question: %v", item, raiseErr))
+				}
+			}
 			// The line is silence only on a later tick over the same note —
 			// already on the ledger (design D2); the audit row is the durable
 			// signal. The tick that wrote the row prints it, and a ledger

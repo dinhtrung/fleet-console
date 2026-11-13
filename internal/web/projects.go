@@ -14,6 +14,7 @@ import (
 
 	"github.com/dinhtrung/fleet-console/internal/config"
 	"github.com/dinhtrung/fleet-console/internal/configfile"
+	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/registry"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/gofiber/fiber/v3"
@@ -139,6 +140,17 @@ type ErrorResponse struct {
 	Errors map[string]string `json:"errors,omitempty"`
 }
 
+// wake asks the mirror loop for a tick now. A board write changes what the next
+// tick would see, and a quiet loop may be idling on its backoff (idle_poll_max,
+// ten minutes by default), so without this the new project is invisible for
+// minutes and the operator reads it as a dead daemon. Nil is safe: the one-shot
+// commands run no loop.
+func wake(w *mirror.Waker) {
+	if w != nil {
+		w.Wake()
+	}
+}
+
 // RegisterProjectsRoutes registers the projects surface inside the
 // authenticated API group: the merged list, the create, the edit, the
 // DB-owned pause and the delete (tasks §3).
@@ -156,10 +168,10 @@ func RegisterProjectsRoutes(api fiber.Router, cfg Config, configPath string) {
 		remove = configfile.RemoveProject
 	}
 	api.Get("/projects", listProjects(cfg.Store, configPath))
-	api.Post("/projects", createProject(cfg.Store, configPath, write))
-	api.Put("/projects/:key", editProject(cfg.Store, configPath, update))
-	api.Put("/projects/:key/onhold", setProjectOnHold(cfg.Store, configPath))
-	api.Delete("/projects/:key", deleteProject(cfg.Store, configPath, remove))
+	api.Post("/projects", createProject(cfg.Store, configPath, write, cfg.Waker))
+	api.Put("/projects/:key", editProject(cfg.Store, configPath, update, cfg.Waker))
+	api.Put("/projects/:key/onhold", setProjectOnHold(cfg.Store, configPath, cfg.Waker))
+	api.Delete("/projects/:key", deleteProject(cfg.Store, configPath, remove, cfg.Waker))
 }
 
 // mergedView is one read of both layers, joined on key. The list, the pause
@@ -290,7 +302,7 @@ func listProjects(st *store.Store, configPath string) fiber.Handler {
 // createProject validates one definition, writes the file, then upserts the
 // store on the same path --apply-config uses. The order is the promise: a
 // refused write leaves both the file and the store untouched.
-func createProject(st *store.Store, configPath string, write func(string, configfile.Project, *[32]byte) (configfile.Outcome, error)) fiber.Handler {
+func createProject(st *store.Store, configPath string, write func(string, configfile.Project, *[32]byte) (configfile.Outcome, error), waker *mirror.Waker) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		if configPath == "" {
 			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: "config.yaml path is not configured"})
@@ -359,6 +371,8 @@ func createProject(st *store.Store, configPath string, write func(string, config
 		if _, err := registry.ApplyOne(c.Context(), st, created, false); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
 		}
+		// The file and the row are both written: the next tick can see the project.
+		wake(waker)
 
 		return c.Status(fiber.StatusCreated).JSON(CreateProjectResponse{
 			Project:  projectWithRow(c.Context(), st, created, "both"),
@@ -373,7 +387,7 @@ func createProject(st *store.Store, configPath string, write func(string, config
 // clears the mirrored items in the same request (D4); one audit row per write
 // (D10). The refusal checks run before the write, so a refused edit writes
 // neither layer — the spec requirement and the unchanged-mtime test both.
-func editProject(st *store.Store, configPath string, write func(string, configfile.Project, *[32]byte) (configfile.Outcome, error)) fiber.Handler {
+func editProject(st *store.Store, configPath string, write func(string, configfile.Project, *[32]byte) (configfile.Outcome, error), waker *mirror.Waker) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		if configPath == "" {
 			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: "config.yaml path is not configured"})
@@ -479,6 +493,7 @@ func editProject(st *store.Store, configPath string, write func(string, configfi
 			}
 		}
 		log.Printf("projects: edit key=%s changed=%s", key, strings.Join(changed, ","))
+		wake(waker)
 
 		return c.JSON(EditProjectResponse{
 			Project:  projectWithRow(c.Context(), st, newEntry, "both"),
@@ -491,7 +506,7 @@ func editProject(st *store.Store, configPath string, write func(string, configfi
 // setProjectOnHold answers PUT /api/projects/{key}/onhold: the DB-owned pause
 // (design D5). It never writes the config file — `enabled` is the flag every
 // upsert resets, `onhold` is the one that survives the boot pass.
-func setProjectOnHold(st *store.Store, configPath string) fiber.Handler {
+func setProjectOnHold(st *store.Store, configPath string, waker *mirror.Waker) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		key := c.Params("key")
 		var req OnHoldRequest
@@ -524,6 +539,7 @@ func setProjectOnHold(st *store.Store, configPath string) fiber.Handler {
 			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
 		}
 		log.Printf("projects: onhold key=%s onhold=%t", key, onhold)
+		wake(waker)
 		view, err := loadMergedView(c.Context(), st, configPath)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: err.Error()})
@@ -536,7 +552,7 @@ func setProjectOnHold(st *store.Store, configPath string) fiber.Handler {
 // refuse on a live dispatch, pause, remove the file entry, delete the rows —
 // because that is the only order whose half-finished state is safe. Every step
 // is idempotent, so a retry after a failure resumes instead of starting over.
-func deleteProject(st *store.Store, configPath string, remove func(path, key string, expected *[32]byte) (configfile.Outcome, error)) fiber.Handler {
+func deleteProject(st *store.Store, configPath string, remove func(path, key string, expected *[32]byte) (configfile.Outcome, error), waker *mirror.Waker) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		if configPath == "" {
 			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: "config.yaml path is not configured"})
@@ -612,6 +628,7 @@ func deleteProject(st *store.Store, configPath string, remove func(path, key str
 			return stepFailure(c, "audit", key, err)
 		}
 		log.Printf("projects: delete key=%s items=%d dispatches=%d verdicts=%d", key, counts.Items, counts.Dispatches, counts.Verdicts)
+		wake(waker)
 
 		return c.JSON(DeleteProjectResponse{Deleted: counts})
 	}
