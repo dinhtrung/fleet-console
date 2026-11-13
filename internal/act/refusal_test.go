@@ -56,7 +56,7 @@ func TestRaiseOperatorQuestionCarriesEvidence(t *testing.T) {
 	refusalEvidence(t, &created, func(a *Actions) error {
 		project := store.ProjectRow{ID: a.ProjectID, Key: "app", ForgeKind: "github", ForgeProject: "o/r"}
 		_, err := a.RaiseOperatorQuestion(context.Background(), project, 5, noVerdictQuestion,
-			"decision.no_verdict", "AAAA111", a.WorktreeRoot)
+			"decision.no_verdict", "AAAA111", a.WorktreeRoot, "human@kernel")
 		return err
 	})
 	if !strings.Contains(created.EvidenceRef, "operator-app-5-") {
@@ -227,7 +227,7 @@ func TestNoteRefusalLeavesTheRefusalErrorIntactThroughARaise(t *testing.T) {
 	project := store.ProjectRow{ID: 1, Key: "app"}
 
 	_, err := actions.RaiseOperatorQuestion(ctx, project, 5, noVerdictQuestion,
-		"decision.no_verdict", "AAAA111", actions.WorktreeRoot)
+		"decision.no_verdict", "AAAA111", actions.WorktreeRoot, "human@kernel")
 	if err == nil {
 		t.Fatal("raise answered nil, want the refusal")
 	}

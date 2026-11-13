@@ -27,6 +27,9 @@ var (
 	verdictNote  = regexp.MustCompile(`(?i)^(ACCEPT|REJECT)\s+([0-9a-f]{7,40})\b`)
 	verdictToken = regexp.MustCompile(`(?i)^(ACCEPT|REJECT)\b`)
 	newline      = regexp.MustCompile(`\r?\n`)
+	// viaLine is the relay marker's whole grammar (verdict-relay, design D3):
+	// exactly `via: <seat>`, nothing else on the line, nothing after the seat.
+	viaLine = regexp.MustCompile(`^via:\s*(\S+)$`)
 )
 
 // verdictDecoration is the cutset stripDecoration removes from the start of a
@@ -115,6 +118,29 @@ func (e *UnattributedAcceptError) Error() string {
 	return fmt.Sprintf("ACCEPT %s does not name head %s (note %s)", e.Written, e.Head, e.NoteID)
 }
 
+// viaSeat reads the relay marker from a note (verdict-relay, design D3): the
+// second non-empty line, and only when it is exactly `via: <seat>`. Absent or
+// malformed reads as no marker — never an error. A reviewer's own note has no
+// second line, and a mangled one is not a verdict problem: the note itself
+// still decides, it just reads as the reviewer's own.
+func viaSeat(body string) string {
+	nonEmpty := 0
+	for _, line := range newline.Split(body, -1) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		nonEmpty++
+		if nonEmpty == 2 {
+			if match := viaLine.FindStringSubmatch(line); match != nil {
+				return match[1]
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
 // CapturedVerdict is the verdict stored from a reviewer note.
 type CapturedVerdict struct {
 	VerdictID int64
@@ -192,14 +218,16 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 		if stored == "" {
 			stored = sha
 		}
-		return a.storeVerdict(ctx, dispatchID, item, note.ID, stored, decision)
+		return a.storeVerdict(ctx, dispatchID, item, note.ID, stored, decision, viaSeat(note.Body))
 	}
 	return nil, nil
 }
 
 // storeVerdict records the decision once. A tick re-reads the same notes, so the
-// same verdict must not be added twice.
-func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, noteID, sha, decision string) (*CapturedVerdict, error) {
+// same verdict must not be added twice. via is the relay marker the note's
+// second line carried, empty when it did not: the capture event names it so the
+// board can tell a relayed verdict from the reviewer's own.
+func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, noteID, sha, decision, via string) (*CapturedVerdict, error) {
 	// A verdict with no dispatch belongs to the item of one project: adoption's
 	// case. Reading it back unscoped would find another project's row for the same
 	// item number and mistake it for this one.
@@ -219,8 +247,11 @@ func (a *Actions) storeVerdict(ctx context.Context, dispatchID int64, item int, 
 	if err != nil {
 		return nil, err
 	}
-	if _, err := a.event(ctx, "act", "verdict.capture", fmt.Sprintf("#%d", item),
-		fmt.Sprintf("%s %s from note %s", decision, sha, noteID)); err != nil {
+	detail := fmt.Sprintf("%s %s from note %s", decision, sha, noteID)
+	if via != "" {
+		detail += "; via=" + via
+	}
+	if _, err := a.event(ctx, "act", "verdict.capture", fmt.Sprintf("#%d", item), detail); err != nil {
 		return nil, err
 	}
 	return &CapturedVerdict{

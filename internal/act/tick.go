@@ -29,7 +29,14 @@ type TickInput struct {
 	Rows         []rig.QueueRow
 	Plan         decide.Plan
 	WorktreeRoot string
-	Now          func() time.Time
+	// RelayMode and RelaySeat are the project's verdict_relay resolution
+	// (verdict-relay, design D8): the caller resolves them from
+	// config.RelayFor. Empty is relay off, today's behaviour: operator
+	// questions stay on human@kernel and a relay intent is skipped with the
+	// named reason.
+	RelayMode string
+	RelaySeat string
+	Now       func() time.Time
 	// LifecycleFailed names, per rig, the launch failure this tick hit: every
 	// dispatch intent on that rig is skipped with the same named reason rather
 	// than writing a worktree and a row no seat will ever claim (design D5).
@@ -265,8 +272,12 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		var result *RaiseResult
 		var err error
 		if intent.Audience == decide.AudienceOperator {
+			// Operator mode is a destination switch, not a second intent
+			// (verdict-relay, design D4): the configured seat takes the
+			// questions when the project's relay mode is operator, and
+			// human@kernel keeps them otherwise.
 			result, err = actions.RaiseOperatorQuestion(ctx, in.Project, intent.Item, intent.Text,
-				intent.Event.Kind, intent.HeadSHA, in.WorktreeRoot)
+				intent.Event.Kind, intent.HeadSHA, in.WorktreeRoot, operatorDestination(in.RelayMode, in.RelaySeat))
 		} else {
 			result, err = actions.RaiseDecision(ctx, in.Project, intent.Item, intent.Text,
 				intent.Event.Kind, intent.ChangeRequest, intent.HeadSHA, in.WorktreeRoot)
@@ -279,6 +290,42 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			report.Decisions = append(report.Decisions, result.QItemID)
 			// The row exists before the phone is told about it, so a message
 			// never points at something the store cannot show.
+			if in.OnDecision != nil {
+				in.OnDecision(DecisionRaised{QItemID: result.QItemID, Item: intent.Item, Text: intent.Text})
+			}
+		}
+	}
+
+	// The relay (verdict-relay, design D2/D5): the plan named a finished
+	// review without a verdict. This has its own case — never a decision row —
+	// so the two can never share a destination by accident: the relay's
+	// destination is the configured seat in both modes, while an operator
+	// question's is operatorDestination's. The raise reads the review's notes,
+	// writes the brief and creates one row; it writes nothing on the forge and
+	// merges nothing — the note it produces is judged by the merge gate's own
+	// four facts on a later tick.
+	for _, intent := range in.Plan.Intents {
+		if intent.Kind != decide.IntentRelayVerdict {
+			continue
+		}
+		if capturedItems[intent.Item] {
+			report.Skipped = append(report.Skipped, fmt.Sprintf(
+				"#%d relay skipped: this tick captured the verdict the plan called missing", intent.Item))
+			continue
+		}
+		if strings.TrimSpace(in.RelaySeat) == "" {
+			report.Skipped = append(report.Skipped, fmt.Sprintf(
+				"#%d relay skipped: the project has no verdict_relay.seat", intent.Item))
+			continue
+		}
+		result, err := actions.RaiseVerdictRelay(ctx, in.Project, intent.Item, intent.ChangeRequest,
+			intent.Text, intent.Event.Kind, intent.HeadSHA, in.RelaySeat, in.WorktreeRoot)
+		if err != nil {
+			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d relay: %v", intent.Item, err))
+			continue
+		}
+		if !result.NoOp {
+			report.Decisions = append(report.Decisions, result.QItemID)
 			if in.OnDecision != nil {
 				in.OnDecision(DecisionRaised{QItemID: result.QItemID, Item: intent.Item, Text: intent.Text})
 			}
