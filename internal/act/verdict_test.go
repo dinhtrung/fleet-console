@@ -313,18 +313,25 @@ func TestCaptureRejectsAcceptForAnotherSHA(t *testing.T) {
 	}
 }
 
-// TestCaptureStillErrorsOnRejectForAnotherSHA: the rejection path is untouched —
-// deliberately stricter than the accept, it keeps returning
-// UnattributableVerdictError and stores nothing.
+// TestCaptureStillErrorsOnRejectForAnotherSHA: the rejection path is
+// deliberately stricter than the accept — it ends the scan and stores nothing.
+// Its refusal is now its own typed fact (epic #309 §1.1) while staying in the
+// ErrUnattributableVerdict family, so every existing caller keeps its meaning.
 func TestCaptureStillErrorsOnRejectForAnotherSHA(t *testing.T) {
 	const head = "abc1234def5678"
 	_, rows, err := captureAt(t, head, []forge.Comment{
 		{ID: "2", CreatedAt: "2026-11-12T12:30:00Z", Body: "REJECT ffffffff"},
 		{ID: "1", CreatedAt: "2026-11-12T12:00:00Z", Body: "ACCEPT " + head},
 	})
-	var refusal *UnattributableVerdictError
-	if !errors.As(err, &refusal) {
-		t.Fatalf("err = %v, want an UnattributableVerdictError", err)
+	var rejected *UnattributedRejectError
+	if !errors.As(err, &rejected) {
+		t.Fatalf("err = %v, want an UnattributedRejectError", err)
+	}
+	if rejected.Written != "ffffffff" || rejected.Head != head || rejected.NoteID != "2" {
+		t.Fatalf("error = %+v, want written=ffffffff head=%s note=2", rejected, head)
+	}
+	if !errors.Is(err, ErrUnattributableVerdict) {
+		t.Fatalf("err = %v, want it in the ErrUnattributableVerdict family", err)
 	}
 	if len(rows) != 0 {
 		t.Fatalf("verdict rows = %+v, want none", rows)
@@ -347,5 +354,43 @@ func TestCaptureKeepsTheNewestVerdict(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Decision != "accept" {
 		t.Fatalf("rows = %+v, want one accept row", rows)
+	}
+}
+
+// TestUnattributableRejectIdentity pins the two error identities apart
+// (epic #309 §1.1): a REJECT naming another sha is an UnattributedRejectError,
+// a first line whose sha does not parse stays an UnattributableVerdictError,
+// and both answer errors.Is(ErrUnattributableVerdict) — the family identity
+// every existing caller relies on. The caller distinguishes them with
+// errors.As, never by parsing Error().
+func TestUnattributableRejectIdentity(t *testing.T) {
+	const head = "abc1234def5678"
+	_, _, rejectErr := captureAt(t, head, []forge.Comment{
+		{ID: "2", CreatedAt: "2026-11-12T12:30:00Z", Body: "REJECT ffffffff"},
+		{ID: "1", CreatedAt: "2026-11-12T12:00:00Z", Body: "ACCEPT " + head},
+	})
+	var rejected *UnattributedRejectError
+	if !errors.As(rejectErr, &rejected) {
+		t.Fatalf("reject = %v, want an UnattributedRejectError", rejectErr)
+	}
+	var family *UnattributableVerdictError
+	if errors.As(rejectErr, &family) {
+		t.Fatalf("reject classified as the parse-failure type %v, want the types apart", rejectErr)
+	}
+	if !errors.Is(rejectErr, ErrUnattributableVerdict) {
+		t.Fatalf("reject = %v, want the family identity", rejectErr)
+	}
+
+	_, _, parseErr := captureAt(t, head, []forge.Comment{
+		{ID: "2", CreatedAt: "2026-11-12T12:30:00Z", Body: "REJECT"},
+	})
+	if !errors.As(parseErr, &family) {
+		t.Fatalf("parse failure = %v, want an UnattributableVerdictError", parseErr)
+	}
+	if errors.As(parseErr, &rejected) {
+		t.Fatalf("parse failure classified as a rejection %v, want the types apart", parseErr)
+	}
+	if !errors.Is(parseErr, ErrUnattributableVerdict) {
+		t.Fatalf("parse failure = %v, want the family identity", parseErr)
 	}
 }

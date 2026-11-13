@@ -635,3 +635,211 @@ func TestUnattributedAcceptLedgerFailureDoesNotFailTheTick(t *testing.T) {
 		t.Fatalf("skipped = %v, want the refusal named despite the ledger failure", report.Skipped)
 	}
 }
+
+// TestUnattributableRejectIsAuditedOnce: the #455 shape — the newest
+// verdict-shaped note is a REJECT naming another sha. The audit surface gets
+// exactly one verdict.unattributed row per note, with the same vocabulary the
+// ACCEPT arm already writes (epic #309 §0: subject #<item>, detail
+// note=<id>; sha=<written>; head=<head>), and the parse-failure case writes
+// nothing.
+func TestUnattributableRejectIsAuditedOnce(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
+	st := newStore(t)
+	pid := newProject(t, st)
+	fake := forge.NewFake(forge.KindGitHub)
+	fake.ItemsValue = []forge.Item{{Number: 5, Kind: forge.KindTask, State: forge.StateOpen, Title: "Five"}}
+	fake.RequestsValue = []forge.ChangeRequest{{
+		Number: 9, HeadSHA: "3f2a1b9c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+		Body: "Closes #5", DocsOnly: true,
+	}}
+	fake.NotesValue = []forge.Comment{{
+		ID: "n1", Body: "REJECT a7463125", CreatedAt: "2026-11-12T08:00:00Z",
+	}}
+	project := store.ProjectRow{ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r", Rig: "rig", Enabled: true}
+	in := TickInput{
+		Store: st, Project: project, Forge: fake, Rig: &queueStub{}, Git: &fakeGit{},
+		Gate: openGate(), Apply: true, Items: fake.ItemsValue, CRs: fake.RequestsValue,
+		Now: func() time.Time { return now },
+	}
+
+	unattributed := func(t *testing.T, st *store.Store) []store.EventRow {
+		t.Helper()
+		events, err := st.EventsForItem(ctx, 5, 50)
+		if err != nil {
+			t.Fatalf("events: %v", err)
+		}
+		var out []store.EventRow
+		for _, event := range events {
+			if event.Kind == "verdict.unattributed" {
+				out = append(out, event)
+			}
+		}
+		return out
+	}
+
+	first, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	rows := unattributed(t, st)
+	if len(rows) != 1 {
+		t.Fatalf("first tick events = %+v, want one verdict.unattributed", rows)
+	}
+	if rows[0].Subject != "#5" ||
+		rows[0].Detail != "note=n1; sha=a7463125; head=3f2a1b9c4d5e6f708192a3b4c5d6e7f8091a2b3c" {
+		t.Fatalf("event = %s / %q, want the fixed-vocabulary subject and detail", rows[0].Subject, rows[0].Detail)
+	}
+
+	// The same note on the next four ticks is already on the ledger: no second
+	// row. The five-tick shape from the spec, over one refused note.
+	for tick := 2; tick <= 5; tick++ {
+		if _, err := RunTick(ctx, in); err != nil {
+			t.Fatalf("tick %d: %v", tick, err)
+		}
+	}
+	if got := unattributed(t, st); len(got) != 1 {
+		t.Fatalf("five ticks events = %+v, want still one verdict.unattributed", got)
+	}
+	_ = first
+
+	// A parse failure is a malformed note, not a fact about this head: no
+	// record, no dedupe key.
+	fake.NotesValue = []forge.Comment{{
+		ID: "n2", Body: "REJECT", CreatedAt: "2026-11-12T08:00:00Z",
+	}}
+	if _, err := RunTick(ctx, in); err != nil {
+		t.Fatalf("parse-failure tick: %v", err)
+	}
+	if got := unattributed(t, st); len(got) != 1 {
+		t.Fatalf("parse-failure events = %+v, want the row count unchanged", got)
+	}
+}
+
+// TestUnattributableRejectPrintsOnce: the skip line prints on the tick that
+// wrote the row; the next four ticks over the same note print nothing. If the
+// daemon restarts between ticks the event table survives it, so the row count
+// stays one — the restart risk is only the print, and a re-print after a
+// restart is the accepted cost, named here.
+func TestUnattributableRejectPrintsOnce(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
+	st := newStore(t)
+	pid := newProject(t, st)
+	fake := forge.NewFake(forge.KindGitHub)
+	fake.ItemsValue = []forge.Item{{Number: 5, Kind: forge.KindTask, State: forge.StateOpen, Title: "Five"}}
+	fake.RequestsValue = []forge.ChangeRequest{{
+		Number: 9, HeadSHA: "3f2a1b9c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+		Body: "Closes #5", DocsOnly: true,
+	}}
+	fake.NotesValue = []forge.Comment{{
+		ID: "n1", Body: "REJECT a7463125", CreatedAt: "2026-11-12T08:00:00Z",
+	}}
+	in := TickInput{
+		Store: st, Project: store.ProjectRow{ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r", Rig: "rig", Enabled: true},
+		Forge: fake, Rig: &queueStub{}, Git: &fakeGit{},
+		Gate: openGate(), Apply: true, Items: fake.ItemsValue, CRs: fake.RequestsValue,
+		Now: func() time.Time { return now },
+	}
+
+	first, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+	if !hasSkip(first, "REJECT a7463125 does not name head 3f2a1b9c4d5e6f708192a3b4c5d6e7f8091a2b3c") {
+		t.Fatalf("first tick skipped = %v, want the full refusal line", first.Skipped)
+	}
+	for tick := 2; tick <= 5; tick++ {
+		later, err := RunTick(ctx, in)
+		if err != nil {
+			t.Fatalf("tick %d: %v", tick, err)
+		}
+		if hasSkip(later, "verdict:") {
+			t.Fatalf("tick %d skipped = %v, want silence over the same note", tick, later.Skipped)
+		}
+	}
+}
+
+// TestUnattributableRejectNewHeadPrintsAgain: the reviewer posts a new note
+// (what a new head earns), and the new note writes its own row and prints its
+// own line — the note is the key, the head is the evidence.
+func TestUnattributableRejectNewHeadPrintsAgain(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
+	st := newStore(t)
+	pid := newProject(t, st)
+	fake := forge.NewFake(forge.KindGitHub)
+	fake.ItemsValue = []forge.Item{{Number: 5, Kind: forge.KindTask, State: forge.StateOpen, Title: "Five"}}
+	fake.RequestsValue = []forge.ChangeRequest{{
+		Number: 9, HeadSHA: "3f2a1b9c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+		Body: "Closes #5", DocsOnly: true,
+	}}
+	fake.NotesValue = []forge.Comment{{
+		ID: "n1", Body: "REJECT a7463125", CreatedAt: "2026-11-12T08:00:00Z",
+	}}
+	in := TickInput{
+		Store: st, Project: store.ProjectRow{ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r", Rig: "rig", Enabled: true},
+		Forge: fake, Rig: &queueStub{}, Git: &fakeGit{},
+		Gate: openGate(), Apply: true, Items: fake.ItemsValue, CRs: fake.RequestsValue,
+		Now: func() time.Time { return now },
+	}
+	if _, err := RunTick(ctx, in); err != nil {
+		t.Fatalf("first tick: %v", err)
+	}
+
+	// A newer note for the new head: a second row and a second line.
+	fake.NotesValue = append(fake.NotesValue, forge.Comment{
+		ID: "n2", Body: "REJECT b8474236", CreatedAt: "2026-11-12T08:30:00Z",
+	})
+	second, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("second tick: %v", err)
+	}
+	if !hasSkip(second, "REJECT b8474236 does not name head") {
+		t.Fatalf("second tick skipped = %v, want the new note's line", second.Skipped)
+	}
+	events, err := st.EventsForItem(ctx, 5, 50)
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	rows := 0
+	for _, event := range events {
+		if event.Kind == "verdict.unattributed" {
+			rows++
+		}
+	}
+	if rows != 2 {
+		t.Fatalf("rows = %d, want one per note", rows)
+	}
+}
+
+// TestUnattributableRejectLedgerFailureStillPrints: a ledger that refuses the
+// audit write keeps today's behaviour — the line prints and the tick returns
+// no error; a missed audit row never becomes a crashed tick or a merge.
+func TestUnattributableRejectLedgerFailureStillPrints(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 12, 9, 0, 0, 0, time.UTC)
+	st := appendFailStore(t)
+	pid := newProject(t, st)
+	fake := forge.NewFake(forge.KindGitHub)
+	fake.ItemsValue = []forge.Item{{Number: 5, Kind: forge.KindTask, State: forge.StateOpen, Title: "Five"}}
+	fake.RequestsValue = []forge.ChangeRequest{{
+		Number: 9, HeadSHA: "3f2a1b9c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+		Body: "Closes #5", DocsOnly: true,
+	}}
+	fake.NotesValue = []forge.Comment{{
+		ID: "n1", Body: "REJECT a7463125", CreatedAt: "2026-11-12T08:00:00Z",
+	}}
+	report, err := RunTick(ctx, TickInput{
+		Store: st, Project: store.ProjectRow{ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r", Rig: "rig", Enabled: true},
+		Forge: fake, Rig: &queueStub{}, Git: &fakeGit{},
+		Gate: openGate(), Apply: true, Items: fake.ItemsValue, CRs: fake.RequestsValue,
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("tick with a refusing ledger: %v", err)
+	}
+	if !hasSkip(report, "does not name head") {
+		t.Fatalf("skipped = %v, want the refusal named despite the ledger failure", report.Skipped)
+	}
+}

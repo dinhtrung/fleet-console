@@ -102,6 +102,24 @@ func sameSHA(note, head string) bool {
 	return strings.HasPrefix(head, note) || strings.HasPrefix(note, head)
 }
 
+// UnattributedRejectError is returned when the newest verdict-shaped note is a
+// REJECT that does not name the head under review. It is its own exported type
+// so the tick can record the refusal once per note (epic #309) while the
+// parse-failure case keeps UnattributableVerdictError; both answer
+// errors.Is(err, ErrUnattributableVerdict), so the family and every existing
+// caller keep their meaning.
+type UnattributedRejectError struct {
+	NoteID  string
+	Written string // the sha as the reviewer wrote it
+	Head    string // the head under review
+}
+
+func (e *UnattributedRejectError) Error() string {
+	return fmt.Sprintf("REJECT %s does not name head %s (note %s)", e.Written, e.Head, e.NoteID)
+}
+
+func (e *UnattributedRejectError) Is(target error) bool { return target == ErrUnattributableVerdict }
+
 // UnattributedAcceptError is returned when the newest verdict-shaped note is an
 // ACCEPT that does not name the head under review. It is its own exported type
 // so the tick can classify it (epic #289), and receiving it ends the scan: an
@@ -205,9 +223,8 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 					NoteID: note.ID, Written: match[2], Head: headSHA,
 				}
 			}
-			return nil, &UnattributableVerdictError{
-				NoteID: note.ID, Line: line,
-				Reason: fmt.Sprintf("a rejection names %s, which is not the head under review (%s)", sha, headSHA),
+			return nil, &UnattributedRejectError{
+				NoteID: note.ID, Written: match[2], Head: headSHA,
 			}
 		}
 		// The row stores the head, never the abbreviation the note wrote: the
