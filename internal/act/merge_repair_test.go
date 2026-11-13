@@ -2,9 +2,11 @@ package act
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/dinhtrung/fleet-console/internal/decide"
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
@@ -151,5 +153,101 @@ func TestMergeRepairGitLabNamesReason(t *testing.T) {
 	other := forge.ChangeRequest{Mergeable: false, MergeState: "ci_stale"}
 	if other.MergeConflict() {
 		t.Fatal("ci_stale is not a conflict")
+	}
+}
+
+// TestPlanRepairIntentRaisesTheSameRepairRow: the plan routes a conflicting
+// head to the merge-repair ask (epic #341, design D3), and the act executor
+// raises it through RaiseMergeRepair — the row, brief, evidence and
+// (item, head) ledger key are the merge gate's own, byte for byte. The second
+// tick at the same head is a ledger NoOp, never a second row.
+func TestPlanRepairIntentRaisesTheSameRepairRow(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	st := newStore(t)
+	pid := newProject(t, st)
+
+	fake := forge.NewFake(forge.KindGitHub)
+	fake.ItemsValue = []forge.Item{{Number: 5, Kind: forge.KindTask, State: forge.StateOpen, Title: "Five"}}
+	fake.RequestsValue = []forge.ChangeRequest{{
+		Number: 9, HeadSHA: "abc1234", Mergeable: false, MergeState: "dirty",
+		Branch: "feature/5-x", Body: "Closes #5", DocsOnly: true,
+	}}
+	queue := &queueStub{item: &rig.QueueItem{ID: "qitem-repair", State: "pending"}, created: &rig.CreateRequest{}}
+	raised := []DecisionRaised{}
+	project := store.ProjectRow{
+		ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r", Rig: "rig", Enabled: true,
+	}
+	// The plan is computed by the same decide pass the server runs: a
+	// conflicting head with no verdict produces a decision.merge_repair intent,
+	// which the tick must execute once.
+	plan := decide.PlanTick(decide.Snapshot{
+		Project: decide.Project{Key: "app", Forge: decide.ForgeGitHub, Enabled: true},
+		Items:   []decide.Item{{Number: 5, Kind: decide.KindTask, State: decide.StateOpen, Title: "Five"}},
+		CRs:     []decide.CRState{{Number: 9, Item: 5, State: "open", HeadSHA: "abc1234", MergeState: "dirty"}},
+		ForgeOK: true,
+	}, now)
+	repair := 0
+	for _, intent := range plan.Intents {
+		if intent.Event.Kind == "decision.merge_repair" {
+			repair++
+		}
+	}
+	if repair != 1 {
+		t.Fatalf("plan = %+v, want one decision.merge_repair intent", plan.Intents)
+	}
+	in := TickInput{
+		Store: st, Project: project, Forge: fake, Rig: queue, Git: &fakeGit{},
+		Gate: openGate(), Apply: true, Items: fake.ItemsValue, CRs: fake.RequestsValue,
+		Plan: plan, WorktreeRoot: t.TempDir(), Now: func() time.Time { return now },
+		OnDecision: func(d DecisionRaised) { raised = append(raised, d) },
+	}
+
+	report, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	if len(report.Merges) != 0 {
+		t.Fatalf("merges = %+v, want none — the plan asked for a repair, not a merge", report.Merges)
+	}
+	if queue.createCalls != 1 {
+		t.Fatalf("queue creates = %d, want exactly one repair row", queue.createCalls)
+	}
+	if len(report.Decisions) != 1 || report.Decisions[0] != "qitem-repair" {
+		t.Fatalf("decisions = %v, want the repair row", report.Decisions)
+	}
+	if len(raised) != 1 {
+		t.Fatalf("OnDecision fired %d times, want once", len(raised))
+	}
+	created := queue.created
+	if created.Destination != "human@kernel" {
+		t.Fatalf("destination = %q, want the human's repair row", created.Destination)
+	}
+	if created.Summary != "#5: accepted change request #9 cannot merge (dirty)" {
+		t.Fatalf("summary = %q, want RaiseMergeRepair's own summary byte for byte", created.Summary)
+	}
+	if !strings.Contains(created.EvidenceRef, "merge-repair-app-5-") {
+		t.Fatalf("evidence_ref = %q, want the merge-repair brief name", created.EvidenceRef)
+	}
+	events, _ := st.RecentEvents(ctx, 20)
+	found := ""
+	for _, event := range events {
+		if event.Kind == "decision.merge_repair" {
+			found = event.Detail
+		}
+	}
+	want := "app #5: change request #9 carries ACCEPT at abc1234 but cannot merge (dirty). Rework the branch onto the current default head, or defer the item?; row qitem-repair"
+	if found != want {
+		t.Fatalf("event = %q, want RaiseMergeRepair's own ledger line byte for byte", found)
+	}
+
+	// Tick 2, same head: the plan asks again and the ledger answers NoOp — one
+	// row, one event, no second brief.
+	report, err = RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+	if queue.createCalls != 1 || len(report.Decisions) != 0 {
+		t.Fatalf("tick 2: creates=%d decisions=%v, want the ledger to hold the row at one", queue.createCalls, report.Decisions)
 	}
 }

@@ -211,6 +211,76 @@ func TestNoVerdictAsksTheOperator(t *testing.T) {
 	}
 }
 
+// TestPlanRaisesRepairInsteadOfNoVerdictOnConflict: a head the forge has
+// scored as conflicting is a repair, not a review question (epic #341,
+// design D3). No decision.no_verdict is raised; one decision.merge_repair
+// intent names the change request, the head and the forge's word, for the
+// human who reworks or defers.
+func TestPlanRaisesRepairInsteadOfNoVerdictOnConflict(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "abc123", MergeState: "dirty"}}
+	plan := PlanTick(s, planNow)
+	if hasEvent(plan, "decision.no_verdict", "#5") {
+		t.Fatalf("events = %+v, want no approval question for a conflicting head", plan.Events)
+	}
+	intents := findIntents(plan, IntentRaiseDecision)
+	if len(intents) != 1 {
+		t.Fatalf("intents = %+v, want exactly the repair ask", plan.Intents)
+	}
+	intent := intents[0]
+	if intent.Event.Kind != "decision.merge_repair" {
+		t.Fatalf("event kind = %q, want decision.merge_repair", intent.Event.Kind)
+	}
+	if intent.Audience != AudienceOperator {
+		t.Fatalf("audience = %v, want operator — the repair row is the human's", intent.Audience)
+	}
+	if intent.ChangeRequest != 20 || intent.HeadSHA != "abc123" {
+		t.Fatalf("intent = %+v, want the change request and head carried for the brief", intent)
+	}
+	for _, want := range []string{"#5", "#20", "abc123", "rework or defer"} {
+		if !strings.Contains(intent.Text, want) {
+			t.Fatalf("text = %q, want it to name %q", intent.Text, want)
+		}
+	}
+	if !strings.Contains(intent.Event.Detail, "dirty") {
+		t.Fatalf("detail = %q, want the forge's word", intent.Event.Detail)
+	}
+	// GitLab's word routes the same way: the plan never spends a review on it.
+	s.CRs[0].MergeState = "cannot_be_merged"
+	plan = PlanTick(s, planNow)
+	intents = findIntents(plan, IntentRaiseDecision)
+	if len(intents) != 1 || intents[0].Event.Kind != "decision.merge_repair" {
+		t.Fatalf("intents = %+v, want the GitLab conflict word to raise the repair too", plan.Intents)
+	}
+}
+
+// TestPlanRaisesRepairInsteadOfStaleOnConflict: a conflicting head never asks
+// for a re-review — neither on an older head's verdict, nor when the newest
+// verdict already names the head, where today nothing is raised and the merge
+// gate refuses later (epic #341, design D3).
+func TestPlanRaisesRepairInsteadOfStaleOnConflict(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "bbbb222", MergeState: "dirty"}}
+	// A verdict on an older head would have asked the reviewer to re-review.
+	s.Verdicts = []VerdictState{{Item: 5, SHA: "aaaa111", Decision: "accept"}}
+	plan := PlanTick(s, planNow)
+	if hasEvent(plan, "decision.stale", "#5") {
+		t.Fatalf("events = %+v, want no re-review for a conflicting head", plan.Events)
+	}
+	intents := findIntents(plan, IntentRaiseDecision)
+	if len(intents) != 1 || intents[0].Event.Kind != "decision.merge_repair" {
+		t.Fatalf("intents = %+v, want exactly the repair ask", plan.Intents)
+	}
+	// The newest verdict names the head itself: still the repair — the merge
+	// gate refuses the head later regardless, and the review would be spent.
+	s.Verdicts = []VerdictState{{Item: 5, SHA: "bbbb222", Decision: "accept"}}
+	plan = PlanTick(s, planNow)
+	intents = findIntents(plan, IntentRaiseDecision)
+	if len(intents) != 1 || intents[0].Event.Kind != "decision.merge_repair" {
+		t.Fatalf("intents = %+v, want the repair even when the verdict names the head", plan.Intents)
+	}
+}
+
 // TestNoVerdictIsAskedOncePerHead is the per-(item, head) dedupe, as the plan
 // can see it: the question a raise left behind is a live row in the snapshot,
 // and the same head stays quiet while a moved head asks again.

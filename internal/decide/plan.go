@@ -56,12 +56,25 @@ type DispatchState struct {
 
 // CRState is one normalized change request in the snapshot.
 type CRState struct {
-	Number   int    `json:"number"`
-	Item     int    `json:"item"`
-	State    string `json:"state"`
-	Merged   bool   `json:"merged"`
-	HeadSHA  string `json:"head_sha,omitempty"`
-	DocsOnly bool   `json:"docs_only,omitempty"`
+	Number     int    `json:"number"`
+	Item       int    `json:"item"`
+	State      string `json:"state"`
+	Merged     bool   `json:"merged"`
+	HeadSHA    string `json:"head_sha,omitempty"`
+	DocsOnly   bool   `json:"docs_only,omitempty"`
+	MergeState string `json:"merge_state,omitempty"`
+}
+
+// MergeConflict reports the forge's own conflict word — the same two words
+// forge.ChangeRequest.MergeConflict reads — so the plan and the merge gate
+// cannot disagree about which heads need a repair. A parity test pins the
+// word lists to each other.
+func (cr CRState) MergeConflict() bool {
+	switch strings.ToLower(cr.MergeState) {
+	case "dirty", "cannot_be_merged":
+		return true
+	}
+	return false
 }
 
 // VerdictState is one reviewer verdict in the snapshot.
@@ -320,6 +333,25 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 			continue
 		}
 		if cr.Merged || !strings.EqualFold(cr.State, "open") {
+			continue
+		}
+		// A head the forge has already scored as conflicting is a repair, not a
+		// review (epic #341, design D3): the merge gate refuses it later no
+		// matter what a review says, so spending one is waste. Every verdict
+		// situation — none, an older head's, the head's own — routes to the one
+		// merge-repair ask. The row's text, brief and (item, head) key are
+		// RaiseMergeRepair's, byte for byte; the act side reads the branch and
+		// the word from the change requests it already holds.
+		if cr.MergeConflict() {
+			seen[item.Number] = true
+			add(Intent{
+				Kind: IntentRaiseDecision, Project: key, Item: item.Number,
+				Audience: AudienceOperator, ChangeRequest: cr.Number, HeadSHA: cr.HeadSHA,
+				Text: fmt.Sprintf("%s #%d: change request #%d head %s conflicts with its base (%s): rework or defer the item",
+					key, item.Number, cr.Number, cr.HeadSHA, cr.MergeState),
+				Event: Event{Actor: "decide", Kind: "decision.merge_repair", Subject: fmt.Sprintf("#%d", item.Number),
+					Detail: fmt.Sprintf("cr=%d head=%s (%s)", cr.Number, cr.HeadSHA, cr.MergeState)},
+			})
 			continue
 		}
 		verdict := newestVerdict(s.Verdicts, item.Number)
