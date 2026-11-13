@@ -6,6 +6,7 @@
 |---|---|---|---|
 | `dev-builder-claude@fleet-console-rig` | Claude Code | `claude/default` | builds |
 | `dev-builder-pi@fleet-console-rig` | Pi | `agentgateway/pi/default` | builds |
+| `dev-builder-omp@fleet-console-rig` | Oh My Pi | `litellm/pi/default` | builds (full bypass, see below) |
 | `dev-review@fleet-console-rig` | Codex | `codex/default` | reviews |
 
 The bundle is self-contained: its agents are packed inside it (`local:agents/...`), so it doesn't depend on
@@ -22,7 +23,7 @@ cd <this checkout>
 ## 1. Prerequisites
 
 - OpenRig CLI with its daemon running: `rig status` shows the daemon `running`.
-- Claude Code, Codex and Pi installed and on the `PATH` of the user the daemon runs as.
+- Claude Code, Codex, Pi and Oh My Pi (`omp`) installed and on the `PATH` of the user the daemon runs as.
 - A clone of `dinhtrung/fleet-console`. Below, `$REPO` is its absolute path.
 - `gh` signed in with push access, since the builders push branches and open PRs.
 
@@ -79,6 +80,15 @@ The seats only know three model names; agentgateway maps them to real providers.
   }
   ```
 
+- **Oh My Pi**: OMP has no agentgateway provider, so it uses its LiteLLM-compatible one. Like Pi, each managed
+  OMP seat has its own folder (it runs with that folder as `HOME`). The seat needs an `agent/.env` there; see
+  step 4 for the path:
+
+  ```bash
+  LITELLM_BASE_URL=http://127.0.0.1:4000/v1
+  LITELLM_API_KEY=agentgateway
+  ```
+
 ## 4. Find the daemon's user and home on this box
 
 Nothing in the bundle depends on the `$HOME` of the box it was made on. Its agents are packed inside it,
@@ -105,6 +115,7 @@ export DAEMON_HOME=/the/HOME/it/printed          # e.g. /srv/rig or /home/ops
 export RIG_HOME=/its/OPENRIG_HOME                   # if it printed none: "$DAEMON_HOME/.openrig"
 export CODEX_DIR=/its/CODEX_HOME                    # if it printed none: "$DAEMON_HOME/.codex"
 PI_SEAT="$RIG_HOME/state/pi/dev-builder-pi@fleet-console-rig/agent"
+OMP_SEAT="$RIG_HOME/state/omp/dev-builder-omp@fleet-console-rig/agent"
 ```
 
 Use these everywhere instead of `~`:
@@ -127,6 +138,9 @@ there:
 ```bash
 mkdir -p "$PI_SEAT"
 cp <the models.json from step 3> "$PI_SEAT/models.json"
+
+mkdir -p "$OMP_SEAT"
+( umask 077; printf 'LITELLM_BASE_URL=http://127.0.0.1:4000/v1\nLITELLM_API_KEY=agentgateway\n' > "$OMP_SEAT/.env" )
 ```
 
 Optional: to give the seat your own Pi packages, extensions and MCP servers, link them from your Pi folder.
@@ -169,6 +183,11 @@ rig seat launch dev-builder-pi@fleet-console-rig --fresh --stop --reason "add th
 `rig seat continue` does not relaunch Pi; use `rig seat launch --fresh --stop`.
 
 ## 7. Work and safety rules
+
+- `dev.builder-omp` runs with `permission_policy: builtin:yolo` (OMP `--approval-mode yolo`): it runs shell
+  commands as the daemon user **without asking**. OMP has no middle setting. Its default, `always-ask`, cancels
+  every command in a managed pane, because nobody there can answer. The install preview names it as `full_bypass`.
+  Remove that seat from the spec if you don't want an agent with that access on the box.
 
 - The builders work only in their row's worktree and push their feature branch. They never commit to or push
   `main`. Protect `main` on GitHub: require a pull request before merging, applied to admins too.
