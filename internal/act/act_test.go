@@ -415,6 +415,8 @@ type queueStub struct {
 	updateErr   error
 	resolves    []string
 	resolveErr  error
+	// createErr lets a test refuse a create the way the daemon does (#368).
+	createErr error
 }
 
 func (q *queueStub) QueueList(context.Context) ([]rig.QueueRow, error) {
@@ -435,6 +437,9 @@ func (q *queueStub) QueueCreate(_ context.Context, req rig.CreateRequest) (*rig.
 	}
 	if q.creates != nil {
 		*q.creates = append(*q.creates, req)
+	}
+	if q.createErr != nil {
+		return nil, q.createErr
 	}
 	if q.item == nil {
 		return &rig.QueueItem{ID: "qitem-stub", State: "pending"}, nil

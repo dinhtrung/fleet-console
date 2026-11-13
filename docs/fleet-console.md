@@ -38,6 +38,15 @@ That line is the only thing the gate reads: a change request whose body merely r
 `Part of`, a title mention) is never merged, undrafted or recorded, so partial work hands off with what remains
 instead of opening one.
 
+The skip is visible and it now asks. One `change_request.no_item` event and one skip line per (change request,
+head) name the dead end; when the title or branch named an item, the same tick raises **one decision row**
+(`decision.no_item`) instead of leaving the change request to wait forever. The row carries the change request,
+the head and the named item with its state, and its answer depends on that state: an **open** item is a body edit
+away — add `Closes #<n>`, or open a follow-up item if the work is not that item — while a **closed** item cannot
+be closed again, so the answers are merge by hand or a follow-up item with the branch re-homed to
+`feature/<new item>-`. A mention never becomes an association: the row asks a human and sets no item. A resolved
+row does not silence a later head.
+
 Anything unknown refuses and names the missing fact. The reviewer keeps the judgement; the app keeps the button.
 
 **Adoption: a hand-dispatched item still merges.** The four facts used to key on a `dispatch` row, so an item whose

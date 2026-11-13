@@ -167,6 +167,29 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 						"change request #%d: body closes no item", request.Number))
 				}
 			}
+			// The line above names the dead end; it does not end it (#368). No
+			// amount of waiting merges this change request, and when the named
+			// item is closed, adding "Closes #<n>" would not help either — the
+			// gate needs an open item. So a named item gets one question per
+			// (change request, head). The row asks a human and never associates
+			// the change request with the item; the line and its event above are
+			// unchanged and additive to it.
+			if named != 0 {
+				namedItem := itemFor(in.Items, named)
+				namedOpen := namedItem != nil && namedItem.State == forge.StateOpen
+				raised, err := actions.RaiseNoItemQuestion(ctx, in.Project, request, named, namedOpen,
+					in.WorktreeRoot, operatorDestination(in.RelayMode, in.RelaySeat))
+				if err != nil {
+					report.Skipped = append(report.Skipped, fmt.Sprintf(
+						"change request #%d: %v", request.Number, err))
+				} else if !raised.NoOp {
+					report.Decisions = append(report.Decisions, raised.QItemID)
+					if in.OnDecision != nil {
+						in.OnDecision(DecisionRaised{QItemID: raised.QItemID, Item: named,
+							Text: noItemQuestion(in.Project.Key, request, named, namedOpen)})
+					}
+				}
+			}
 			continue
 		}
 		// Capture first, decide second (design D3): the verdict is a fact about the
