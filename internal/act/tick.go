@@ -384,6 +384,15 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			// human@kernel keeps them otherwise.
 			result, err = actions.RaiseOperatorQuestion(ctx, in.Project, intent.Item, intent.Text,
 				intent.Event.Kind, intent.HeadSHA, in.WorktreeRoot, operatorDestination(in.RelayMode, in.RelaySeat))
+		} else if intent.Event.Kind == "decision.malformed_verdict" {
+			// The malformed-verdict ask (epic #345, design D2): the brief and
+			// the change-request comment both carry the plan's literal — the
+			// note id and the line as written are already substituted in the
+			// text — and the ledger row is the per-(note, head) dedupe. A
+			// verdict captured this tick skipped the raise above, so the
+			// question is never asked beside the answer.
+			result, err = actions.RaiseMalformedVerdict(ctx, in.Project, intent.Item, intent.Text,
+				intent.ChangeRequest, in.WorktreeRoot)
 		} else {
 			result, err = actions.RaiseDecision(ctx, in.Project, intent.Item, intent.Text,
 				intent.Event.Kind, intent.ChangeRequest, intent.HeadSHA, in.WorktreeRoot)

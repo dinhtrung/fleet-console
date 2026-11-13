@@ -84,6 +84,20 @@ type VerdictState struct {
 	Decision string `json:"decision"`
 }
 
+// MalformedVerdict is the ledger's record of a note whose first line parsed as
+// a verdict but named no sha (epic #345): the reviewer tried to decide and the
+// gate could not read it. The plan is pure and cannot read the event ledger,
+// so the snapshot carries the fact — NoteID and Line name what the reviewer
+// wrote, Head is the change request's head when it was recorded, and FirstSeen
+// is when the ledger first held it. It rides in the map keyed by item, one
+// entry per item, the newest recording per item.
+type MalformedVerdict struct {
+	NoteID    string `json:"note_id"`
+	Head      string `json:"head"`
+	Line      string `json:"line"`
+	FirstSeen string `json:"first_seen,omitempty"`
+}
+
 // IntentKind is one action the act loop would take.
 type IntentKind string
 
@@ -359,10 +373,42 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 		var audience Audience
 		switch {
 		case verdict == nil:
+			// A malformed note is the reviewer's own failed attempt to decide
+			// (epic #345, design D2/D4). When the fact names this head, it is
+			// the one question raised: `no_verdict` would be false ("has no
+			// verdict" when the reviewer plainly tried), and only the reviewer
+			// can write the one-line repair. A standing question for this
+			// head is the same question standing, for both kinds. When the
+			// fact names an older head, neither fires: the reviewer's
+			// malformed row is still the live question, the operator's "no
+			// verdict" would still be false, and a rebuild that moved the
+			// head makes this ask the only one the new head would ever get.
+			// Work in flight does not silence the reviewer's ask — the stale
+			// re-review already made that choice, for the same reason.
+			malformed, hasMalformed := s.MalformedVerdicts[item.Number]
+			if hasMalformed && cr.HeadSHA != "" && sameSHA(malformed.Head, cr.HeadSHA) {
+				if questionStanding(s.Rows, item.Number, cr.HeadSHA) {
+					continue
+				}
+				seen[item.Number] = true
+				text = fmt.Sprintf("The merge gate reads one line: ACCEPT %s or REJECT %s. Your note %s's first line was %q, which names no commit. Post a new comment whose first line is:\n\nACCEPT %s",
+					cr.HeadSHA, cr.HeadSHA, malformed.NoteID, malformed.Line, cr.HeadSHA)
+				detail = fmt.Sprintf("cr=%d head=%s note=%s", cr.Number, cr.HeadSHA, malformed.NoteID)
+				add(Intent{
+					Kind: IntentRaiseDecision, Project: key, Item: item.Number, Text: text,
+					Audience: AudienceReviewer, ChangeRequest: cr.Number, HeadSHA: cr.HeadSHA,
+					Event: Event{Actor: "decide", Kind: "decision.malformed_verdict",
+						Subject: fmt.Sprintf("#%d", item.Number), Detail: detail},
+				})
+				continue
+			}
 			// No human question while work is in flight on the item, and none
 			// twice for the same head: a live seat row is the work itself, and
-			// a standing question for this head is the same question.
-			if workInFlight(s.Rows, item.Number) || questionStanding(s.Rows, item.Number, cr.HeadSHA) {
+			// a standing question for this head is the same question. A
+			// malformed fact for the item — this head's or an older head's —
+			// keeps `no_verdict` silent: the reviewer tried, so the question
+			// would be false.
+			if hasMalformed || workInFlight(s.Rows, item.Number) || questionStanding(s.Rows, item.Number, cr.HeadSHA) {
 				continue
 			}
 			head := cr.HeadSHA

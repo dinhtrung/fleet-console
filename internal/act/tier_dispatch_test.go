@@ -131,7 +131,7 @@ func openTierRead(t *testing.T, ctx context.Context, st *store.Store, pid int64,
 	if err != nil {
 		t.Fatalf("verdicts: %v", err)
 	}
-	snapshot := mirror.BuildSnapshot(project, read.Projects["app"], dispatches, verdicts)
+	snapshot := mirror.BuildSnapshot(project, read.Projects["app"], dispatches, verdicts, nil)
 	return decide.PlanTick(snapshot, at)
 }
 

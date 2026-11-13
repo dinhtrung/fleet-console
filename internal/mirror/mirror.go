@@ -368,8 +368,11 @@ func itemRecord(item forge.Item, at time.Time) store.ItemRecord {
 	}
 }
 
-// BuildSnapshot turns one project's reads into the decide input.
-func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []store.DispatchRow, verdicts []store.VerdictForItem) decideSnapshot {
+// BuildSnapshot turns one project's reads into the decide input. The
+// malformed verdicts (epic #345, design D7) are event-ledger reads, not forge
+// reads — decide may not read the ledger itself, so the snapshot carries the
+// fold, the same way Dispatched and RelayedHeads do.
+func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []store.DispatchRow, verdicts []store.VerdictForItem, malformed map[int]store.MalformedVerdict) decideSnapshot {
 	snapshot := decideSnapshot{
 		Project: projectFields{
 			Key: project.Key, Forge: decide.Forge(project.ForgeKind), Enabled: project.Enabled,
@@ -446,6 +449,15 @@ func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []
 	}
 	for _, verdict := range verdicts {
 		snapshot.Verdicts = append(snapshot.Verdicts, verdictFields{Item: verdict.Item, SHA: verdict.SHA, Decision: verdict.Decision})
+	}
+	if len(malformed) > 0 {
+		filled := make(map[int]decide.MalformedVerdict, len(malformed))
+		for item, mv := range malformed {
+			filled[item] = decide.MalformedVerdict{
+				NoteID: mv.NoteID, Head: mv.Head, Line: mv.Line, FirstSeen: mv.FirstSeen,
+			}
+		}
+		snapshot.MalformedVerdicts = filled
 	}
 	return snapshot
 }

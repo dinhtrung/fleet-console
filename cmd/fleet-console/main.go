@@ -425,8 +425,12 @@ func runTick(ctx context.Context, eff *config.Effective, db *store.Store, out, e
 		if err != nil {
 			return err
 		}
+		malformed, err := db.MalformedVerdicts(ctx, project.ID)
+		if err != nil {
+			return err
+		}
 		result := read.Projects[project.Key]
-		snapshot := mirror.BuildSnapshot(project, result, dispatches, verdicts)
+		snapshot := mirror.BuildSnapshot(project, result, dispatches, verdicts, malformed)
 		output.Projects[project.Key] = decide.PlanTick(snapshot, read.At)
 		// A ghost rig is a config error the operator must see from the same dry
 		// run that plans the work: stderr for a human, the JSON field for a script.
@@ -813,10 +817,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 				}
 				dispatches, err1 := db.DispatchesForProject(ctx, project.ID)
 				verdicts, err2 := db.VerdictsForProject(ctx, project.ID)
-				if err1 != nil || err2 != nil {
+				malformed, err3 := db.MalformedVerdicts(ctx, project.ID)
+				if err1 != nil || err2 != nil || err3 != nil {
 					continue
 				}
-				snapshot := mirror.BuildSnapshot(project, projectRead, dispatches, verdicts)
+				snapshot := mirror.BuildSnapshot(project, projectRead, dispatches, verdicts, malformed)
 				for item := range suppress {
 					snapshot.Dispatched = append(snapshot.Dispatched, item)
 				}
@@ -859,7 +864,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 						if err != nil {
 							continue
 						}
-						snapshot := mirror.BuildSnapshot(project, projectRead, dispatches, verdicts)
+						malformed, err := db.MalformedVerdicts(ctx, project.ID)
+						if err != nil {
+							continue
+						}
+						snapshot := mirror.BuildSnapshot(project, projectRead, dispatches, verdicts, malformed)
 						plans[project.Key] = decide.PlanTick(snapshot, read.At)
 					}
 				}
