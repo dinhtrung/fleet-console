@@ -131,8 +131,17 @@ func (a *Actions) RaisePermissionDecision(ctx context.Context, in PermissionInpu
 		return nil, fmt.Errorf("raise permission decision: brief dir: %w", err)
 	}
 	path := filepath.Join(dir, fmt.Sprintf("permission-%s-%d-%s.md", slug(key), in.Item, operation))
-	body := fmt.Sprintf("# Permission refused: %s #%d %s\n\nThe forge refused a write the fleet's token may not perform (#258). Retrying cannot succeed until the token can do it.\n\n- Operation: %s\n- Forge: %s\n%s- The forge's own sentence: %s\n\n## Fix\n\n- Classic PAT: gh auth refresh -s repo\n- Fine-grained token: grant it \"Issues: write\" and \"Pull requests: write\" on this repository\n- GitLab: the token needs \"api\" with write access\n\nThe fleet retries by itself on the next tick after the token is fixed; nothing else needs doing.\n",
-		projectKey, in.Item, title, operation, in.Refusal.Forge, changeRequestLine(in.CR, in.SHA), detail)
+	// The fix names the one permission the refused operation needs (#329):
+	// "grant Issues: write and Pull requests: write" on a refused merge sent the
+	// operator to grant, wait, and hit the same 403 on mergePullRequest, which
+	// GitHub files under Contents. An operation the table does not know keeps
+	// the generic sentence rather than a guess.
+	grant := forge.FixPermission(operation)
+	if grant == "" {
+		grant = "the permissions the operation needs"
+	}
+	body := fmt.Sprintf("# Permission refused: %s #%d %s\n\nThe forge refused a write the fleet's token may not perform (#258). Retrying cannot succeed until the token can do it.\n\n- Operation: %s\n- Forge: %s\n%s- The forge's own sentence: %s\n\n## Fix\n\n- Classic PAT: gh auth refresh -s repo\n- Fine-grained token: grant it %q on this repository\n- GitLab: the token needs \"api\" with write access\n\nThe fleet retries by itself on the next tick after the token is fixed; nothing else needs doing.\n",
+		projectKey, in.Item, title, operation, in.Refusal.Forge, changeRequestLine(in.CR, in.SHA), detail, grant)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return nil, fmt.Errorf("raise permission decision: write brief: %w", err)
 	}

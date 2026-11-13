@@ -329,12 +329,15 @@ func TestRaisePermissionDecisionBrief(t *testing.T) {
 	text := string(body)
 	for _, want := range []string{
 		"app #5 Five", "ready", "gh: HTTP 403: Resource not accessible",
-		"#9 at abc1234", "gh auth refresh -s repo", "Issues: write", "Pull requests: write",
+		"#9 at abc1234", "gh auth refresh -s repo", `grant it "Pull requests: write" on this repository`,
 		"The fleet retries by itself on the next tick after the token is fixed",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("brief = %q, want it to carry %q", text, want)
 		}
+	}
+	if strings.Contains(text, "Contents: write") {
+		t.Fatalf("brief = %q, want it to name only the permission the refused operation needs", text)
 	}
 	exists, err := st.HasEvent(ctx, EventPermissionDenied, "#5", "attempt=1 operation=ready")
 	if err != nil || !exists {
@@ -358,5 +361,48 @@ func TestRaisePermissionDecisionBrief(t *testing.T) {
 	}
 	if queue.createCalls != 2 {
 		t.Fatalf("creates = %d, want 2 — a new attempt raises again", queue.createCalls)
+	}
+}
+
+// TestRaisePermissionDecisionMergeNamesContentsWrite pins the issue's own
+// refusal (#329): a fine-grained token's merge is filed under Contents, not
+// Pull requests, so the brief a merge raise carries must name Contents: write.
+// The generic pair ("Issues: write and Pull requests: write") sent the
+// operator to grant, wait, and hit the same 403 on mergePullRequest.
+func TestRaisePermissionDecisionMergeNamesContentsWrite(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	pid := newProject(t, st)
+	queue := &queueStub{created: &rig.CreateRequest{}, item: &rig.QueueItem{ID: "qitem-merge", State: "pending"}}
+	actions := &Actions{Store: st, Rig: queue, ProjectID: pid, ProjectKey: "app", WorktreeRoot: t.TempDir()}
+	_, err := actions.RaisePermissionDecision(ctx, PermissionInput{
+		Item: 300, Title: "Three hundred", Operation: "merge",
+		Refusal: &forge.PermissionError{
+			Operation: "merge", Forge: "github",
+			Detail: "GraphQL: Resource not accessible by personal access token (mergePullRequest)",
+		},
+		Attempt: 1, CR: 324, SHA: "0123abcd", ProjectKey: "app",
+	})
+	if err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	body, err := os.ReadFile(queue.created.BodyFile)
+	if err != nil {
+		t.Fatalf("brief: %v", err)
+	}
+	text := string(body)
+	for _, want := range []string{
+		"merge", "mergePullRequest",
+		`grant it "Contents: write" on this repository`,
+		"#324 at 0123abcd",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("brief = %q, want it to carry %q", text, want)
+		}
+	}
+	for _, absent := range []string{"Issues: write", "Pull requests: write"} {
+		if strings.Contains(text, absent) {
+			t.Fatalf("brief = %q, want it to name only Contents: write, not %q", text, absent)
+		}
 	}
 }
