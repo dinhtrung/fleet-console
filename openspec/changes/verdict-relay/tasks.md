@@ -66,10 +66,10 @@ build` (only if `src/` changed), `openspec validate --all --strict`.
       head (abbreviated verdicts count — reuse `sameSHA` from the abbreviation epic), a terminal reviewer row naming
       that head, no existing `verdict.relayed` for that head. Verify: `go test ./internal/decide -run
       TestPlanRelay...` with a fake snapshot per branch (pending row, done row, verdict at head, moved head).
-- [ ] 2.2 Dedupe is the ledger, not memory: the intent's event carries `head=<sha>;` and the arm reads
+- [x] 2.2 Dedupe is the ledger, not memory: the intent's event carries `head=<sha>;` and the arm reads
       `HasEvent("verdict.relayed", "#<item>", "head=<sha>;")`. Verify: two plans over one snapshot differ by zero
       relays once the ledger holds the event.
-- [ ] 2.3 Relay is planned only when the project names a mode. Verify: the same snapshot with an absent block yields
+- [x] 2.3 Relay is planned only when the project names a mode. Verify: the same snapshot with an absent block yields
       no relay intent and unchanged `decision.*` intents.
 
 ## 3. Act — the raise, the destination, the marker (one issue: `internal/act`)

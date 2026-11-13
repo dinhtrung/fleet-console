@@ -389,7 +389,41 @@ func filterSeatsFor(seats []rig.Seat, rigs []string) []rig.Seat {
 	return out
 }
 
-func runTick(ctx context.Context, eff *config.Effective, db *store.Store, out, errOut io.Writer, runner forge.Runner, rigRunner rig.ExecRunner, timeouts mirror.TimeoutSettings) error {
+// planSnapshot builds one project's decide input. It owns the reads decide may
+// not make for itself (dispatch rows, verdicts, malformed verdicts and the
+// relayed heads, all ledger/store reads) and the two project-scoped
+// resolutions the plan consumes: the reviewer prefix (#384) and the effective
+// verdict-relay mode (#397), each row first with the config block as fallback.
+// One builder means the dry run, the live tick and the re-plan after a launch
+// cannot disagree about what the project configured, and the dispatch rows the
+// progress report needs come from the same read the plan was built from.
+func planSnapshot(ctx context.Context, eff *config.Effective, db *store.Store, project store.ProjectRow, result mirror.ProjectResult) (decide.Snapshot, []store.DispatchRow, error) {
+	dispatches, err := db.DispatchesForProject(ctx, project.ID)
+	if err != nil {
+		return decide.Snapshot{}, nil, err
+	}
+	verdicts, err := db.VerdictsForProject(ctx, project.ID)
+	if err != nil {
+		return decide.Snapshot{}, nil, err
+	}
+	malformed, err := db.MalformedVerdicts(ctx, project.ID)
+	if err != nil {
+		return decide.Snapshot{}, nil, err
+	}
+	relayed, err := db.RelayedHeads(ctx, project.ID)
+	if err != nil {
+		return decide.Snapshot{}, nil, err
+	}
+	snapshot := mirror.BuildSnapshot(project, result, dispatches, verdicts, malformed, relayed)
+	snapshot.Project.Reviewer = eff.ReviewerFor(project.Key)
+	// The project's row answers first, the config block second — the same
+	// resolution the act phase runs for the relay seat below (#375, #397).
+	snapshot.Project.RelayMode, _ = eff.RelayFor(project.Key,
+		config.RelayRow{Mode: project.RelayMode, Seat: project.RelaySeat})
+	return snapshot, dispatches, nil
+}
+
+func runTick(ctx context.Context, eff *config.Effective, db *store.Store, out, errOut io.Writer, runner forge.Runner, rigRunner rig.Runner, timeouts mirror.TimeoutSettings) error {
 	projects, err := db.Projects(ctx)
 	if err != nil {
 		return err
@@ -417,21 +451,11 @@ func runTick(ctx context.Context, eff *config.Effective, db *store.Store, out, e
 		Projects:    make(map[string]decide.Plan, len(projects)),
 	}
 	for _, project := range projects {
-		dispatches, err := db.DispatchesForProject(ctx, project.ID)
-		if err != nil {
-			return err
-		}
-		verdicts, err := db.VerdictsForProject(ctx, project.ID)
-		if err != nil {
-			return err
-		}
-		malformed, err := db.MalformedVerdicts(ctx, project.ID)
-		if err != nil {
-			return err
-		}
 		result := read.Projects[project.Key]
-		snapshot := mirror.BuildSnapshot(project, result, dispatches, verdicts, malformed)
-		snapshot.Project.Reviewer = eff.ReviewerFor(project.Key)
+		snapshot, _, err := planSnapshot(ctx, eff, db, project, result)
+		if err != nil {
+			return err
+		}
 		output.Projects[project.Key] = decide.PlanTick(snapshot, read.At)
 		// A ghost rig is a config error the operator must see from the same dry
 		// run that plans the work: stderr for a human, the JSON field for a script.
@@ -820,14 +844,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 						}
 					}
 				}
-				dispatches, err1 := db.DispatchesForProject(ctx, project.ID)
-				verdicts, err2 := db.VerdictsForProject(ctx, project.ID)
-				malformed, err3 := db.MalformedVerdicts(ctx, project.ID)
-				if err1 != nil || err2 != nil || err3 != nil {
+				snapshot, dispatches, err := planSnapshot(ctx, eff, db, project, projectRead)
+				if err != nil {
 					continue
 				}
-				snapshot := mirror.BuildSnapshot(project, projectRead, dispatches, verdicts, malformed)
-				snapshot.Project.Reviewer = eff.ReviewerFor(project.Key)
 				for item := range suppress {
 					snapshot.Dispatched = append(snapshot.Dispatched, item)
 				}
@@ -862,20 +882,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 						projectRead := reads[project.ID]
 						projectRead.Seats = filterSeatsFor(fresh, project.Rigs)
 						reads[project.ID] = projectRead
-						dispatches, err := db.DispatchesForProject(ctx, project.ID)
+						snapshot, _, err := planSnapshot(ctx, eff, db, project, projectRead)
 						if err != nil {
 							continue
 						}
-						verdicts, err := db.VerdictsForProject(ctx, project.ID)
-						if err != nil {
-							continue
-						}
-						malformed, err := db.MalformedVerdicts(ctx, project.ID)
-						if err != nil {
-							continue
-						}
-						snapshot := mirror.BuildSnapshot(project, projectRead, dispatches, verdicts, malformed)
-						snapshot.Project.Reviewer = eff.ReviewerFor(project.Key)
 						plans[project.Key] = decide.PlanTick(snapshot, read.At)
 					}
 				}

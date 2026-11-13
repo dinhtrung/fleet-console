@@ -346,7 +346,7 @@ func TestBuildSnapshotIgnoresEndedDispatches(t *testing.T) {
 		{ItemNumber: 5, QItemID: "open", CreatedAt: at.Format(time.RFC3339Nano)},
 		{ItemNumber: 6, QItemID: "ended", CreatedAt: at.Format(time.RFC3339Nano), EndedAt: &ended, EndReason: "superseded"},
 	}
-	snapshot := BuildSnapshot(project, ProjectResult{}, dispatches, nil, nil)
+	snapshot := BuildSnapshot(project, ProjectResult{}, dispatches, nil, nil, nil)
 	if len(snapshot.Dispatched) != 1 || snapshot.Dispatched[0] != 5 {
 		t.Fatalf("dispatched = %v, want only the open attempt #5", snapshot.Dispatched)
 	}
