@@ -153,7 +153,7 @@ func gitlabFixtures() *fixtureRunner {
 
 func TestGitLabItems(t *testing.T) {
 	runner := gitlabFixtures()
-	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", runner, &Budget{Max: 100})
+	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", "", runner, &Budget{Max: 100})
 	items, err := adapter.Items(context.Background(), Timeout{})
 	if err != nil {
 		t.Fatalf("Items: %v", err)
@@ -187,7 +187,7 @@ func TestGitLabChangeRequestsSkipsDetailsForMerged(t *testing.T) {
 		fallbackFile{contains: "/jobs?", file: "gitlab/pipeline-jobs.json"},
 		fallbackFile{contains: "/pipelines", file: "gitlab/pipelines.json"},
 	)
-	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", runner, &Budget{Max: 100})
+	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", "", runner, &Budget{Max: 100})
 	requests, err := adapter.ChangeRequests(context.Background())
 	if err != nil {
 		t.Fatalf("ChangeRequests: %v", err)
@@ -264,7 +264,7 @@ func TestGitLabChangeRequestsOnlyFetchCandidates(t *testing.T) {
 		}
 		return "[]", "", nil
 	}}
-	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", runner, &Budget{Max: 100})
+	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", "", runner, &Budget{Max: 100})
 	requests, err := adapter.ChangeRequestsFor(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("ChangeRequestsFor: %v", err)
@@ -309,7 +309,7 @@ func TestGitLabChangeRequestsAcceptedHeadIsACandidate(t *testing.T) {
 		}
 		return "[]", "", nil
 	}}
-	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", runner, &Budget{Max: 100})
+	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", "", runner, &Budget{Max: 100})
 	requests, err := adapter.ChangeRequestsFor(context.Background(), map[string]struct{}{"bbb": {}})
 	if err != nil {
 		t.Fatalf("ChangeRequestsFor: %v", err)
@@ -368,7 +368,7 @@ func TestWritesAreExactlyTheFour(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gitlab := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", &stubRunner{}, &Budget{Max: 100})
+	gitlab := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", "", &stubRunner{}, &Budget{Max: 100})
 	if err := gitlab.SetMarker(ctx, 5, true); err != nil {
 		t.Fatal(err)
 	}
@@ -719,7 +719,7 @@ func TestGitLabSubIssuesKeepsClosedChildrenAndDefaultsUnknownToOpen(t *testing.T
 	runner := &fixtureRunner{root: "testdata", fallback: []fallbackFile{
 		{contains: "graphql", file: "gitlab/sub-issues.json"},
 	}}
-	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", runner, &Budget{Max: 100})
+	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", "", runner, &Budget{Max: 100})
 
 	children, err := adapter.SubIssues(context.Background(), 101)
 	if err != nil {

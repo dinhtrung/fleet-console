@@ -109,7 +109,11 @@ type Project struct {
 	Draft    bool   // the project has no row yet, so its rig cannot exist
 	// CloneURL overrides the URL derived from Forge and Repo. A self-hosted
 	// forge, or a local bare repository in a test, is reached this way.
-	CloneURL      string
+	CloneURL string
+	// ForgeHost is the project's resolved forge API host (forge-host D4),
+	// carried so the write probe's forge adapter is bound to the same host the
+	// mirror reads. Empty keeps glab's own default; a draft probe has none.
+	ForgeHost     string
 	DefaultBranch string // the branch dispatch works from; "" skips the branch check
 	Worktrees     string // paths.worktrees, where per-item worktrees are cut
 	// ProbeItemNumber is the newest open item in the mirror, for the note-write
@@ -126,6 +130,12 @@ func FromConfig(p config.Project) Project {
 	if rigName == "" && len(p.Rigs) > 0 {
 		rigName = strings.TrimSpace(p.Rigs[0].Name)
 	}
+	// The write probe must meet the same host the mirror reads (forge-host
+	// D4): a green preflight against gitlab.com for a mirror on the company
+	// instance is the split this field prevents. A resolver error leaves the
+	// host empty — the probe then answers for glab's own default, which is
+	// still more honest than inventing an answer.
+	host, _, _ := config.ForgeHost(p)
 	return Project{
 		Key:           p.Key,
 		Rig:           rigName,
@@ -134,6 +144,7 @@ func FromConfig(p config.Project) Project {
 		MainPath:      p.Paths.Main,
 		DefaultBranch: p.DefaultBranch,
 		Worktrees:     p.Paths.Worktrees,
+		ForgeHost:     host,
 	}
 }
 

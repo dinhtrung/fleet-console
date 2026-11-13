@@ -58,7 +58,7 @@ func checkForgeWrite(ctx context.Context, deps Deps, p Project) Check {
 	case "github":
 		return probeGitHub(ctx, deps, p, repo)
 	case "gitlab":
-		return probeGitLab(ctx, deps, repo)
+		return probeGitLab(ctx, deps, p, repo)
 	default:
 		// A row naming some other forge is the fact git_url already reports as
 		// a failure. Here it is only unprobeable; say so without restating the
@@ -97,7 +97,7 @@ func probeGitHub(ctx context.Context, deps Deps, p Project, repo string) Check {
 			}
 			return check
 		}
-		if _, ok := classifyWrite(ctx, deps, kindGitHub, repo, stdout, stderr, err); ok {
+		if _, ok := classifyWrite(ctx, deps, kindGitHub, repo, "", stdout, stderr, err); ok {
 			return forgeWriteVerdict(ctx, deps, check, stdout, stderr, err, "change request")
 		}
 		// A failure the classifier does not recognize is not a permission fact;
@@ -173,7 +173,7 @@ func probeNotesGitHub(ctx context.Context, deps Deps, check Check, repo string, 
 			check.Detail = fmt.Sprintf("gh did not answer within %s", deps.Timeout)
 			return check
 		}
-		if _, ok := classifyWrite(ctx, deps, kindGitHub, repo, stdout, stderr, err); ok {
+		if _, ok := classifyWrite(ctx, deps, kindGitHub, repo, "", stdout, stderr, err); ok {
 			check.State = Fail
 			check.Detail = forgeOwnLine(stderr, err)
 			check.Fix = forgeWriteFix(ctx, deps, "The token may open a change request but may not comment")
@@ -204,7 +204,7 @@ func probeNotesGitHub(ctx context.Context, deps Deps, check Check, repo string, 
 // probeGitLab asks the merge-request question with a source branch that cannot
 // exist. GitLab answers 400 when the token cleared authorization and 403/401
 // when it did not — the same distinction GitHub draws with 422 and 403.
-func probeGitLab(ctx context.Context, deps Deps, repo string) Check {
+func probeGitLab(ctx context.Context, deps Deps, p Project, repo string) Check {
 	check := Check{ID: CheckForgeWrite, Label: "Forge token can write"}
 	runCtx, cancel := context.WithTimeout(ctx, deps.Timeout)
 	defer cancel()
@@ -222,7 +222,7 @@ func probeGitLab(ctx context.Context, deps Deps, repo string) Check {
 			}
 			return check
 		}
-		if _, ok := classifyWrite(ctx, deps, kindGitLab, repo, stdout, stderr, err); ok {
+		if _, ok := classifyWrite(ctx, deps, kindGitLab, repo, p.ForgeHost, stdout, stderr, err); ok {
 			check.State = Fail
 			check.Detail = forgeOwnLine(stderr, err)
 			check.Fix = Fix{
@@ -261,12 +261,14 @@ func probeGitLab(ctx context.Context, deps Deps, repo string) Check {
 // forge.IsPermission reads the verdict. ok is false when the classifier has no
 // opinion — a validation refusal, which is the pass — so the caller reads the
 // body itself.
-func classifyWrite(ctx context.Context, deps Deps, kind, repo, stdout, stderr string, err error) (error, bool) {
+func classifyWrite(ctx context.Context, deps Deps, kind, repo, host, stdout, stderr string, err error) (error, bool) {
 	runner := recordedRunner{stdout: stdout, stderr: stderr, err: err}
 	var classified error
 	switch kind {
 	case kindGitLab:
-		classified = forge.NewGitLab(repo, runner, nil).Comment(ctx, 1, "")
+		// The probe's adapter is bound to the project's host (forge-host D4):
+		// the classification answers for the forge the mirror will talk to.
+		classified = forge.NewGitLab(repo, host, runner, nil).Comment(ctx, 1, "")
 	default:
 		classified = forge.NewGitHub(repo, runner, nil).Comment(ctx, 1, "")
 	}

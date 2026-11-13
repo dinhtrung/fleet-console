@@ -930,6 +930,30 @@ func TestFromConfigReadsTheRow(t *testing.T) {
 	}
 }
 
+// TestFromConfigCarriesTheForgeHost pins the write probe's host plumbing
+// (forge-host D4): a self-hosted project's probe adapter is bound to the same
+// host the mirror reads, and a project with nothing to resolve from leaves it
+// empty — no fallback invented.
+func TestFromConfigCarriesTheForgeHost(t *testing.T) {
+	selfHosted := config.Project{Key: "mnp", Forge: "gitlab", ForgeHost: "gitlab.horisen.org", Repo: "x"}
+	if got := FromConfig(selfHosted).ForgeHost; got != "gitlab.horisen.org" {
+		t.Fatalf("explicit host = %q, want gitlab.horisen.org", got)
+	}
+	fromRepo := config.Project{Key: "mnp", Forge: "gitlab", RepoURL: "https://gitlab.horisen.org/horisen/mnp.git", Repo: "x"}
+	if got := FromConfig(fromRepo).ForgeHost; got != "gitlab.horisen.org" {
+		t.Fatalf("repo_url host = %q, want gitlab.horisen.org", got)
+	}
+	neither := config.Project{Key: "mnp", Forge: "gitlab", Repo: "x"}
+	if got := FromConfig(neither).ForgeHost; got != "gitlab.com" {
+		t.Fatalf("default host = %q, want the resolver's gitlab.com", got)
+	}
+	// A GitHub project resolves to nothing — the host is gh's business.
+	github := config.Project{Key: "mnp", Forge: "github", Repo: "x"}
+	if got := FromConfig(github).ForgeHost; got != "" {
+		t.Fatalf("github host = %q, want empty", got)
+	}
+}
+
 // TestNormalizeRemote pins the comparisons that decide whether a checkout is
 // this project's: transports and a .git suffix must not matter.
 func TestNormalizeRemote(t *testing.T) {
