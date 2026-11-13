@@ -320,6 +320,12 @@ const (
 	defaultIdlePollMax = 10 * time.Minute
 )
 
+// DefaultTickInterval is the mirror poll cadence a box uses when neither the
+// file nor the environment sets tick_interval. The board judges how old a
+// mirror read is against it (#394), so a caller that never learned the cadence
+// still measures ages with the real default rather than a zero interval.
+const DefaultTickInterval = defaultTick
+
 // FindPath applies the documented lookup order and returns the first existing
 // file. An explicitly requested file (flag or env) must exist.
 func FindPath(opts Options) (string, error) {

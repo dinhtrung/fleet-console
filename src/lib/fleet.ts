@@ -36,9 +36,22 @@ export interface BoardProject {
   key: string;
   name: string;
   paused: boolean;
+  /** How old each mirror read is (#394). The phrase, the thresholds and the never-read
+   *  wording are built server-side, so every client prints the same thing. */
+  forge_read: MirrorRead;
+  rig_read: MirrorRead;
   counts: BoardCounts;
   items: BoardItem[];
   questions: BoardQuestion[];
+}
+
+/** One "last forge read <age>" line. `label` is the whole phrase; `state` is never, ok,
+ *  quiet or stalled; `at` is the stamp the age was measured from, absent when the mirror
+ *  has never completed that read. */
+export interface MirrorRead {
+  label: string;
+  state: "never" | "ok" | "quiet" | "stalled";
+  at?: string;
 }
 
 export interface BoardResponse {

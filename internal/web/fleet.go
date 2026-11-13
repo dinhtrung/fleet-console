@@ -20,11 +20,21 @@ import (
 
 // Fleet is the read model behind the product screens.
 type Fleet struct {
-	Store  *store.Store
-	Rig    *rig.Adapter
-	Hub    *Hub
-	Now    func() time.Time
-	Compat func(ctx context.Context) rig.Report
+	Store *store.Store
+	Rig   *rig.Adapter
+	Hub   *Hub
+	Now   func() time.Time
+	// Tick is the mirror's poll cadence. The project header judges how old a
+	// mirror read is against it: quiet past two ticks, stalled past five (#394).
+	// Zero means the config default.
+	Tick time.Duration
+	// MaxWait is the longest the mirror's poll may legitimately sleep between
+	// reads — the cadence's own cap (rig_lifecycle.idle_poll_max when the block
+	// is written, tick otherwise). A quiet box writes a stamp once per window,
+	// so the window, not the tick, is the age a healthy header must call fresh
+	// (#408, the same derivation web.Readiness.staleThreshold uses).
+	MaxWait time.Duration
+	Compat  func(ctx context.Context) rig.Report
 	// ForgeFor resolves a project's forge for the one write path the board
 	// owns: a human approve/reject posts a note on the change request. Every
 	// other write stays in the act loop.
@@ -70,6 +80,11 @@ type boardProject struct {
 	// unanswered (#377). A waiting question is why a project can look idle and
 	// still be stuck, so it is part of the project's own row.
 	Questions []boardQuestion `json:"questions"`
+	// ForgeRead and RigRead say how old each mirror read is (#394): the
+	// difference between a stalled mirror and a forge with nothing to say.
+	// Both are built server-side so the thresholds live in one place.
+	ForgeRead mirrorRead `json:"forge_read"`
+	RigRead   mirrorRead `json:"rig_read"`
 }
 
 // boardQuestion is one unanswered operator question, read from the ledger and
@@ -101,20 +116,7 @@ func age(since string) string {
 			return "—"
 		}
 	}
-	d := time.Since(t)
-	if d < 0 {
-		d = 0
-	}
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
+	return ageBetween(time.Now(), t)
 }
 
 func splitLabels(labels string) []string {
@@ -228,6 +230,9 @@ func (f *Fleet) forgeChange(ctx context.Context, projectID int64, number int) *c
 // Board assembles projects, counts and one reason per task from stored facts.
 func (f *Fleet) Board(c fiber.Ctx) error {
 	ctx := c.Context()
+	// One instant for the whole response: every age on the board is measured from it, so a
+	// project's read age can never look newer than the board's own sync time (#394).
+	now := f.now()
 	compat := rig.Report{OK: true, Status: rig.StatusOK}
 	if f.Compat != nil {
 		compat = f.Compat(ctx)
@@ -316,6 +321,10 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 			Key: p.Key, Name: p.Name, Paused: projectPaused(p), Status: rig.StatusOK,
 			Items: []boardItem{}, Questions: []boardQuestion{},
 		}
+		// How old each mirror read is belongs on the project's own header (#394).
+		// The stamps are the only evidence a stalled mirror leaves behind.
+		bp.ForgeRead = mirrorReadAt(now, projectStatus.LastForgeAt, f.Tick, f.MaxWait, "forge")
+		bp.RigRead = mirrorReadAt(now, projectStatus.LastRigAt, f.Tick, f.MaxWait, "rig")
 		// A question waiting an hour must not look like a project with nothing
 		// to do (#377): the ledger's unanswered verdict questions ride the same
 		// read the board already makes, and a row the queue says is finished
@@ -424,7 +433,7 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 		sort.Slice(bp.Items, func(i, j int) bool { return bp.Items[i].Number < bp.Items[j].Number })
 		result = append(result, bp)
 	}
-	syncedAt := f.now().UTC().Format(time.RFC3339)
+	syncedAt := now.UTC().Format(time.RFC3339)
 	if !synced.IsZero() {
 		syncedAt = synced.UTC().Format(time.RFC3339)
 	}
@@ -490,6 +499,15 @@ func (f *Fleet) Item(c fiber.Ctx) error {
 				Age: age(item.UpdatedAt), URL: item.URL, Labels: labels,
 			},
 		}
+		// The drawer's project header carries the same two read ages as the board,
+		// so the item surface cannot disagree with the project's own row (#394).
+		status, err := f.Store.MirrorStatus(ctx, p.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		now := f.now()
+		detail.Project.ForgeRead = mirrorReadAt(now, status.LastForgeAt, f.Tick, f.MaxWait, "forge")
+		detail.Project.RigRead = mirrorReadAt(now, status.LastRigAt, f.Tick, f.MaxWait, "rig")
 		dispatches, err := f.Store.Dispatches(ctx, p.ID, number)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())

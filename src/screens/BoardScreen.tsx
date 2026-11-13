@@ -3,8 +3,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { getBoard } from "../lib/fleet";
-import type { BoardQuestion } from "../lib/fleet";
+import type { BoardQuestion, MirrorRead } from "../lib/fleet";
 import { shortTime } from "../lib/fleet";
+import { dateTime } from "../lib/format";
 import {
   Badge,
   EmptyState,
@@ -25,6 +26,20 @@ function countLine(project: { counts: { building: number; review: number; waitin
     project.counts.blocked ? `${project.counts.blocked} blocked` : "",
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : "nothing open";
+}
+
+/** One project header read line (#394). The phrase is the server's, so the age and the
+ *  quiet/stalled threshold are not re-derived here; the title carries the exact stamp the age
+ *  was measured from. Staleness uses the one committed attention hue, since a stalled mirror is
+ *  the loudest fact in this header; a quiet read is ink, a fresh one is muted. */
+function MirrorReadLine({ read }: { read: MirrorRead }) {
+  const tone =
+    read.state === "stalled" ? "text-attention" : read.state === "quiet" ? "text-ink" : "text-ink-muted";
+  return (
+    <span className={`text-[0.6875rem] ${tone}`} title={read.at ? dateTime(read.at) : "The mirror has not completed this read yet."}>
+      {read.label}
+    </span>
+  );
 }
 
 /** The project's unanswered operator questions (#377): a note the merge gate could not read as a
@@ -118,13 +133,17 @@ export function BoardScreen() {
                 count={project.items.length}
                 description={countLine(project)}
                 actions={
-                  project.paused ? (
-                    <Badge tone="tint" title="Dispatch is paused for this project">
-                      paused
-                    </Badge>
-                  ) : (
-                    <Badge tone="quiet">active</Badge>
-                  )
+                  <div className="flex flex-wrap items-center gap-2">
+                    <MirrorReadLine read={project.forge_read} />
+                    <MirrorReadLine read={project.rig_read} />
+                    {project.paused ? (
+                      <Badge tone="tint" title="Dispatch is paused for this project">
+                        paused
+                      </Badge>
+                    ) : (
+                      <Badge tone="quiet">active</Badge>
+                    )}
+                  </div>
                 }
               />
               {project.items.length === 0 ? (

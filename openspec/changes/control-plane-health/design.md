@@ -21,7 +21,10 @@ into a restart loop, and the operator then reads "crash" where the system was bu
 
 `mirror_meta` is written on every successful read and read by nothing. The project header shows
 `last forge read <age>` and `last rig read <age>`, coloured at `2 × tick_interval` (amber, "quiet") and
-`5 × tick_interval` (red, "stalled"). No new writes, no new table: the surface reads the row the mirror already keeps.
+`5 × tick_interval` (red, "stalled"), raised to the poll's own window when `rig_lifecycle.idle_poll_max` is longer:
+a quiet box writes a stamp once per window, so `2 × tick_interval` alone would paint a healthy idle box stalled
+(#408, the same derivation `/api/ready` uses). No new writes, no new table: the surface reads the row the mirror
+already keeps.
 
 `Rejected:` computing staleness from the newest event. An idle project writes no events, so the honest "nothing has
 happened" would render as "stalled", which is the false alarm this change exists to remove.
