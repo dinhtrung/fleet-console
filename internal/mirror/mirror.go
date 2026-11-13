@@ -49,6 +49,10 @@ type TickResult struct {
 	Projects map[string]ProjectResult
 	RigStale bool
 	RigError string
+	// RigDown is the one rig failure with a decision attached (epic #320, D1):
+	// no daemon answered. Everything else that sets RigStale keeps the
+	// lifecycle's generic refusal — a timeout is not a missing daemon.
+	RigDown bool
 }
 
 // Mirror runs the read pass.
@@ -99,6 +103,7 @@ type statusBlock struct {
 	ForgeStale     bool     `json:"forge_stale"`
 	ForgeForbidden bool     `json:"forge_forbidden"`
 	RigStale       bool     `json:"rig_stale"`
+	RigDown        bool     `json:"rig_down"`
 	ForgeError     string   `json:"forge_error,omitempty"`
 	RigError       string   `json:"rig_error,omitempty"`
 	BranchError    string   `json:"branch_error,omitempty"`
@@ -119,6 +124,7 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 		rows, err = m.Rig.QueueList(ctx)
 		if err != nil {
 			result.RigStale, result.RigError = true, err.Error()
+			result.RigDown = errors.Is(err, rig.ErrDaemonDown)
 		} else {
 			rows = m.fillBodies(ctx, rows)
 		}
@@ -127,6 +133,12 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 			result.RigStale = true
 			if result.RigError == "" {
 				result.RigError = err.Error()
+			}
+			// The missing daemon is the one failure with a decision attached:
+			// the tick carries it beside rig_stale. A timeout or a broken
+			// shape stays stale-only.
+			if !result.RigDown {
+				result.RigDown = errors.Is(err, rig.ErrDaemonDown)
 			}
 		} else {
 			seatsRead = true
@@ -216,7 +228,7 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 
 		status := statusBlock{
 			ForgeStale: pr.ForgeStale, ForgeForbidden: pr.ForgeForbidden, ForgeError: pr.ForgeError,
-			RigStale: result.RigStale, RigError: result.RigError,
+			RigStale: result.RigStale, RigDown: result.RigDown, RigError: result.RigError,
 			BranchError: pr.BranchError, RigWarnings: pr.RigWarnings,
 		}
 		if err := m.Store.PutSnapshot(ctx, project.ID, "status", status, at); err != nil {

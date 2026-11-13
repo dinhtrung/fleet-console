@@ -50,7 +50,8 @@ func (a *Adapter) run(ctx context.Context, args ...string) ([]byte, error) {
 	if a == nil || a.Runner == nil {
 		return nil, fmt.Errorf("rig adapter: no runner")
 	}
-	return a.Runner.Run(ctx, args...)
+	data, err := a.Runner.Run(ctx, args...)
+	return data, classifyDaemonDown(err)
 }
 
 func decode(data []byte, v any) error {
@@ -346,7 +347,7 @@ func (a *Adapter) writeItemRunner(runner Runner, ctx context.Context, command st
 		if decodeErr := decode(data, &refusal); decodeErr == nil && refusal.Error != "" {
 			return nil, &RefusalError{Code: refusal.Error, Missing: refusal.MissingFields, Command: command, Cause: err}
 		}
-		return nil, err
+		return nil, classifyDaemonDown(err)
 	}
 	var envelope struct {
 		QitemID     string          `json:"qitemId"`
