@@ -264,15 +264,19 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 				fmt.Sprintf("#%d merge waiting: the forge has not computed mergeability", item))
 			continue
 		}
+		otherLiveBranch := liveDispatchOnOtherBranch(dispatches, item, request.Branch)
 		var merged *MergeResult
 		switch {
-		case hasDispatch && request.Branch != "" && request.Branch != dispatch.Branch:
-			// Two branches close one item: the dispatch is one and this change
-			// request is the other. Which work survives is a human decision, so
-			// refuse and name both, exactly as the adoption arm does (design D4).
+		case otherLiveBranch != "":
+			// Two *live* dispatches close one item: one of them is on a branch
+			// other than this change request's. Which work survives is a human
+			// decision, so refuse and name both, exactly as the adoption arm does
+			// (design D4). An ended dispatch never blocks: a builder ends its row
+			// when it delivers, and that superseded attempt's branch must not keep
+			// a later accepted change request from merging (#386).
 			report.Skipped = append(report.Skipped, fmt.Sprintf(
 				"#%d merge waiting: refusing merge: live dispatch on %s and change request #%d is on %s",
-				item, dispatch.Branch, request.Number, request.Branch))
+				item, otherLiveBranch, request.Number, request.Branch))
 			continue
 		case hasDispatch:
 			merged, err = actions.Merge(ctx, dispatch.ID, item)
@@ -702,6 +706,29 @@ func changeRequestFor(requests []forge.ChangeRequest, item int) *forge.ChangeReq
 		}
 	}
 	return nil
+}
+
+// liveDispatchOnOtherBranch returns the branch of a dispatch for the item that
+// has not ended and is on a branch other than the change request's, or "" when
+// every live dispatch shares the change request's branch (or there is none).
+//
+// An ended dispatch never counts: a builder ends its row when it delivers, and
+// that superseded attempt's branch must not keep a later accepted change request
+// from merging (#386). An empty request branch names no branch to compare, so
+// the guard stays silent then, exactly as it did before.
+func liveDispatchOnOtherBranch(dispatches []store.DispatchRow, item int, requestBranch string) string {
+	if requestBranch == "" {
+		return ""
+	}
+	for _, dispatch := range dispatches {
+		if dispatch.ItemNumber != item || dispatch.EndedAt != nil {
+			continue
+		}
+		if dispatch.Branch != requestBranch {
+			return dispatch.Branch
+		}
+	}
+	return ""
 }
 
 func liveRowNames(rows []rig.QueueRow, item int) bool {

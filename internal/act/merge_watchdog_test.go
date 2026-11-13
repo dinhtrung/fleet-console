@@ -119,3 +119,78 @@ func TestMergeIgnoresAClosedChangeRequestThatClosesTheSameItem(t *testing.T) {
 		}
 	}
 }
+
+// A dispatch that ended on an earlier attempt's branch is dead work. It must not
+// keep an accepted change request on a new branch from merging (#386): the branch
+// guard reads only dispatch rows that have not ended.
+func branchGuardFixture(t *testing.T, requestBranch string, ended bool) (context.Context, TickInput, *forge.Fake) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Date(2026, 11, 13, 15, 30, 0, 0, time.UTC)
+	st := newStore(t)
+	pid := newProject(t, st)
+	dispatchID, err := st.CreateDispatch(ctx, store.NewDispatch{
+		ProjectID: pid, ItemNumber: 78, Attempt: 1, Seat: "seat@rig",
+		Branch: "feature/78-old", Worktree: "wt", BaseSHA: "base", CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if ended {
+		if err := st.EndDispatch(ctx, dispatchID, "superseded"); err != nil {
+			t.Fatalf("end dispatch: %v", err)
+		}
+	}
+	fake := forge.NewFake(forge.KindGitHub)
+	fake.ItemsValue = []forge.Item{{Number: 78, Kind: forge.KindTask, State: forge.StateOpen, Title: "Seventy-eight"}}
+	fake.RequestsValue = []forge.ChangeRequest{{
+		Number: 83, State: "open", Branch: requestBranch, HeadSHA: "37fe8ac", Mergeable: true, Body: "Closes #78", DocsOnly: true,
+	}}
+	fake.NotesValue = []forge.Comment{{ID: "n1", Body: "ACCEPT 37fe8ac", CreatedAt: "2026-11-13T15:00:00Z"}}
+	project := store.ProjectRow{ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r", Rig: "rig", ConcurrencyCap: 2, Enabled: true}
+	in := TickInput{
+		Store: st, Project: project, Forge: fake, Rig: &queueStub{}, Git: &fakeGit{},
+		Gate: openGate(), Apply: true, Items: fake.ItemsValue, CRs: fake.RequestsValue,
+		Now: func() time.Time { return now },
+	}
+	return ctx, in, fake
+}
+
+// An ended dispatch on an old branch does not block the merge (#386).
+func TestMergeLandsWhenTheOnlyDispatchOnAnotherBranchHasEnded(t *testing.T) {
+	ctx, in, fake := branchGuardFixture(t, "feature/78-new", true)
+
+	report, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(report.Merges) != 1 || !report.Merges[0].Merged {
+		t.Fatalf("report = %+v, want the merge to land after the old dispatch ended", report)
+	}
+	if !hasWrite(fake.Writes, "merge", 83, "37fe8ac") {
+		t.Fatalf("writes = %+v, want merge(83, 37fe8ac)", fake.Writes)
+	}
+	if hasSkip(report, "refusing merge: live dispatch") {
+		t.Fatalf("skips = %v, want no two-branch refusal", report.Skipped)
+	}
+}
+
+// A live dispatch on another branch is still the two-branches-closed dead end,
+// with today's message (#386).
+func TestMergeRefusesWhenALiveDispatchIsOnAnotherBranch(t *testing.T) {
+	ctx, in, fake := branchGuardFixture(t, "feature/78-new", false)
+
+	report, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(report.Merges) != 0 {
+		t.Fatalf("report = %+v, want no merge while a live dispatch is on another branch", report)
+	}
+	if !hasSkip(report, "refusing merge: live dispatch on feature/78-old and change request #83 is on feature/78-new") {
+		t.Fatalf("skips = %v, want today's two-branch refusal", report.Skipped)
+	}
+	if hasWrite(fake.Writes, "merge", 83, "37fe8ac") {
+		t.Fatalf("writes = %+v, want no merge", fake.Writes)
+	}
+}
