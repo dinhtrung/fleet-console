@@ -114,6 +114,39 @@ func TestSilentDispatchRaisesOneOperatorQuestion(t *testing.T) {
 	}
 }
 
+// TestTickWithoutAClockStillRaisesTheStall is epic #325 T1 (design D1): a
+// tick planned without a clock still reads the wall clock and raises the
+// operator's question. Before RunTick normalised Now, this tick panicked with
+// a nil dereference at dispatchAge (silent_dispatch.go:174) — the production
+// caller (cmd/fleet-console) never sets Now, so every silent dispatch was a
+// crash instead of a question.
+func TestTickWithoutAClockStillRaisesTheStall(t *testing.T) {
+	ctx, st, _, _, in := watchdogFixture(t, false)
+	in.CRs = nil // an open change request is the merge gate's case, not a stall
+	in.Plan = decide.Plan{Intents: []decide.Intent{silentIntent(5)}}
+	in.Now = nil // the contract: optional; RunTick normalises to the wall clock
+	queue := &queueStub{created: &rig.CreateRequest{}}
+	in.Rig = queue
+
+	report, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if queue.createCalls != 1 {
+		t.Fatalf("queue creates = %d, want the operator question raised once", queue.createCalls)
+	}
+	if len(report.Decisions) != 1 || report.Decisions[0] == "" {
+		t.Fatalf("decisions = %+v, want the raised row carried", report.Decisions)
+	}
+	if created := queue.created; created.Destination != "human@kernel" || created.Source != "human@kernel" {
+		t.Fatalf("row = %s from %s, want human@kernel both ways", created.Destination, created.Source)
+	}
+	exists, err := st.HasEvent(ctx, EventSilentDispatch, "#5", "attempt=1 ")
+	if err != nil || !exists {
+		t.Fatalf("HasEvent = %v, %v; want the dispatch.silent event", exists, err)
+	}
+}
+
 // TestSilentDispatchSkipsWhenTheDispatchEnded is rule 5: a dispatch that ends
 // normally stays on the existing path, and a plan judgment that has gone stale
 // between the plan and the tick raises nothing.
