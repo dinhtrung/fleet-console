@@ -138,6 +138,12 @@ type Snapshot struct {
 	CRs        []CRState       `json:"change_requests,omitempty"`
 	Verdicts   []VerdictState  `json:"verdicts,omitempty"`
 
+	// MalformedVerdicts carries, per item, the newest verdict.malformed event
+	// the ledger holds (epic #345, design D7): a note whose first line parsed
+	// as a verdict but named no sha. The plan reads nothing else about the
+	// fact — the fold is the same shape as Dispatched and RelayedHeads.
+	MalformedVerdicts map[int]MalformedVerdict `json:"malformed_verdicts,omitempty"`
+
 	// RelayedHeads carries the (item, head) pairs the event ledger already
 	// holds a verdict.relayed for. The plan is pure and cannot read the ledger
 	// itself, so the caller folds this fact in — the same way Dispatched folds

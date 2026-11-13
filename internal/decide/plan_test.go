@@ -732,3 +732,82 @@ func TestPlanRelayDoesNotTouchDecisionArms(t *testing.T) {
 		t.Fatalf("decision intents differ with relay on: %v vs off: %v", sa, sb)
 	}
 }
+
+// TestMalformedVerdictAsksTheReviewerWithTheLiteralLine: the reviewer's own
+// failed attempt is its question, not the operator's (epic #345, design
+// D2/D4). Exactly one decision.malformed_verdict carries the note id, the
+// line as written and the head, and decision.no_verdict does not fire beside
+// it — "has no verdict" would be false when the reviewer plainly tried.
+func TestMalformedVerdictAsksTheReviewerWithTheLiteralLine(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "cccc333"}}
+	s.MalformedVerdicts = map[int]MalformedVerdict{5: {
+		NoteID: "6847905312", Head: "cccc333", Line: "## QA Verdict: ACCEPT ✅",
+	}}
+	plan := PlanTick(s, planNow)
+	asked := findIntents(plan, IntentRaiseDecision)
+	if len(asked) != 1 {
+		t.Fatalf("intents = %+v, want exactly one decision", plan.Intents)
+	}
+	intent := asked[0]
+	if intent.Event.Kind != "decision.malformed_verdict" {
+		t.Fatalf("event kind = %q, want decision.malformed_verdict", intent.Event.Kind)
+	}
+	if intent.Audience != AudienceReviewer {
+		t.Fatalf("audience = %v, want reviewer", intent.Audience)
+	}
+	if intent.ChangeRequest != 20 || intent.HeadSHA != "cccc333" {
+		t.Fatalf("intent = %+v, want the change request and head carried for the brief", intent)
+	}
+	for _, want := range []string{
+		"The merge gate reads one line: ACCEPT cccc333 or REJECT cccc333",
+		"note 6847905312", `"## QA Verdict: ACCEPT ✅"`, "names no commit",
+		"Post a new comment whose first line is:", "ACCEPT cccc333",
+	} {
+		if !strings.Contains(intent.Text, want) {
+			t.Fatalf("text = %q, want it to carry %q", intent.Text, want)
+		}
+	}
+	if hasEvent(plan, "decision.no_verdict", "#5") {
+		t.Fatalf("events = %+v, want no decision.no_verdict beside a malformed question", plan.Events)
+	}
+}
+
+// TestMalformedQuestionYieldsToAStandingQuestionForTheHead: a live human row
+// naming the head is the same question standing (design D4) — neither the
+// malformed ask nor `no_verdict` fires again while it stands.
+func TestMalformedQuestionYieldsToAStandingQuestionForTheHead(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "cccc333"}}
+	s.MalformedVerdicts = map[int]MalformedVerdict{5: {
+		NoteID: "6847905312", Head: "cccc333", Line: "## QA Verdict: ACCEPT ✅",
+	}}
+	s.Rows = append(s.Rows, Row{QItemID: "qitem-mv-1", State: "pending", Pickup: "unclaimed",
+		Destination: "human@kernel", Body: "app #5: your note 6847905312 names no commit; head cccc333"})
+	plan := PlanTick(s, planNow)
+	if asked := findIntents(plan, IntentRaiseDecision); len(asked) != 0 {
+		t.Fatalf("intents = %+v, want neither question while one stands for the head", plan.Intents)
+	}
+}
+
+// TestMalformedNoteForAnOlderHeadYieldsNeither: the fact was recorded against
+// a head that is gone. The reviewer's malformed row is still the live
+// question, and the operator's "no verdict" would still be false — so the
+// plan raises neither until a note names the current head.
+func TestMalformedNoteForAnOlderHeadYieldsNeither(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "cccc333"}}
+	s.MalformedVerdicts = map[int]MalformedVerdict{5: {
+		NoteID: "6847905312", Head: "aaaa111", Line: "## QA Verdict: ACCEPT ✅",
+	}}
+	plan := PlanTick(s, planNow)
+	if asked := findIntents(plan, IntentRaiseDecision); len(asked) != 0 {
+		t.Fatalf("intents = %+v, want neither question for a stale malformed fact", plan.Intents)
+	}
+	if hasEvent(plan, "decision.no_verdict", "#5") {
+		t.Fatalf("events = %+v, want no no_verdict beside a stale malformed fact", plan.Events)
+	}
+	if hasEvent(plan, "decision.malformed_verdict", "#5") {
+		t.Fatalf("events = %+v, want no malformed question for another head", plan.Events)
+	}
+}

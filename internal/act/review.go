@@ -94,6 +94,82 @@ func (a *Actions) RaiseDecision(ctx context.Context, project store.ProjectRow, i
 	return &RaiseResult{QItemID: row.ID, Events: []int64{eventID}}, nil
 }
 
+// RaiseMalformedVerdict answers the plan's decision.malformed_verdict ask
+// (epic #345, design D2): the reviewer posted a note that parses as a verdict
+// but names no sha, and only it can write the one-line repair. The text rides
+// the intent with the literal already substituted — note id, line as written,
+// head — so the brief and the change-request comment carry the same words.
+// The ledger row is the dedupe: the text names the note and the head, so it
+// is once per (note, head) and a moved head asks again. The same text is
+// posted on the change request as one comment, so the artifact carries the
+// instruction and the seat's row points at it.
+func (a *Actions) RaiseMalformedVerdict(ctx context.Context, project store.ProjectRow, item int, text string, changeRequest int, worktreeRoot string) (*RaiseResult, error) {
+	if a.Store == nil || a.Rig == nil {
+		return nil, fmt.Errorf("raise malformed verdict: store and rig are required")
+	}
+	kind := "decision.malformed_verdict"
+	subject := fmt.Sprintf("#%d", item)
+	exists, err := a.Store.HasEvent(ctx, kind, subject, text)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return &RaiseResult{NoOp: true}, nil
+	}
+
+	rigName := ""
+	if dispatches, err := a.Store.Dispatches(ctx, project.ID, item); err == nil && len(dispatches) > 0 {
+		rigName = rigFromSeat(dispatches[0].Seat)
+	}
+	if rigName == "" && len(project.Rigs) > 0 {
+		rigName = project.Rigs[0]
+	}
+	reviewer := "dev-review"
+	if rigName != "" {
+		reviewer = "dev-review@" + rigName
+	}
+	dir := worktreeRoot
+	if dir == "" {
+		dir = os.TempDir()
+	} else {
+		dir = filepath.Join(dir, "briefs")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("raise malformed verdict: brief dir: %w", err)
+	}
+	sum := sha256.Sum256([]byte(text))
+	path := filepath.Join(dir, fmt.Sprintf("malformed-verdict-%s-%d-%s.md", slug(project.Key), item, hex.EncodeToString(sum[:4])))
+	facts := ""
+	if changeRequest > 0 {
+		facts = fmt.Sprintf("\nChange request: #%d\n", changeRequest)
+	}
+	body := fmt.Sprintf("# %s #%d - your verdict note named no commit\n\nRig: %s\n\n%s\n%s\nThe comment above is also posted on the change request, so the thread carries the instruction.\n",
+		project.Key, item, rigName, text, facts)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		return nil, fmt.Errorf("raise malformed verdict: write brief: %w", err)
+	}
+	summary := text
+	if len(summary) > 120 {
+		summary = summary[:120]
+	}
+	row, err := a.Rig.QueueCreate(ctx, rig.CreateRequest{
+		Destination: reviewer, Summary: summary, BodyFile: path, Source: "human@kernel",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if changeRequest > 0 {
+		if err := a.Forge.Comment(ctx, changeRequest, text); err != nil {
+			return nil, fmt.Errorf("raise malformed verdict: comment on change request #%d: %w", changeRequest, err)
+		}
+	}
+	eventID, err := a.event(ctx, "act", kind, subject, text+"; row "+row.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &RaiseResult{QItemID: row.ID, Events: []int64{eventID}}, nil
+}
+
 // verdictCommand is the one command that posts a verdict note on the project's
 // forge, with the sha already substituted — executable by a weaker model
 // instead of a formatting rule it can fail (#265, design D5).
