@@ -19,6 +19,9 @@ import (
 const (
 	EventHousekeepingRemove  = "housekeeping.remove"
 	EventHousekeepingSummary = "housekeeping.summary"
+	// EventHousekeepingRetention is one prune run's record (#395): the window,
+	// the counts, and whether it changed anything.
+	EventHousekeepingRetention = "housekeeping.retention"
 )
 
 // HousekeepInput is one project's reclaim pass. The tick supplies it after the
@@ -216,4 +219,66 @@ func (s *Scheduler) Due(now time.Time) bool {
 	}
 	s.last = now
 	return true
+}
+
+// RetentionInput is one ledger prune, global to the box: the event table has no
+// project column, so the pass runs once per housekeeping cycle rather than per
+// project (#395).
+type RetentionInput struct {
+	Store *store.Store
+	// KeepDays is the window. Zero or less means retention is off: the pass
+	// does nothing and writes nothing, because "disabled" is not a run.
+	KeepDays int
+	// Apply false counts what it would delete and writes nothing but the record
+	// of the run — the dry run every housekeeping step shares.
+	Apply bool
+	Now   func() time.Time
+}
+
+// RetentionReport is what one prune did, or would do.
+type RetentionReport struct {
+	Window   time.Time
+	Scanned  int
+	Deleted  int
+	KeptLive int
+	Applied  bool
+	EventID  int64
+}
+
+// RetainEvents prunes the ledger by a window and records the run: one
+// housekeeping.retention event carrying scanned, deleted and kept_live, so the
+// audit answers what left and what live work kept. The guards (a live dispatch,
+// an unresolved queue row) live in the store's delete, next to the rows they
+// protect.
+func RetainEvents(ctx context.Context, in RetentionInput) (RetentionReport, error) {
+	if in.Store == nil || in.KeepDays <= 0 {
+		return RetentionReport{}, nil
+	}
+	clock := in.Now
+	if clock == nil {
+		clock = time.Now
+	}
+	cutoff := clock().UTC().AddDate(0, 0, -in.KeepDays)
+	counts, err := in.Store.PruneEvents(ctx, cutoff, 500, in.Apply)
+	if err != nil {
+		return RetentionReport{}, err
+	}
+	report := RetentionReport{
+		Window: cutoff, Scanned: counts.Scanned, Deleted: counts.Deleted,
+		KeptLive: counts.KeptLive, Applied: in.Apply,
+	}
+	dry := "false"
+	if !in.Apply {
+		dry = "true"
+	}
+	detail := fmt.Sprintf("window=%dd cutoff=%s scanned=%d deleted=%d kept_live=%d dry_run=%s",
+		in.KeepDays, cutoff.Format(time.RFC3339), report.Scanned, report.Deleted, report.KeptLive, dry)
+	id, err := in.Store.AppendEvent(ctx, store.Event{
+		Actor: "housekeeping", Kind: EventHousekeepingRetention, Subject: "ledger", Detail: detail,
+	})
+	if err != nil {
+		return report, err
+	}
+	report.EventID = id
+	return report, nil
 }

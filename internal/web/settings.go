@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
@@ -170,6 +171,7 @@ func settingsView(eff *config.Effective) map[string]string {
 		"rig_lifecycle.enabled":       boolString(eff.RigLifecycle.Enabled),
 		"rig_lifecycle.idle_after":    eff.RigLifecycle.IdleAfter.String(),
 		"rig_lifecycle.idle_poll_max": eff.RigLifecycle.IdlePollMax.String(),
+		"events_keep_days":            strconv.Itoa(eff.EventsKeepDays),
 	}
 }
 
@@ -181,6 +183,7 @@ func sourceView(eff *config.Effective) map[string]string {
 	for _, key := range []string{
 		"tick_interval", "notify_interval", "act",
 		"rig_lifecycle.enabled", "rig_lifecycle.idle_after", "rig_lifecycle.idle_poll_max",
+		"events_keep_days",
 	} {
 		out[key] = eff.Sources[key]
 		if out[key] == "" {

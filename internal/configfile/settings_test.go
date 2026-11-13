@@ -321,3 +321,25 @@ rig_lifecycle:
 		t.Fatalf("merged document does not load:\n%s\n%v", text, err)
 	}
 }
+
+// TestUpdateSettingsEventsKeepDays (#395): the retention window is written on
+// the same allowlisted path as the other scalars, appended when the file does
+// not carry it yet, and a non-number is refused before any write.
+func TestUpdateSettingsEventsKeepDays(t *testing.T) {
+	path, hash := writeFixture(t)
+	if _, err := UpdateSettings(path, map[string]string{"events_keep_days": "30"}, hash); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(data), "events_keep_days: 30") {
+		t.Fatalf("file does not carry the window:\n%s", data)
+	}
+
+	path, hash = writeFixture(t)
+	if _, err := UpdateSettings(path, map[string]string{"events_keep_days": "ninety"}, hash); err == nil || !strings.Contains(err.Error(), "events_keep_days") {
+		t.Fatalf("write = %v, want a refusal naming the key", err)
+	}
+}
