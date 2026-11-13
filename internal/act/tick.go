@@ -189,9 +189,10 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			// and the next tick retries the write.
 			var accepted *UnattributedAcceptError
 			var rejected *UnattributedRejectError
-			// The parse failure keeps today's behaviour: it is a malformed note
-			// a reviewer typo causes, not a fact about this head, so it is
-			// neither recorded nor deduped (design D1).
+			// A note that parses as a verdict but names no sha is recorded once
+			// per note (epic #345 T1, #346): the typo is still a fact about the
+			// review, and the repeated line is noise a surface can now see past.
+			var malformed *UnattributableVerdictError
 			alreadyNoted := false
 			if errors.As(err, &accepted) {
 				alreadyNoted = noteUnattributedVerdict(ctx, actions, item, keyFor(accepted.NoteID),
@@ -199,6 +200,12 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			} else if errors.As(err, &rejected) {
 				alreadyNoted = noteUnattributedVerdict(ctx, actions, item, keyFor(rejected.NoteID),
 					fmt.Sprintf("%s sha=%s; head=%s", keyFor(rejected.NoteID), rejected.Written, rejected.Head))
+			} else if errors.As(err, &malformed) {
+				// A note that names no sha is still a fact (epic #345 T1, #346):
+				// the head comes from the change request the loop is on, never
+				// from the note — the note named no commit, which is the point.
+				alreadyNoted = noteMalformedVerdict(ctx, actions, item, keyFor(malformed.NoteID),
+					fmt.Sprintf("%s head=%s; line=%s", keyFor(malformed.NoteID), request.HeadSHA, firstLine(malformed.Line)))
 			}
 			// The line is silence only on a later tick over the same note —
 			// already on the ledger (design D2); the audit row is the durable
@@ -555,6 +562,25 @@ func noteUnattributedVerdict(ctx context.Context, actions *Actions, item int, ke
 		return noted
 	}
 	_, _ = actions.event(ctx, "act", "verdict.unattributed", subject, detail)
+	return false
+}
+
+// noteMalformedVerdict writes the once-per-note audit row for a note whose
+// first line parses as a verdict but names no sha (epic #345 T1, #346: kind
+// verdict.malformed, subject #<item>, dedupe key "note=<id>;", detail
+// "note=<id>; head=<sha>; line=<first non-empty line>"). The head is the
+// change request's, never the note's — the note named no commit, which is the
+// fact. It answers whether the note was already on the ledger before this
+// tick, the same alreadyNoted shape noteUnattributedVerdict answers, under
+// the same best-effort rule: a ledger failure writes nothing and answers
+// false, so the line keeps printing and the tick never fails.
+func noteMalformedVerdict(ctx context.Context, actions *Actions, item int, key, detail string) bool {
+	subject := fmt.Sprintf("#%d", item)
+	noted, err := actions.Store.HasEvent(ctx, "verdict.malformed", subject, key)
+	if err != nil || noted {
+		return noted
+	}
+	_, _ = actions.event(ctx, "act", "verdict.malformed", subject, detail)
 	return false
 }
 
