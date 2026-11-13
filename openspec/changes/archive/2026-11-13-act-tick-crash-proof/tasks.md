@@ -37,15 +37,15 @@ need either, stop with the finding in the pull request.
 
 ## 1. T1 — the act tick has no nil clock
 
-- [ ] `internal/act/tick.go`: normalise `in.Now` at the top of `RunTick`, before `Actions` is built, with the
+- [x] `internal/act/tick.go`: normalise `in.Now` at the top of `RunTick`, before `Actions` is built, with the
       comment that names the crash (`#<epic>`, `silent_dispatch.go:174`).
-- [ ] `internal/act/tick.go:318`: `age := dispatchAge(dispatch, actions.now)` — the guarded accessor, never the
+- [x] `internal/act/tick.go:318`: `age := dispatchAge(dispatch, actions.now)` — the guarded accessor, never the
       raw field. Confirm no other reader of `in.Now` exists: `grep -n "in\.Now" internal/act/*.go` answers one
       line in `lifecycle.go` (a `time.Time`, not a func) plus `housekeep.go`'s own normalisation.
-- [ ] `internal/act/silent_dispatch_test.go` (or `tick_test.go`): `TestTickWithoutAClockStillRaisesTheStall` —
+- [x] `internal/act/silent_dispatch_test.go` (or `tick_test.go`): `TestTickWithoutAClockStillRaisesTheStall` —
       `TickInput` with `Now` unset, one `decide.IntentSilentDispatch` intent, a live dispatch row whose
       `CreatedAt` parses and is older than the threshold; assert `report.Decisions` has the row and no panic.
-- [ ] Keep `dispatchAge`'s signature (`func(store.DispatchRow, func() time.Time) time.Duration`) and its existing
+- [x] Keep `dispatchAge`'s signature (`func(store.DispatchRow, func() time.Time) time.Duration`) and its existing
       zero-time behaviour: an unparseable `CreatedAt` still answers 0, and the tick still skips with
       "the dispatch's age cannot be read".
 
@@ -54,34 +54,34 @@ when the normalisation line is removed (quote both runs in the pull request body
 
 ## 2. T2 — a panicking tick does not end the loop
 
-- [ ] `internal/mirror/mirror.go`: add the `defer`/`recover` at the top of the `tick := func()` closure in `Loop`,
+- [x] `internal/mirror/mirror.go`: add the `defer`/`recover` at the top of the `tick := func()` closure in `Loop`,
       logging `tick: panicked: %v` then `debug.Stack()` through `m.logf`, and setting the busy cadence reason.
       Do not swallow the panic anywhere else.
-- [ ] `internal/mirror/loop_panic_test.go`: `TestLoopSurvivesAPanickingTick` — `sources` (or `onTick`) panics on
+- [x] `internal/mirror/loop_panic_test.go`: `TestLoopSurvivesAPanickingTick` — `sources` (or `onTick`) panics on
       the first call and returns normally on the second; the loop must tick a second time, log a line containing
       `tick: panicked:`, and return only when the context is cancelled. Model the harness on
       `internal/mirror/loop_cadence_test.go:127` (`TestLoopCadenceTreatsAFailedReadAsBusy`).
-- [ ] The cadence after a panic is the base interval: assert the line `reset: tick: panicked:` follows the panic
+- [x] The cadence after a panic is the base interval: assert the line `reset: tick: panicked:` follows the panic
       line in the captured log.
 
 Evidence: `go test ./internal/mirror/ -run 'TestLoopSurvivesAPanickingTick|TestLoopCadence' -count=1 -v` green.
 
 ## 3. T3 — the operator can read the line
 
-- [ ] `docs/fleet-console.md`: a subsection naming `tick: panicked:` — what it means (the tick failed, the process
+- [x] `docs/fleet-console.md`: a subsection naming `tick: panicked:` — what it means (the tick failed, the process
       is alive, the loop is at the base cadence), how to read the stack, and that the console must run under a
       supervisor (`Restart=on-failure` user unit); a box that starts it from a task runner with no restart leaves
       the control plane dark after any panic.
-- [ ] No new file, no new section in `docs/design/`.
+- [x] No new file, no new section in `docs/design/`.
 
 Evidence: the doc renders in the pull request diff and `grep -n 'tick: panicked:' docs/fleet-console.md` returns
 the subsection.
 
 ## 4. Verification, before the pull request leaves draft
 
-- [ ] `go test ./... -count=1` green.
-- [ ] `CGO_ENABLED=0 go build -trimpath -tags embedboard -o /tmp/fleet-console-check ./cmd/fleet-console` green.
-- [ ] `openspec validate act-tick-crash-proof --type change --strict` and `openspec validate --all --strict | tail -3`
+- [x] `go test ./... -count=1` green.
+- [x] `CGO_ENABLED=0 go build -trimpath -tags embedboard -o /tmp/fleet-console-check ./cmd/fleet-console` green.
+- [x] `openspec validate act-tick-crash-proof --type change --strict` and `openspec validate --all --strict | tail -3`
       green, with the totals line quoted in the pull request.
-- [ ] The pull request body carries: the issue number it closes, the two red/green runs from T1, the mirror test
+- [x] The pull request body carries: the issue number it closes, the two red/green runs from T1, the mirror test
       name from T2, and the totals line from the change-set validation.
