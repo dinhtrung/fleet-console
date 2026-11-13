@@ -61,7 +61,8 @@ systemctl --user is-active fleet-console.service   # → active
 ## 3. Verify the parser
 
 The gate's job is to read a verdict out of a reviewer's prose. Follow the tick
-as it runs (`tick_interval: 60s`):
+as it runs — its cadence is the project's `tick_interval` (60s in this box's
+config):
 
 ```sh
 journalctl --user -u fleet-console.service -f | rg 'act:'
@@ -90,15 +91,17 @@ sqlite3 ~/.local/state/fleet-console/fleet-console.db \
 
 One row per (item, note, head). The `detail` carries the project, the item, the
 change request, the note id, the head and the row id it created — the same facts
-the board lists. When the verdict later lands, the question's queue row is closed
-and it drops off the board.
+the board lists. The board shows a question while its queue row is unsettled and
+drops it once the queue says the row is finished; how that row gets closed is the
+tick's business, not this page's, and a question that outlives its answer is
+visible as exactly that.
 
 ## 4. Verify the seat
 
 A question is addressed to a seat, and the seat must exist:
 
 ```sh
-rig status                        # kernel: 4 nodes, ready
+rig status                        # kernel: 4 node(s)
 rig ps --nodes --rig kernel       # names them: operator.agent, advisor.lead, …
 ```
 
