@@ -273,6 +273,91 @@ func TestBuildLifecycleRigsCountsSharedRigOnce(t *testing.T) {
 	}
 }
 
+// TestBuildLifecycleRigsCountsOnlyRunningSeats is #403: a stopped rig keeps its
+// node rows and those rows report another lifecycle, so only a running seat is
+// a live fleet. Counting rows made a stopped rig read as up, the start arm
+// never fired on demand, and the tick produced neither a start nor a stop.
+func TestBuildLifecycleRigsCountsOnlyRunningSeats(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		lifecyle []string
+		running  int
+	}{
+		{"running seat", []string{"running"}, 1},
+		{"exited seat", []string{"exited"}, 0},
+		{"recoverable seat", []string{"recoverable"}, 0},
+		{"attention_required seat", []string{"attention_required"}, 0},
+		{"empty lifecycle", []string{""}, 0},
+		{"mixed roster", []string{"exited", "running", "recoverable"}, 1},
+		{"all exited", []string{"exited", "exited"}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seats := make([]rig.Seat, 0, len(tc.lifecyle))
+			for i, lifecycle := range tc.lifecyle {
+				seats = append(seats, rig.Seat{
+					Rig: "r", Session: fmt.Sprintf("dev-build-%d@r", i+1), Lifecycle: lifecycle,
+				})
+			}
+			projects := []LifecycleProjectFacts{
+				{Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: true, Seats: seats},
+			}
+
+			rigs := BuildLifecycleRigs(projects, nil, true)
+
+			if len(rigs) != 1 {
+				t.Fatalf("rigs = %+v, want one entry", rigs)
+			}
+			if rigs[0].Running != tc.running {
+				t.Fatalf("running = %d, want %d for %v", rigs[0].Running, tc.running, tc.lifecyle)
+			}
+		})
+	}
+}
+
+// TestStoppedRigStartsOnDemand is #403 end to end through the builder and the
+// rule: a rig whose seats have all exited and whose project has ready work gets
+// one start action naming the demand, and the same rig with no work gets none.
+// The once-only half is StartBackoff, pinned by its own test.
+func TestStoppedRigStartsOnDemand(t *testing.T) {
+	now := time.Date(2026, 11, 13, 18, 0, 0, 0, time.UTC)
+	exited := []rig.Seat{
+		{Rig: "r", Session: "dev-build-1@r", Lifecycle: "exited"},
+		{Rig: "r", Session: "dev-review@r", Lifecycle: "recoverable"},
+	}
+
+	withDemand := BuildLifecycleRigs([]LifecycleProjectFacts{
+		{Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: true, Ready: 3, Seats: exited},
+	}, nil, true)
+	actions := DecideLifecycle(LifecycleInput{
+		Enabled: true, IdleAfter: 10 * time.Minute, Now: now, Rigs: withDemand,
+	})
+	if len(actions) != 1 || actions[0].Kind != LifecycleStart {
+		t.Fatalf("actions = %+v, want one start for a stopped rig with demand", actions)
+	}
+	if !strings.HasPrefix(actions[0].Reason, "stopped_with_demand:") {
+		t.Fatalf("reason = %q, want the stopped-with-demand wording", actions[0].Reason)
+	}
+
+	noDemand := BuildLifecycleRigs([]LifecycleProjectFacts{
+		{Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: true, Seats: exited},
+	}, nil, true)
+	if actions := DecideLifecycle(LifecycleInput{
+		Enabled: true, IdleAfter: 10 * time.Minute, Now: now, Rigs: noDemand,
+	}); len(actions) != 0 {
+		t.Fatalf("actions = %+v, want a stopped idle rig left alone", actions)
+	}
+
+	// A stale read is not demand, even with every seat exited.
+	stale := BuildLifecycleRigs([]LifecycleProjectFacts{
+		{Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: false, Ready: 3, Seats: exited},
+	}, nil, true)
+	if actions := DecideLifecycle(LifecycleInput{
+		Enabled: true, IdleAfter: 10 * time.Minute, Now: now, Rigs: stale,
+	}); len(actions) != 0 {
+		t.Fatalf("actions = %+v, want no start on a stale forge read", actions)
+	}
+}
+
 // TestLiveRowExcludesTerminalAndHumanRows pins the one vocabulary the rule
 // shares with the rest of the app: a human-blocked row is not work, a terminal
 // row is not work, and a peer-blocked row is.
@@ -409,8 +494,8 @@ func TestBuildLifecycleRigsRigDown(t *testing.T) {
 }
 
 // TestStartReasonDaemonDown pins the two reason strings side by side: the same
-// demand reads as `daemon down; N ready item(s)` when the rig is down and the
-// existing wording when it is up (tasks §2.2).
+// demand reads as `daemon down; N ready item(s)` when the rig is down and
+// `stopped_with_demand: ...` when the rig is merely stopped (tasks §2.2).
 func TestStartReasonDaemonDown(t *testing.T) {
 	up := managedRig("r")
 	up.Running = 0
@@ -419,8 +504,8 @@ func TestStartReasonDaemonDown(t *testing.T) {
 	down.RigDown = true
 
 	reason, ok := startReason(up)
-	if !ok || reason != "2 ready item(s) and no running seat" {
-		t.Fatalf("up reason = (%q, %v), want the existing wording", reason, ok)
+	if !ok || reason != "stopped_with_demand: 2 ready item(s), no running seat" {
+		t.Fatalf("up reason = (%q, %v), want the stopped-with-demand wording", reason, ok)
 	}
 	reason, ok = startReason(down)
 	if !ok || reason != "daemon down; 2 ready item(s)" {

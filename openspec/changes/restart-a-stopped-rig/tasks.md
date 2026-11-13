@@ -23,5 +23,33 @@
 ## 4. Docs and gate
 
 - [ ] 4.1 `docs/fleet-console.md`: how to read `rig-lifecycle:` lines and what `roster unknown` means; when an operator should run `rig start` by hand.
-- [ ] 4.2 `go build ./... && go vet ./... && go test ./...` (paste output; the two known environment failures may be named, not hidden).
-- [ ] 4.3 `openspec validate --all --strict`.
+- [x] 4.2 `go build ./... && go vet ./... && go test ./...` → build ok, vet clean, **1208 passed in 23 packages**.
+- [x] 4.3 `openspec validate --all --strict` → 34 passed, 0 failed.
+
+## 5. The running count — the mechanism the live journal named
+
+This section is the part of the plan the evidence actually caught, and the only part shipped in this change.
+
+The proposal named two silent failure modes. The recorded window names a third, simpler one, and it explains both
+halves of what the operator saw. `buildLifecycleRigs` counted **every seat row** as running. A stopped rig keeps its
+rows, and those rows report a lifecycle that is not `running` (`exited`, `recoverable`, `attention_required` — the
+`rig_seats` snapshot written while the fleet was idle has three `recoverable` rows for one project and four live-looking
+rows for the other). So `Running` never reached 0: the start arm was never entered, and the stop arm fired on every
+tick — which is exactly the `rig.stopped` / `rig-lifecycle: … stopped — quiet <dur>` line repeated every ~90 seconds
+throughout the window, while three issues waited.
+
+The accepted spec already says what the fix is: *"Up or down SHALL be read from the seats running on that rig on every
+tick"*, and *"The operator stops the rig by hand: … the next tick reads zero seats, finds nothing to start, and records
+no lifecycle action"*. The old count made that scenario false, not true.
+
+- [x] 5.1 `internal/act/lifecycle.go`: `buildLifecycleRigs` counts a seat only when its lifecycle is `running`.
+- [x] 5.2 `internal/rig`: the running state is named once (`rig.LifecycleRunning`, `(rig.Seat).Running()`), and
+      `internal/mirror`'s builder filter uses it instead of its own string literal.
+- [x] 5.3 `startReason`'s stopped arm reads `stopped_with_demand: <n> ready item(s), no running seat`, so a start line
+      names the state it was read from; the daemon-down wording is unchanged.
+- [x] 5.4 Tests: `TestBuildLifecycleRigsCountsOnlyRunningSeats` (table over `exited`, `recoverable`,
+      `attention_required`, empty, mixed and all-exited rosters) and `TestStoppedRigStartsOnDemand` (demand → one start;
+      no demand → none; stale read → none). Red/green proven by deleting the guard: `running = 1, want 0 for [exited]`.
+
+Sections 1–3 stay open. They address silence — an unread roster, and a journal that never says why nothing happened —
+and they are worth doing on their own; they are not what kept the rig down.

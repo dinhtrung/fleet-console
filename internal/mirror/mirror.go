@@ -419,7 +419,7 @@ func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []
 		snapshot.Branches = append(snapshot.Branches, converted)
 	}
 	for _, seat := range result.Seats {
-		if seat.Lifecycle != "running" || !strings.Contains(seat.LogicalID, "build") {
+		if !seat.Running() || !strings.Contains(seat.LogicalID, "build") {
 			continue
 		}
 		snapshot.Builders = append(snapshot.Builders, seat.Session)

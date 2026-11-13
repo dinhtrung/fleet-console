@@ -151,6 +151,14 @@ func buildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]t
 				continue
 			}
 			countedSeat[seat.Session] = true
+			// Only a running seat is a live fleet. A stopped rig keeps its node
+			// rows — they report exited, recoverable or attention_required — so
+			// counting a row is how a stopped rig read as up and never started on
+			// demand (#403). The spec's "running seats are the only fact about
+			// whether a rig is up" is this line.
+			if !seat.Running() {
+				continue
+			}
 			entry.Running++
 		}
 		for _, row := range project.Rows {
@@ -346,7 +354,7 @@ func startReason(rigEntry LifecycleRig) (string, bool) {
 		if rigEntry.RigDown {
 			return fmt.Sprintf("daemon down; %d ready item(s)", ready), true
 		}
-		return fmt.Sprintf("%d ready item(s) and no running seat", ready), true
+		return fmt.Sprintf("stopped_with_demand: %d ready item(s), no running seat", ready), true
 	}
 	if rigEntry.LiveRows > 0 {
 		return "a claimable row names a seat and no seat is running", true
