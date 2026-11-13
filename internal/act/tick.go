@@ -88,6 +88,14 @@ var tickIssueNumber = regexp.MustCompile(`#(\d+)\b`)
 // then dispatches the plan; every actual write goes through Actions, which
 // records one audit event per write.
 func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
+	// The clock is optional (design D1, epic #325): a nil means "read the wall
+	// clock", so it is normalised here — the first statement, before Actions is
+	// built — and the raw field has no other readers. A tick planned without a
+	// clock used to nil-dereference at dispatchAge (silent_dispatch.go:174, the
+	// pc offset in the journal) because the production caller never set Now.
+	if in.Now == nil {
+		in.Now = func() time.Time { return time.Now().UTC() }
+	}
 	report := TickReport{Applied: in.Apply}
 	if err := in.Gate.Check(); err != nil {
 		report.Blocked = true
@@ -399,7 +407,7 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 				fmt.Sprintf("#%d silent dispatch skipped: the dispatch has already ended", intent.Item))
 			continue
 		}
-		age := dispatchAge(dispatch, in.Now)
+		age := dispatchAge(dispatch, actions.now)
 		if age <= 0 {
 			report.Skipped = append(report.Skipped,
 				fmt.Sprintf("#%d silent dispatch skipped: the dispatch's age cannot be read", intent.Item))
