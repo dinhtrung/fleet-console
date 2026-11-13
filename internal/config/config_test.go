@@ -584,3 +584,166 @@ func validationFields(t *testing.T, err error) map[string]string {
 	}
 	return map[string]string{"config": err.Error()}
 }
+
+// TestForgeHost covers the one resolver (forge-host, design D1): forge_host
+// when set, otherwise repo_url's host, otherwise gitlab.com for GitLab and
+// empty for GitHub. Cases go through Load so the normalisation the validator
+// applies is the input the resolver sees.
+func TestForgeHost(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name       string
+		body       string
+		wantHost   string
+		wantSource string
+	}{
+		{
+			name:       "explicit host wins",
+			body:       "projects:\n  - key: a\n    forge: gitlab\n    repo: team/app\n    rig: r\n    repo_url: https://gitlab.horisen.org/team/app\n    forge_host: gitlab.horisen.org\n",
+			wantHost:   "gitlab.horisen.org",
+			wantSource: "forge_host",
+		},
+		{
+			name:       "host from repo_url",
+			body:       "projects:\n  - key: a\n    forge: gitlab\n    repo: team/app\n    rig: r\n    repo_url: https://gitlab.horisen.org/team/app\n",
+			wantHost:   "gitlab.horisen.org",
+			wantSource: "repo_url",
+		},
+		{
+			name:       "neither defaults to gitlab.com",
+			body:       "projects:\n  - key: a\n    forge: gitlab\n    repo: team/app\n    rig: r\n",
+			wantHost:   "gitlab.com",
+			wantSource: "default",
+		},
+		{
+			name:       "github resolves empty",
+			body:       "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n",
+			wantHost:   "",
+			wantSource: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), tc.body)
+			eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			host, source, err := ForgeHost(eff.Projects[0])
+			if err != nil {
+				t.Fatalf("ForgeHost: %v", err)
+			}
+			if host != tc.wantHost || source != tc.wantSource {
+				t.Fatalf("ForgeHost = (%q, %q), want (%q, %q)", host, source, tc.wantHost, tc.wantSource)
+			}
+		})
+	}
+
+	t.Run("normalisation trims, drops one trailing slash, lower-cases", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: gitlab\n    repo: team/app\n    rig: r\n    forge_host: GitLab.Horisen.ORG/\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if got := eff.Projects[0].ForgeHost; got != "gitlab.horisen.org" {
+			t.Fatalf("ForgeHost field = %q, want gitlab.horisen.org", got)
+		}
+	})
+
+	t.Run("repo_url with no host is an error", func(t *testing.T) {
+		_, _, err := ForgeHost(Project{Key: "a", Forge: "gitlab", RepoURL: "team/app"})
+		if err == nil || !strings.Contains(err.Error(), "has no host") {
+			t.Fatalf("err = %v, want a has-no-host error", err)
+		}
+	})
+}
+
+// TestForgeHostValidation covers design D3's refusals: a forge_host that
+// contradicts repo_url's host, and forge_host on forge: github, both a
+// FieldError on forge_host; a URL-shaped value refused with the fixed
+// sentence; the existing repo_url warning kept verbatim for a project with
+// neither field.
+func TestForgeHostValidation(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		body    string
+		wantMsg string
+	}{
+		{
+			name:    "contradiction with repo_url's host",
+			body:    "projects:\n  - key: a\n    forge: gitlab\n    repo: team/app\n    rig: r\n    repo_url: https://gitlab.horisen.org/team/app\n    forge_host: gitlab.other.org\n",
+			wantMsg: `forge_host "gitlab.other.org" contradicts repo_url's host "gitlab.horisen.org"`,
+		},
+		{
+			name:    "forge_host on github",
+			body:    "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    forge_host: github.corp.dev\n",
+			wantMsg: "forge_host is only read for gitlab; GitHub's host is gh's business (GH_HOST)",
+		},
+		{
+			name:    "URL-shaped value",
+			body:    "projects:\n  - key: a\n    forge: gitlab\n    repo: team/app\n    rig: r\n    forge_host: https://gitlab.horisen.org\n",
+			wantMsg: "forge_host must be a host, not a URL",
+		},
+		{
+			name:    "path-shaped value",
+			body:    "projects:\n  - key: a\n    forge: gitlab\n    repo: team/app\n    rig: r\n    forge_host: gitlab.horisen.org/team\n",
+			wantMsg: "forge_host must be a host, not a URL",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeConfig(t, t.TempDir(), tc.body)
+			_, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+			if err == nil {
+				t.Fatalf("load accepted the config")
+			}
+			fields := validationFields(t, err)
+			if fields["forge_host"] != tc.wantMsg {
+				t.Fatalf("fields = %v, want forge_host = %q", fields, tc.wantMsg)
+			}
+		})
+	}
+
+	t.Run("matching hosts are accepted", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: gitlab\n    repo: team/app\n    rig: r\n    repo_url: https://gitlab.horisen.org/team/app\n    forge_host: gitlab.horisen.org\n")
+		if _, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir}); err != nil {
+			t.Fatalf("load refused matching hosts: %v", err)
+		}
+	})
+
+	t.Run("repo_url warning stays verbatim for neither field", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: gitlab\n    repo: team/app\n    rig: r\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		want := "project \"a\": repo_url is not set; deriving https://gitlab.com/team/app — set repo_url for a self-hosted GitLab"
+		found := false
+		for _, warning := range eff.Warnings {
+			if warning == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("warnings = %v, want the verbatim repo_url warning %q", eff.Warnings, want)
+		}
+	})
+
+	t.Run("print-config shows the resolved host and source", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: gitlab\n    repo: team/app\n    rig: r\n    repo_url: https://gitlab.horisen.org/team/app\n    forge_host: gitlab.horisen.org\n  - key: b\n    forge: gitlab\n    repo: team/other\n    rig: r2\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		printed, err := eff.Print()
+		if err != nil {
+			t.Fatalf("print: %v", err)
+		}
+		for _, want := range []string{"host: gitlab.horisen.org (forge_host)", "host: gitlab.com (default)"} {
+			if !strings.Contains(string(printed), want) {
+				t.Fatalf("print lacks %q:\n%s", want, printed)
+			}
+		}
+	})
+}
