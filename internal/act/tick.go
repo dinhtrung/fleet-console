@@ -350,6 +350,11 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	// conflicts with merged, the item closed — and a stale ask is the queue
 	// collecting dead rows. Failures are skip lines; the next tick retries.
 	actions.reconcileMergeRepairs(ctx, in, &report)
+	// A verdict question ends when its premise does — a verdict for the head it
+	// named, or a change request that merged or closed (#376). Reconciled over
+	// the ledger like the repair rows, so a question answered outside this tick
+	// still closes.
+	actions.reconcileVerdictQuestions(ctx, in, &report)
 
 	// The plan is built before this tick runs, so its "no verdict" judgment is a
 	// prediction about a state the tick itself changes: the merge loop above

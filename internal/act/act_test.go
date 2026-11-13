@@ -459,6 +459,12 @@ type queueStub struct {
 	resolveErr  error
 	// createErr lets a test refuse a create the way the daemon does (#368).
 	createErr error
+	// resolveRefusesPending makes QueueResolve model the daemon's contract: one
+	// shape resolves, a parked row, and a pending or in-progress row refuses
+	// with qitem_not_leg1_parked (#376). Opt-in because the merge-repair tests
+	// predate the check and pin ResolveRow on a pending row — the same verb
+	// problem, tracked separately rather than fixed inside this change.
+	resolveRefusesPending bool
 }
 
 func (q *queueStub) QueueList(context.Context) ([]rig.QueueRow, error) {
@@ -488,7 +494,15 @@ func (q *queueStub) QueueCreate(_ context.Context, req rig.CreateRequest) (*rig.
 	}
 	return q.item, nil
 }
-func (q *queueStub) QueueResolve(_ context.Context, _, decision string) (*rig.QueueItem, error) {
+func (q *queueStub) QueueResolve(_ context.Context, id, decision string) (*rig.QueueItem, error) {
+	// The daemon resolves one shape: a parked row. A pending or in-progress row
+	// refuses with qitem_not_leg1_parked, so a test cannot pass through a verb
+	// the real queue would not accept (#376).
+	if q.resolveRefusesPending {
+		if row, ok := q.shows[id]; ok && (row.State == "pending" || row.State == "in-progress") {
+			return nil, fmt.Errorf("rig queue resolve: qitem_not_leg1_parked: %s is %s", id, row.State)
+		}
+	}
 	q.resolves = append(q.resolves, decision)
 	if q.resolveErr != nil {
 		return nil, q.resolveErr
@@ -498,9 +512,15 @@ func (q *queueStub) QueueResolve(_ context.Context, _, decision string) (*rig.Qu
 func (q *queueStub) QueueHandoff(context.Context, string, rig.HandoffRequest) (*rig.QueueItem, error) {
 	return q.item, nil
 }
-func (q *queueStub) QueueUpdate(_ context.Context, _ string, req rig.UpdateRequest) (*rig.QueueItem, error) {
+func (q *queueStub) QueueUpdate(_ context.Context, id string, req rig.UpdateRequest) (*rig.QueueItem, error) {
 	q.updateCalls++
 	q.updates = append(q.updates, req)
+	// The row moves as the real queue moves it, so a second tick sees it closed.
+	if req.State != "" {
+		if row, ok := q.shows[id]; ok {
+			row.State = req.State
+		}
+	}
 	if q.updateErr != nil {
 		return nil, q.updateErr
 	}
