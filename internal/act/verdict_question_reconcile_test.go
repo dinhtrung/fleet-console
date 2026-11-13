@@ -62,18 +62,13 @@ func TestVerdictQuestionClosesWhenTheChangeRequestDoes(t *testing.T) {
 	st := newStore(t)
 	pid := newProject(t, st)
 	seedQuestion(t, st, "app", 5, 9, "n1")
-	queue := &queueStub{item: &rig.QueueItem{ID: questionRow, State: "done"}, shows: map[string]*rig.QueueItem{questionRow: {ID: questionRow, State: "pending"}}}
+	queue := &queueStub{item: &rig.QueueItem{ID: questionRow, State: "done"}, resolveRefusesPending: true, shows: map[string]*rig.QueueItem{questionRow: {ID: questionRow, State: "pending"}}}
 
 	in := questionTick(st, pid, now, []forge.ChangeRequest{{Number: 9, State: "merged", Merged: true}}, queue)
 	if _, err := RunTick(ctx, in); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	if len(queue.resolves) != 1 {
-		t.Fatalf("resolves = %v, want the question row resolved once", queue.resolves)
-	}
-	if !strings.Contains(queue.resolves[0], "change request #9 merged") || !strings.Contains(queue.resolves[0], "n1") {
-		t.Fatalf("resolve = %q, want the ending and the note named", queue.resolves[0])
-	}
+	assertClosedOnce(t, queue, "change request #9 merged", "n1")
 }
 
 // TestVerdictQuestionClosesWhenAVerdictExists (#376): the head the question
@@ -90,18 +85,13 @@ func TestVerdictQuestionClosesWhenAVerdictExists(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("verdict: %v", err)
 	}
-	queue := &queueStub{item: &rig.QueueItem{ID: questionRow, State: "done"}, shows: map[string]*rig.QueueItem{questionRow: {ID: questionRow, State: "pending"}}}
+	queue := &queueStub{item: &rig.QueueItem{ID: questionRow, State: "done"}, resolveRefusesPending: true, shows: map[string]*rig.QueueItem{questionRow: {ID: questionRow, State: "pending"}}}
 
 	in := questionTick(st, pid, now, []forge.ChangeRequest{{Number: 9, State: "open", HeadSHA: questionHead}}, queue)
 	if _, err := RunTick(ctx, in); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	if len(queue.resolves) != 1 {
-		t.Fatalf("resolves = %v, want the question row resolved once", queue.resolves)
-	}
-	if !strings.Contains(queue.resolves[0], "verdict accept") || !strings.Contains(queue.resolves[0], "n1") {
-		t.Fatalf("resolve = %q, want the verdict and the note named", queue.resolves[0])
-	}
+	assertClosedOnce(t, queue, "verdict accept", "n1")
 }
 
 // TestVerdictQuestionStandsWhileUnanswered (#376): no verdict for the head and
@@ -112,20 +102,45 @@ func TestVerdictQuestionStandsWhileUnanswered(t *testing.T) {
 	st := newStore(t)
 	pid := newProject(t, st)
 	seedQuestion(t, st, "app", 5, 9, "n1")
-	queue := &queueStub{item: &rig.QueueItem{ID: questionRow, State: "done"}, shows: map[string]*rig.QueueItem{questionRow: {ID: questionRow, State: "pending"}}}
+	queue := &queueStub{item: &rig.QueueItem{ID: questionRow, State: "done"}, resolveRefusesPending: true, shows: map[string]*rig.QueueItem{questionRow: {ID: questionRow, State: "pending"}}}
 
 	in := questionTick(st, pid, now, []forge.ChangeRequest{{Number: 9, State: "open", HeadSHA: questionHead}}, queue)
 	if _, err := RunTick(ctx, in); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	if len(queue.resolves) != 0 {
-		t.Fatalf("resolves = %v, want none while the question stands", queue.resolves)
+	if queue.updateCalls != 0 {
+		t.Fatalf("updates = %v, want none while the question stands", queue.updates)
 	}
 }
 
 // TestVerdictQuestionResolveIsIdempotent (#376): the row's own state decides —
-// a terminal row is left alone, so a repeated tick is a no-op.
+// the first tick closes it, the second finds it terminal and writes nothing.
 func TestVerdictQuestionResolveIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 13, 15, 0, 0, 0, time.UTC)
+	st := newStore(t)
+	pid := newProject(t, st)
+	seedQuestion(t, st, "app", 5, 9, "n1")
+	queue := &queueStub{item: &rig.QueueItem{ID: questionRow, State: "done"}, resolveRefusesPending: true, shows: map[string]*rig.QueueItem{questionRow: {ID: questionRow, State: "pending"}}}
+
+	in := questionTick(st, pid, now, []forge.ChangeRequest{{Number: 9, State: "merged", Merged: true}}, queue)
+	if _, err := RunTick(ctx, in); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	if queue.updateCalls != 1 {
+		t.Fatalf("updates = %+v, want the row closed once", queue.updates)
+	}
+	if _, err := RunTick(ctx, in); err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+	if queue.updateCalls != 1 {
+		t.Fatalf("updates = %+v, want the second tick to write nothing", queue.updates)
+	}
+}
+
+// TestVerdictQuestionResolveLeavesATerminalRowAlone (#376): a row already
+// closed before the reconcile sees it is not written again.
+func TestVerdictQuestionResolveLeavesATerminalRowAlone(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 11, 13, 15, 0, 0, 0, time.UTC)
 	st := newStore(t)
@@ -137,8 +152,30 @@ func TestVerdictQuestionResolveIsIdempotent(t *testing.T) {
 	if _, err := RunTick(ctx, in); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
+	if queue.updateCalls != 0 {
+		t.Fatalf("updates = %v, want none for a terminal row", queue.updates)
+	}
+}
+
+// assertClosedOnce checks the row was closed the way a pending seat row is
+// closed: one update to done, closure no-follow-on, the ending in the
+// resolution — never `queue resolve`, which refuses this shape.
+func assertClosedOnce(t *testing.T, queue *queueStub, wants ...string) {
+	t.Helper()
 	if len(queue.resolves) != 0 {
-		t.Fatalf("resolves = %v, want none for a terminal row", queue.resolves)
+		t.Fatalf("resolves = %v, want none: a pending row is not resolvable", queue.resolves)
+	}
+	if len(queue.updates) != 1 {
+		t.Fatalf("updates = %+v, want exactly one close", queue.updates)
+	}
+	update := queue.updates[0]
+	if update.State != "done" || update.ClosureReason != "no-follow-on" {
+		t.Fatalf("update = %+v, want done/no-follow-on", update)
+	}
+	for _, want := range wants {
+		if !strings.Contains(update.Resolution, want) {
+			t.Fatalf("resolution = %q, want it to name %q", update.Resolution, want)
+		}
 	}
 }
 
@@ -160,7 +197,7 @@ func TestVerdictQuestionReconcileIsProjectScoped(t *testing.T) {
 	seedQuestionAt(t, st, "app", 5, 9, "n1", questionHead, "qitem-app")
 	seedQuestionAt(t, st, "other", 5, 9, "n2", questionHead, "qitem-other")
 	queue := &queueStub{
-		item: &rig.QueueItem{ID: "qitem-app", State: "done"},
+		item: &rig.QueueItem{ID: "qitem-app", State: "done"}, resolveRefusesPending: true,
 		shows: map[string]*rig.QueueItem{
 			"qitem-app":   {ID: "qitem-app", State: "pending"},
 			"qitem-other": {ID: "qitem-other", State: "pending"},
@@ -171,12 +208,7 @@ func TestVerdictQuestionReconcileIsProjectScoped(t *testing.T) {
 	if _, err := RunTick(ctx, in); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	if len(queue.resolves) != 1 {
-		t.Fatalf("resolves = %v, want only this project's question", queue.resolves)
-	}
-	if !strings.Contains(queue.resolves[0], "n1") {
-		t.Fatalf("resolve = %q, want the app project's note", queue.resolves[0])
-	}
+	assertClosedOnce(t, queue, "change request #9 merged", "n1")
 }
 
 // TestVerdictQuestionReconcileVisitsEveryQuestionOnAnItem (#376): two
@@ -196,7 +228,7 @@ func TestVerdictQuestionReconcileVisitsEveryQuestionOnAnItem(t *testing.T) {
 		t.Fatalf("verdict: %v", err)
 	}
 	queue := &queueStub{
-		item: &rig.QueueItem{ID: "qitem-answered", State: "done"},
+		item: &rig.QueueItem{ID: "qitem-answered", State: "done"}, resolveRefusesPending: true,
 		shows: map[string]*rig.QueueItem{
 			"qitem-answered": {ID: "qitem-answered", State: "pending"},
 			"qitem-waiting":  {ID: "qitem-waiting", State: "pending"},
@@ -207,10 +239,5 @@ func TestVerdictQuestionReconcileVisitsEveryQuestionOnAnItem(t *testing.T) {
 	if _, err := RunTick(ctx, in); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	if len(queue.resolves) != 1 {
-		t.Fatalf("resolves = %v, want exactly the answered question", queue.resolves)
-	}
-	if !strings.Contains(queue.resolves[0], "n1") {
-		t.Fatalf("resolve = %q, want the question whose head got a verdict", queue.resolves[0])
-	}
+	assertClosedOnce(t, queue, "verdict accept", "n1")
 }

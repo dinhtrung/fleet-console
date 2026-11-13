@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 )
 
@@ -46,7 +47,7 @@ func (a *Actions) reconcileVerdictQuestions(ctx context.Context, in TickInput, r
 		if repairRowTerminal(row) {
 			continue
 		}
-		if _, err := a.ResolveRow(ctx, question.QItemID, "resolved: "+ending); err != nil {
+		if err := a.closeQuestionRow(ctx, question.QItemID, ending); err != nil {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d verdict question reconcile: %v", question.Item, err))
 			continue
 		}
@@ -84,4 +85,21 @@ func (a *Actions) questionEnding(ctx context.Context, in TickInput, question sto
 		return fmt.Sprintf("verdict %s on head %s (note %s)", verdict.Decision, verdict.SHA, question.NoteID)
 	}
 	return ""
+}
+
+// closeQuestionRow closes a pending question row. `rig queue resolve` is for a
+// parked (blocked) row and is not a closure even then — a live question row is
+// pending, addressed to a seat — so this is the update the operator uses by
+// hand: state done, reason no-follow-on, and the ending recorded as the
+// resolution. The row.close event is the audit trail `ResolveRow` would have
+// written.
+func (a *Actions) closeQuestionRow(ctx context.Context, id, ending string) error {
+	resolution := "resolved: " + ending
+	if _, err := a.Rig.QueueUpdate(ctx, id, rig.UpdateRequest{
+		State: "done", ClosureReason: "no-follow-on", Resolution: resolution,
+	}); err != nil {
+		return err
+	}
+	_, err := a.event(ctx, "act", "row.closed", id, resolution)
+	return err
 }
