@@ -66,6 +66,22 @@ type boardProject struct {
 	Reason string      `json:"reason,omitempty"` // the named compat refusal
 	Counts boardCounts `json:"counts"`
 	Items  []boardItem `json:"items"`
+	// Questions are the operator questions this project's ledger still has
+	// unanswered (#377). A waiting question is why a project can look idle and
+	// still be stuck, so it is part of the project's own row.
+	Questions []boardQuestion `json:"questions"`
+}
+
+// boardQuestion is one unanswered operator question, read from the ledger and
+// joined with the queue row where the snapshot had it (#377).
+type boardQuestion struct {
+	Item          int    `json:"item"`
+	ChangeRequest int    `json:"change_request"`
+	NoteID        string `json:"note_id"`
+	Head          string `json:"head"`
+	Destination   string `json:"destination"`
+	Waiting       string `json:"waiting"`
+	QItemID       string `json:"qitem,omitempty"`
 }
 
 func (f *Fleet) now() time.Time {
@@ -296,7 +312,25 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
 		projectStatus := statuses[p.ID]
-		bp := boardProject{Key: p.Key, Name: p.Name, Paused: projectPaused(p), Status: rig.StatusOK, Items: []boardItem{}}
+		bp := boardProject{
+			Key: p.Key, Name: p.Name, Paused: projectPaused(p), Status: rig.StatusOK,
+			Items: []boardItem{}, Questions: []boardQuestion{},
+		}
+		// A question waiting an hour must not look like a project with nothing
+		// to do (#377): the ledger's unanswered verdict questions ride the same
+		// read the board already makes, and a row the queue says is finished
+		// has already dropped out.
+		questions, err := f.Store.UnansweredQuestions(ctx, p.ID, p.Key)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		for _, question := range questions {
+			bp.Questions = append(bp.Questions, boardQuestion{
+				Item: question.Item, ChangeRequest: question.ChangeRequest, NoteID: question.NoteID,
+				Head: question.Head, Destination: question.Destination, Waiting: age(question.At),
+				QItemID: question.QItemID,
+			})
+		}
 		switch {
 		case compatBlocked:
 			bp.Status = "compat-blocked"

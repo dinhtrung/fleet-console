@@ -19,12 +19,26 @@ export interface BoardCounts {
   blocked: number;
 }
 
+/** One unanswered operator question (#377): a note the merge gate could not read as a verdict. The
+ *  board reads it from the ledger, so it survives a restarted service; a row the queue says is
+ *  finished never reaches the client. */
+export interface BoardQuestion {
+  item: number;
+  change_request: number;
+  note_id: string;
+  head: string;
+  destination: string;
+  waiting: string;
+  qitem?: string;
+}
+
 export interface BoardProject {
   key: string;
   name: string;
   paused: boolean;
   counts: BoardCounts;
   items: BoardItem[];
+  questions: BoardQuestion[];
 }
 
 export interface BoardResponse {

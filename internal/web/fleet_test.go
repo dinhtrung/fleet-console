@@ -247,3 +247,93 @@ func TestBoardMovesQueuedToBuildingAfterDispatch(t *testing.T) {
 		t.Fatalf("item = %+v, want building on the dispatch's seat", item)
 	}
 }
+
+// TestBoardListsUnansweredQuestions (#377): a question the ledger still holds
+// shows on its project's board row with everything the operator needs to
+// answer it, a row the queue says is done drops out, and a project with none
+// answers with an empty list rather than a null.
+func TestBoardListsUnansweredQuestions(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "fleet.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	projectID, err := st.CreateProject(ctx, store.ProjectInput{
+		Key: "app", Name: "app", ForgeKind: "github", ForgeProject: "dinhtrung/fleet-console",
+		Rig: "fleet-console", ConcurrencyCap: 2, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	quietID, err := st.CreateProject(ctx, store.ProjectInput{
+		Key: "quiet", Name: "quiet", ForgeKind: "github", ForgeProject: "o/quiet",
+		Rig: "fleet-console", ConcurrencyCap: 1, Enabled: true,
+	})
+	if err != nil || quietID == 0 {
+		t.Fatalf("second project: %v", err)
+	}
+	waiting := "app #63: note n1 on change request #75 cannot be read as a verdict (names no commit); asked operator-agent@kernel; note=n1; head=aaa111; row qitem-open"
+	answered := "app #64: note n2 on change request #76 cannot be read as a verdict (names no commit); asked human@kernel; note=n2; head=bbb222; row qitem-done"
+	for _, event := range []store.Event{
+		{Actor: "act", Kind: "decision.verdict_question", Subject: "#63", Detail: waiting},
+		{Actor: "act", Kind: "decision.verdict_question", Subject: "#64", Detail: answered},
+	} {
+		if _, err := st.AppendEvent(ctx, event); err != nil {
+			t.Fatalf("event: %v", err)
+		}
+	}
+	now := time.Now().UTC()
+	if err := st.PutSnapshot(ctx, projectID, "rig_queue", []map[string]string{
+		{"id": "qitem-open", "state": "pending", "pickup_state": "unclaimed"},
+		{"id": "qitem-done", "state": "done", "pickup_state": "terminal"},
+	}, now); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+
+	app, err := New(Config{Token: "test-token", Store: st, ConfigPath: "/tmp/fake-config.yaml"})
+	if err != nil {
+		t.Fatalf("app: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/board", nil)
+	req.Header.Set(fiber.HeaderAuthorization, "Bearer test-token")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var board struct {
+		Projects []struct {
+			Key       string `json:"key"`
+			Questions []struct {
+				Item          int    `json:"item"`
+				ChangeRequest int    `json:"change_request"`
+				NoteID        string `json:"note_id"`
+				Head          string `json:"head"`
+				Destination   string `json:"destination"`
+				Waiting       string `json:"waiting"`
+				QItemID       string `json:"qitem"`
+			} `json:"questions"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(body, &board); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	byKey := map[string]int{}
+	for index, project := range board.Projects {
+		byKey[project.Key] = index
+	}
+	appRow := board.Projects[byKey["app"]]
+	if len(appRow.Questions) != 1 {
+		t.Fatalf("questions = %+v, want the one unanswered question", appRow.Questions)
+	}
+	q := appRow.Questions[0]
+	if q.Item != 63 || q.ChangeRequest != 75 || q.NoteID != "n1" || q.Head != "aaa111" ||
+		q.Destination != "operator-agent@kernel" || q.QItemID != "qitem-open" || q.Waiting == "" {
+		t.Fatalf("question = %+v, want item, cr, note, head, destination, waiting and row", q)
+	}
+	quietRow := board.Projects[byKey["quiet"]]
+	if quietRow.Questions == nil || len(quietRow.Questions) != 0 {
+		t.Fatalf("quiet questions = %+v, want an empty list", quietRow.Questions)
+	}
+}
