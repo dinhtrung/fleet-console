@@ -89,19 +89,6 @@ func (e *UnattributableVerdictError) Error() string {
 
 func (e *UnattributableVerdictError) Is(target error) bool { return target == ErrUnattributableVerdict }
 
-// sameSHA says whether the sha a note wrote names the head under review: the
-// same string, or one an unambiguous prefix of the other. Seven is git's own
-// minimum abbreviation, and a prefix of the head cannot realistically be
-// another commit's abbreviation. Anything shorter is not an abbreviation —
-// it is a typo, and the note parser refuses it before this runs.
-func sameSHA(note, head string) bool {
-	note, head = strings.ToLower(note), strings.ToLower(head)
-	if len(note) < 7 || len(head) < 7 {
-		return false
-	}
-	return strings.HasPrefix(head, note) || strings.HasPrefix(note, head)
-}
-
 // UnattributedRejectError is returned when the newest verdict-shaped note is a
 // REJECT that does not name the head under review. It is its own exported type
 // so the tick can record the refusal once per note (epic #309) while the
@@ -212,7 +199,7 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 		}
 		decision := strings.ToLower(match[1])
 		sha := strings.ToLower(match[2])
-		if headSHA != "" && !sameSHA(sha, headSHA) {
+		if headSHA != "" && !forge.SameSHA(sha, headSHA) {
 			if decision == "accept" {
 				// An accept for another sha says nothing about this head. It
 				// ends the scan with a typed refusal instead of falling through
