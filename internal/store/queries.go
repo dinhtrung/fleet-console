@@ -533,6 +533,51 @@ func parseMalformedDetail(detail string) (MalformedVerdict, bool) {
 	return MalformedVerdict{NoteID: noteID, Head: head, Line: line}, true
 }
 
+// RelayedHead is one (item, head) the ledger already holds a
+// `verdict.relayed` event for. The plan dedupes relays on this pair, so a
+// second tick over the same head plans nothing (verdict-relay, design D7).
+type RelayedHead struct {
+	Item int
+	Head string
+}
+
+// RelayedHeads returns every (item, head) pair this project's ledger relayed.
+// The event table carries no project id, so the join scopes the read through
+// the item table — the same scoping, and the same accepted granularity, as
+// MalformedVerdicts and EventsForItem. The detail is the vocabulary act writes
+// (`head=<sha>; row <qitemId>`); a row that does not open with `head=` is
+// skipped rather than guessed at, so a format drift reads as an absence.
+func (s *Store) RelayedHeads(ctx context.Context, projectID int64) ([]RelayedHead, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.number, e.detail
+		FROM event e JOIN item i ON i.project_id = ? AND e.subject = '#' || i.number
+		WHERE e.kind = 'verdict.relayed'`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("store: relayed heads: %w", err)
+	}
+	defer rows.Close()
+	var out []RelayedHead
+	for rows.Next() {
+		var number int
+		var detail string
+		if err := rows.Scan(&number, &detail); err != nil {
+			return nil, fmt.Errorf("store: relayed heads: %w", err)
+		}
+		head, ok := strings.CutPrefix(detail, "head=")
+		if !ok {
+			continue
+		}
+		if head, _, ok = strings.Cut(head, ";"); !ok {
+			continue
+		}
+		if head = strings.TrimSpace(head); head == "" {
+			continue
+		}
+		out = append(out, RelayedHead{Item: number, Head: head})
+	}
+	return out, rows.Err()
+}
+
 // NewestEventsByKind returns, per subject, the newest event of this kind. The
 // once-per-key raises append the row they raised to the newest event's detail,
 // so a reconcile reads one event per subject to find the row a later fact

@@ -83,7 +83,7 @@ func TestEndToEndHandDispatchedItemMerges(t *testing.T) {
 		ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r",
 		Rig: "rig", ConcurrencyCap: 2, Enabled: true,
 	}
-	snapshot := mirror.BuildSnapshot(project, read.Projects["app"], dispatches, verdicts, nil)
+	snapshot := mirror.BuildSnapshot(project, read.Projects["app"], dispatches, verdicts, nil, nil)
 	plan := decide.PlanTick(snapshot, at)
 
 	// 3. The real tick, with that plan and that read.

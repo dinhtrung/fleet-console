@@ -369,15 +369,21 @@ func itemRecord(item forge.Item, at time.Time) store.ItemRecord {
 }
 
 // BuildSnapshot turns one project's reads into the decide input. The
-// malformed verdicts (epic #345, design D7) are event-ledger reads, not forge
-// reads — decide may not read the ledger itself, so the snapshot carries the
-// fold, the same way Dispatched and RelayedHeads do.
-func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []store.DispatchRow, verdicts []store.VerdictForItem, malformed map[int]store.MalformedVerdict) decideSnapshot {
+// malformed verdicts (epic #345, design D7) and the relayed heads
+// (verdict-relay, design D7) are event-ledger reads, not forge reads — decide
+// may not read the ledger itself, so the snapshot carries the folds, the same
+// way Dispatched does.
+//
+// RelayMode is the project row's half of the verdict relay (#397). The caller
+// resolves the effective mode through config's RelayFor — row first, config
+// block second — and the act side resolves the seat from the same call; the
+// plan needs the mode alone, so the snapshot carries no seat.
+func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []store.DispatchRow, verdicts []store.VerdictForItem, malformed map[int]store.MalformedVerdict, relayed []store.RelayedHead) decideSnapshot {
 	snapshot := decideSnapshot{
 		Project: projectFields{
 			Key: project.Key, Forge: decide.Forge(project.ForgeKind), Enabled: project.Enabled,
 			OnHold: project.OnHold, ConcurrencyCap: project.ConcurrencyCap,
-			Rigs: decideRigRefs(project.RigTiers),
+			Rigs: decideRigRefs(project.RigTiers), RelayMode: project.RelayMode,
 		},
 		ForgeOK: !result.ForgeStale,
 	}
@@ -458,6 +464,11 @@ func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []
 			}
 		}
 		snapshot.MalformedVerdicts = filled
+	}
+	for _, relayedHead := range relayed {
+		snapshot.RelayedHeads = append(snapshot.RelayedHeads, decide.RelayedHead{
+			Item: relayedHead.Item, Head: relayedHead.Head,
+		})
 	}
 	return snapshot
 }
