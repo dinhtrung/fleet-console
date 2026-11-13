@@ -19,10 +19,26 @@ type GitLab struct {
 	cli     *cli
 }
 
-// NewGitLab binds the adapter to a project path ("group/project") and a tick budget.
-func NewGitLab(project string, runner Runner, budget *Budget) *GitLab {
+// defaultGitLabHost is the host glab answers on when nothing names another.
+// Setting GITLAB_HOST to it would change nothing, so the adapter does not.
+const defaultGitLabHost = "gitlab.com"
+
+// NewGitLab binds the adapter to a project path ("group/project"), its forge
+// API host, and a tick budget. A host that is set and is not the default is
+// laid on this adapter's own runner as GITLAB_HOST (forge-host D2): every glab
+// child of this adapter reaches that host, its argv byte-for-byte as before,
+// and an adapter built for another project in the same process keeps its own.
+// An empty host — or the default one — sets nothing: glab answers by its own
+// resolution, and the adapter invents no fallback. A runner that cannot carry
+// an environment (a test double) is used as handed in.
+func NewGitLab(project, host string, runner Runner, budget *Budget) *GitLab {
 	if budget == nil {
 		budget = &Budget{Max: 100}
+	}
+	if host != "" && !strings.EqualFold(host, defaultGitLabHost) {
+		if er, ok := runner.(EnvRunner); ok {
+			runner = er.WithEnv([]string{"GITLAB_HOST=" + host})
+		}
 	}
 	return &GitLab{
 		project: project,

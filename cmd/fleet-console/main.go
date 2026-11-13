@@ -74,9 +74,29 @@ func main() {
 	}
 }
 
+// forgeHost resolves one project's forge API host from the effective config
+// (forge-host D1/D4) — the one resolver, asked by key. A project with no row
+// in the config, or whose repo_url names no host, leaves the host empty: the
+// adapter then uses glab's own default, and no caller invents a fallback.
+func forgeHost(eff *config.Effective, key string) string {
+	if eff == nil {
+		return ""
+	}
+	for _, project := range eff.Projects {
+		if project.Key == key {
+			host, _, err := config.ForgeHost(project)
+			if err != nil {
+				return ""
+			}
+			return host
+		}
+	}
+	return ""
+}
+
 // runTick reads the forge/rig/git, writes only the mirror caches, and prints the
 // decide plan. It performs no forge, rig or git writes.
-func projectSources(ctx context.Context, db *store.Store, runner forge.Runner) ([]mirror.Project, error) {
+func projectSources(ctx context.Context, eff *config.Effective, db *store.Store, runner forge.Runner) ([]mirror.Project, error) {
 	projects, err := db.Projects(ctx)
 	if err != nil {
 		return nil, err
@@ -96,7 +116,10 @@ func projectSources(ctx context.Context, db *store.Store, runner forge.Runner) (
 		case forge.KindGitHub:
 			source = forge.NewGitHub(project.ForgeProject, runner, budget)
 		case forge.KindGitLab:
-			source = forge.NewGitLab(project.ForgeProject, runner, budget)
+			// The tick's glab calls go to this project's resolved host
+			// (forge-host D4); a shared runner stays clean, the host rides the
+			// adapter's own copy.
+			source = forge.NewGitLab(project.ForgeProject, forgeHost(eff, project.Key), runner, budget)
 		default:
 			return nil, fmt.Errorf("tick: project %s has unknown forge %q", project.Key, project.ForgeKind)
 		}
@@ -366,14 +389,14 @@ func filterSeatsFor(seats []rig.Seat, rigs []string) []rig.Seat {
 	return out
 }
 
-func runTick(ctx context.Context, db *store.Store, out, errOut io.Writer, runner forge.Runner, rigRunner rig.ExecRunner, timeouts mirror.TimeoutSettings) error {
+func runTick(ctx context.Context, eff *config.Effective, db *store.Store, out, errOut io.Writer, runner forge.Runner, rigRunner rig.ExecRunner, timeouts mirror.TimeoutSettings) error {
 	projects, err := db.Projects(ctx)
 	if err != nil {
 		return err
 	}
 	adapter := rig.NewAdapter(rigRunner)
 	mirrorer := &mirror.Mirror{Store: db, Rig: adapter, ProjectTimeout: timeouts}
-	specs, err := projectSources(ctx, db, runner)
+	specs, err := projectSources(ctx, eff, db, runner)
 	if err != nil {
 		return err
 	}
@@ -571,7 +594,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		defer db.Close()
-		return runTick(ctx, db, stdout, stderr, forgeRunner, rigRunner, mirrorTimeouts(eff))
+		return runTick(ctx, eff, db, stdout, stderr, forgeRunner, rigRunner, mirrorTimeouts(eff))
 	}
 
 	if *notifyReportFlag {
@@ -709,7 +732,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var specs []mirror.Project
 	sources := func(ctx context.Context) ([]mirror.Project, error) {
 		var err error
-		specs, err = projectSources(ctx, db, forgeRunner)
+		specs, err = projectSources(ctx, eff, db, forgeRunner)
 		return specs, err
 	}
 	specByKey := map[string]mirror.Project{}
@@ -950,7 +973,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 			case forge.KindGitHub:
 				return forge.NewGitHub(project.ForgeProject, forgeRunner, &forge.Budget{Max: 50}), nil
 			case forge.KindGitLab:
-				return forge.NewGitLab(project.ForgeProject, forgeRunner, &forge.Budget{Max: 50}), nil
+				// A verdict write goes to the same host the tick read from
+				// (forge-host D4): a verdict on gitlab.com for a self-hosted
+				// mirror is the split this argument prevents.
+				return forge.NewGitLab(project.ForgeProject, forgeHost(eff, project.Key), forgeRunner, &forge.Budget{Max: 50}), nil
 			default:
 				return nil, fmt.Errorf("verdict: project %s has unknown forge %q", project.Key, project.ForgeKind)
 			}
@@ -1087,7 +1113,7 @@ func runHousekeep(ctx context.Context, in housekeepArgs) error {
 	if err != nil {
 		return err
 	}
-	specs, err := projectSources(ctx, in.db, in.runner)
+	specs, err := projectSources(ctx, in.eff, in.db, in.runner)
 	if err != nil {
 		return err
 	}

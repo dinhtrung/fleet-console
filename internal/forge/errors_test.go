@@ -94,7 +94,7 @@ func TestWritePermissionRefusalsAreClassified(t *testing.T) {
 			var err error
 			switch tc.forge {
 			case "gitlab":
-				err = NewGitLab("group/project", runner, &Budget{Max: 100}).
+				err = NewGitLab("group/project", "", runner, &Budget{Max: 100}).
 					Merge(context.Background(), 9, "abc")
 			default:
 				err = NewGitHub("dinhtrung/fleet-console", runner, &Budget{Max: 100}).
@@ -143,14 +143,14 @@ func TestReadForbiddenIsNotPermission(t *testing.T) {
 	runner := &stubRunner{respond: func(int, []string) (string, string, error) {
 		return "", "glab: error: 403 Forbidden", errors.New("exit status 1")
 	}}
-	adapter := NewGitLab("group/project", runner, &Budget{Max: 100})
+	adapter := NewGitLab("group/project", "", runner, &Budget{Max: 100})
 	if _, err := adapter.Items(context.Background(), Timeout{}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("read 403 = %v, want ErrForbidden", err)
 	}
 	runner = &stubRunner{respond: func(int, []string) (string, string, error) {
 		return "", "glab: error: HTTP 401 Unauthorized", errors.New("exit status 1")
 	}}
-	adapter = NewGitLab("group/project", runner, &Budget{Max: 100})
+	adapter = NewGitLab("group/project", "", runner, &Budget{Max: 100})
 	_, readErr := adapter.Items(context.Background(), Timeout{})
 	if !errors.Is(readErr, ErrStale) || IsPermission(readErr) {
 		t.Fatalf("read 401 = %v, want stale and not permission", readErr)

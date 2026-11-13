@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -24,6 +25,12 @@ const MarkerLabel = "status::ongoing"
 type CLIRunner struct {
 	Binaries map[string]string
 	Timeout  time.Duration
+	// Env is appended to the parent's environment for this runner's children
+	// only (forge-host D2). It is how one adapter aims its CLI at a project's
+	// own host while a sibling adapter in the same process keeps the default.
+	// Empty leaves today's behaviour untouched: the child inherits the parent
+	// environment exactly as before.
+	Env []string
 }
 
 func (r CLIRunner) limit() time.Duration {
@@ -51,6 +58,9 @@ func (r CLIRunner) Run(ctx context.Context, argv ...string) (string, string, err
 	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
+	if len(r.Env) > 0 {
+		cmd.Env = append(os.Environ(), r.Env...)
+	}
 	// A killed CLI can leave a child holding the output pipes; WaitDelay keeps
 	// Run from waiting on that child after the deadline.
 	cmd.WaitDelay = 200 * time.Millisecond
@@ -67,6 +77,24 @@ func (r CLIRunner) Run(ctx context.Context, argv ...string) (string, string, err
 			"%s: canceled before the deadline: %w", strings.Join(argv, " "), err)
 	}
 	return stdout.String(), stderr.String(), err
+}
+
+// WithEnv returns a copy of the runner whose children also carry env, on top
+// of the receiver's own. The receiver is unchanged, so one shared runner can
+// back adapters that need different environments (forge-host D2).
+func (r CLIRunner) WithEnv(env []string) Runner {
+	r.Env = append(append([]string(nil), r.Env...), env...)
+	return r
+}
+
+// EnvRunner is a Runner whose children can carry an extra environment. The
+// GitLab adapter asks for it to aim its glab calls at the project's host
+// without touching argv (forge-host D2). A runner without it has no place to
+// put an environment — a test double never spawns a child, so it never needs
+// one — and the adapter leaves it exactly as handed in.
+type EnvRunner interface {
+	Runner
+	WithEnv(env []string) Runner
 }
 
 var http5xx = regexp.MustCompile(`HTTP 5\d\d`)
