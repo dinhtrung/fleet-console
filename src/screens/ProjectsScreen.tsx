@@ -86,6 +86,7 @@ type Draft = {
   runtime: string;
   paths_main: string;
   paths_worktrees: string;
+  reviewer: string;
 };
 
 /** The error key each draft field owns. Only the two path fields differ, but they must be spelled
@@ -104,6 +105,7 @@ const ERROR_KEY: Record<keyof Draft, string> = {
   runtime: "runtime",
   paths_main: "paths.main",
   paths_worktrees: "paths.worktrees",
+  reviewer: "reviewer",
 };
 
 const BLANK: Draft = {
@@ -119,6 +121,7 @@ const BLANK: Draft = {
   runtime: "omp",
   paths_main: "",
   paths_worktrees: "",
+  reviewer: "",
 };
 
 /** The draft as the wire shape. Submit and the live panel both use this, so the checks run against
@@ -141,6 +144,7 @@ function draftInput(draft: Draft): CreateProjectInput {
       main: draft.paths_main.trim(),
       worktrees: draft.paths_worktrees.trim(),
     },
+    reviewer: draft.reviewer.trim(),
   };
 }
 
@@ -178,6 +182,7 @@ function draftFromProject(project: Project): Draft {
     rigs: project.rigs.join(", "),
     concurrency_cap: String(project.concurrency_cap),
     runtime: project.runtime ?? "omp",
+    reviewer: project.reviewer ?? "",
     paths_main: project.paths?.main ?? "",
     paths_worktrees: project.paths?.worktrees ?? "",
   };
@@ -705,6 +710,14 @@ export function ProjectsScreen() {
                 onChange={(event) => change("rigs", event.target.value)}
                 error={errors.rigs}
                 hint="Comma-separated in dispatch order, for example “fleet-console, ghost”."
+                autoComplete="off"
+              />
+              <TextInput
+                label="Reviewer"
+                value={draft.reviewer}
+                onChange={(event) => change("reviewer", event.target.value)}
+                error={errors.reviewer}
+                hint="The reviewer seat's member prefix; the rig is appended. Empty is “dev-review”."
                 autoComplete="off"
               />
               <div className="grid gap-3 sm:grid-cols-2">
