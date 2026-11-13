@@ -204,8 +204,15 @@ func probeNotesGitHub(ctx context.Context, deps Deps, check Check, repo string, 
 // probeGitLab asks the merge-request question with a source branch that cannot
 // exist. GitLab answers 400 when the token cleared authorization and 403/401
 // when it did not — the same distinction GitHub draws with 422 and 403.
+// Every exit names the host the probe aimed at (forge-host D5): a green
+// against gitlab.com for a mirror on the company instance reads as two
+// different answers if the detail does not say which one it is.
 func probeGitLab(ctx context.Context, deps Deps, p Project, repo string) Check {
 	check := Check{ID: CheckForgeWrite, Label: "Forge token can write"}
+	host := p.ForgeHost
+	if host == "" {
+		host = "glab's default"
+	}
 	runCtx, cancel := context.WithTimeout(ctx, deps.Timeout)
 	defer cancel()
 	stdout, stderr, err := deps.Forge(runCtx, "glab", "api", "-X", "POST",
@@ -215,16 +222,35 @@ func probeGitLab(ctx context.Context, deps Deps, p Project, repo string) Check {
 	if err != nil {
 		if runCtx.Err() != nil {
 			check.State = Unknown
-			check.Detail = fmt.Sprintf("glab did not answer within %s", deps.Timeout)
+			check.Detail = fmt.Sprintf("glab did not answer within %s (API host: %s)", deps.Timeout, host)
 			check.Fix = Fix{
 				Command: "glab auth status",
 				Why:     "The forge CLI did not answer; check its login and connectivity by hand.",
 			}
 			return check
 		}
+		if glabHost, refused := glabRefusedHost(stderr); refused {
+			// The credential never reached the forge: glab saw a host it does
+			// not have a login for and stopped before any HTTP call, so there
+			// is no forge verdict to classify. The sentence is glab's own,
+			// quoted verbatim, and the remedy is the login command aimed at
+			// the host glab named (not the project's spelling of it).
+			remedy := glabHost
+			if remedy == "" {
+				remedy = host
+			}
+			check.State = Fail
+			check.Detail = fmt.Sprintf("%s Remedy: glab auth login --hostname %s, as the user that runs the service (API host: %s).",
+				glabHostLine(stderr, glabHost), remedy, remedy)
+			check.Fix = Fix{
+				Command: "glab auth login --hostname " + remedy,
+				Why:     "The host is not registered with glab, so the credential is never sent; log in to it as the user that runs the service.",
+			}
+			return check
+		}
 		if _, ok := classifyWrite(ctx, deps, kindGitLab, repo, p.ForgeHost, stdout, stderr, err); ok {
 			check.State = Fail
-			check.Detail = forgeOwnLine(stderr, err)
+			check.Detail = fmt.Sprintf("%s (API host: %s)", forgeOwnLine(stderr, err), host)
 			check.Fix = Fix{
 				Command: "glab auth login",
 				Why:     "The token may read the project but may not open merge requests; log glab in with a token that carries the api scope.",
@@ -236,11 +262,11 @@ func probeGitLab(ctx context.Context, deps Deps, p Project, repo string) Check {
 		// some other field is not read as a pass.
 		if strings.Contains(strings.ToLower(stderr+"\n"+stdout), "source_branch") {
 			check.State = OK
-			check.Detail = "the forge validates the probe write, so the token may comment and open a change request"
+			check.Detail = fmt.Sprintf("the forge validates the probe write, so the token may comment and open a change request (API host: %s)", host)
 			return check
 		}
 		check.State = Unknown
-		check.Detail = fmt.Sprintf("the merge-request probe did not classify: %s", forgeOwnLine(stderr, err))
+		check.Detail = fmt.Sprintf("the merge-request probe did not classify: %s (API host: %s)", forgeOwnLine(stderr, err), host)
 		check.Fix = Fix{
 			Command: "glab auth status",
 			Why:     "Run it by hand to see the scopes the token actually carries.",
@@ -250,8 +276,39 @@ func probeGitLab(ctx context.Context, deps Deps, p Project, repo string) Check {
 	// glab exits non-zero on a 400, so a clean exit means the merge request was
 	// created — the probe left something behind and must not read as green.
 	check.State = Unknown
-	check.Detail = "the probe merge request was unexpectedly accepted; close it and inspect the token by hand"
+	check.Detail = fmt.Sprintf("the probe merge request was unexpectedly accepted; close it and inspect the token by hand (API host: %s)", host)
 	return check
+}
+
+// glabRefusedHost reports whether glab refused to send the credential because
+// the host is not registered with `glab auth login`. The phrase is glab's own,
+// measured verbatim on a self-hosted instance; host is what glab named in the
+// sentence, so the remedy aims at the spelling glab itself uses.
+func glabRefusedHost(stderr string) (host string, refused bool) {
+	const phrase = "is neither the default host nor a configured host"
+	message := strings.ToLower(stderr)
+	if !strings.Contains(message, phrase) {
+		return "", false
+	}
+	// The host travels in the sentence as a double-quoted word, read from the
+	// raw stderr so the remedy carries glab's own spelling of it.
+	if _, after, ok := strings.Cut(stderr, `"`); ok {
+		if quoted, _, ok := strings.Cut(after, `"`); ok {
+			return quoted, true
+		}
+	}
+	return "", true
+}
+
+// glabHostLine is glab's own sentence, verbatim, the way a failing probe
+// reports every other refusal.
+func glabHostLine(stderr, host string) string {
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.Contains(strings.ToLower(line), "is neither the default host nor a configured host") {
+			return strings.TrimSpace(line)
+		}
+	}
+	return fmt.Sprintf("glab refused to send the credential to %q", host)
 }
 
 // classifyWrite routes the probe's raw result through the forge adapter's own

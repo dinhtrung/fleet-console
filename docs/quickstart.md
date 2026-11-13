@@ -170,6 +170,25 @@ The full schema and every default are in the README's Configuration section.
 prints YAML beginning `config: /home/<user>/.config/fleet-console/config.yaml`,
 with `token: <redacted>` and a `sources:` block; it never prints the token.
 
+### Optional: self-hosted GitLab
+
+For a GitLab instance that is not gitlab.com, name the host and the clone URL on the project entry:
+
+```yaml
+  - key: tsim
+    forge: gitlab
+    repo: horisen/mnp/engine/traffic-simulator-v2
+    forge_host: gitlab.horisen.org     # optional: defaults to repo_url's host, else gitlab.com
+    repo_url: https://gitlab.horisen.org/horisen/mnp/engine/traffic-simulator-v2.git
+```
+
+One prerequisite: run `glab auth login --hostname gitlab.horisen.org` as the user
+that runs the service, so glab has a credential for that host — fleet-console
+passes the host to glab and never touches glab's credential store. Omitting
+both fields keeps `gitlab.com`. Preflight probes the resolved host and names
+it: when glab refuses to send the credential because the host is not
+registered, `forge_write` fails and quotes the login command to run.
+
 ### Optional: verdict relay
 
 When a reviewer finishes a review without posting a parseable verdict, fleet-console can relay
