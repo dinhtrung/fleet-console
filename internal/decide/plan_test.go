@@ -280,6 +280,145 @@ func TestStaleVerdictAsksTheReviewerOncePerHead(t *testing.T) {
 	}
 }
 
+// stallIntents picks the decision.stall raises out of a plan.
+func stallIntents(plan Plan) []Intent {
+	var out []Intent
+	for _, intent := range findIntents(plan, IntentRaiseDecision) {
+		if intent.Event.Kind == "decision.stall" {
+			out = append(out, intent)
+		}
+	}
+	return out
+}
+
+// staleRow is the reviewer's re-review question as a live snapshot row: the
+// text the raise posts, aged and nudged as the test asks.
+func staleRow(head string, age, nudgeAge time.Duration) Row {
+	return Row{
+		QItemID: "qitem-rr-1", State: "pending", Pickup: "unclaimed",
+		Destination: "dev-review@r",
+		Body:        fmt.Sprintf("test #5: verdict stale - ACCEPT aaaa111 is on aaaa111, head is %s; review %s", head, head),
+		CreatedAt:   planNow.Add(-age),
+		LastNudgeAt: planNow.Add(-nudgeAge),
+	}
+}
+
+// operatorRow is a raised question as a live snapshot row, the way the
+// raise leaves it behind for the next tick's plan.
+func operatorRow(qitem, body string) Row {
+	return Row{QItemID: qitem, State: "pending", Pickup: "unclaimed",
+		Destination: "human@kernel", Body: body}
+}
+
+// TestStaleStallAsksOnce: a re-review that outlives its nudges asks the human
+// once per head — quiet at 30 minutes, exactly one at the 45-minute
+// threshold, and quiet again while the raised question stands.
+func TestStaleStallAsksOnce(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "bbbb222"}}
+	s.Verdicts = []VerdictState{{Item: 5, SHA: "aaaa111", Decision: "accept"}}
+	s.Rows = []Row{staleRow("bbbb222", 30*time.Minute, 5*time.Minute)}
+	plan := PlanTick(s, planNow)
+	if got := stallIntents(plan); len(got) != 0 {
+		t.Fatalf("stalls = %+v, want none at 30 minutes — inside the threshold", got)
+	}
+	s.Rows[0].CreatedAt = planNow.Add(-46 * time.Minute)
+	s.Rows[0].LastNudgeAt = planNow.Add(-5 * time.Minute)
+	plan = PlanTick(s, planNow)
+	stalls := stallIntents(plan)
+	if len(stalls) != 1 {
+		t.Fatalf("stalls = %d, want exactly one at the threshold", len(stalls))
+	}
+	stall := stalls[0]
+	if stall.Audience != AudienceOperator || stall.HeadSHA != "bbbb222" || stall.ChangeRequest != 20 {
+		t.Fatalf("stall = %+v, want the operator asked for #20 at bbbb222", stall)
+	}
+	if !strings.Contains(stall.Event.Detail, "head=bbbb222; row qitem-rr-1; age=46m; nudges=2") {
+		t.Fatalf("detail = %q, want the facts grammar", stall.Event.Detail)
+	}
+	for _, want := range []string{"test #5", "#20", "bbbb222", "46m", "2 unanswered nudges"} {
+		if !strings.Contains(stall.Text, want) {
+			t.Fatalf("text = %q, want it to name %q", stall.Text, want)
+		}
+	}
+	// The operator row the raise left behind is the record: ten more ticks at
+	// the same head stay quiet (act's ledger turns a repeat into a NoOp).
+	s.Rows = append(s.Rows, operatorRow("qitem-op-1", stall.Text))
+	for tick := 0; tick < 10; tick++ {
+		plan = PlanTick(s, planNow)
+		if got := stallIntents(plan); len(got) != 0 {
+			t.Fatalf("tick %d raised %+v, want none while the question stands", tick, got)
+		}
+	}
+}
+
+// TestStaleStallNewHeadAsksAgain: one question per head. The old head's
+// standing question is not repeated, and a moved head earns its own after its
+// re-review row has outlived the nudges too.
+func TestStaleStallNewHeadAsksAgain(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "bbbb222"}}
+	s.Verdicts = []VerdictState{{Item: 5, SHA: "aaaa111", Decision: "accept"}}
+	s.Rows = []Row{staleRow("bbbb222", 46*time.Minute, 5*time.Minute)}
+	plan := PlanTick(s, planNow)
+	stalls := stallIntents(plan)
+	if len(stalls) != 1 || stalls[0].HeadSHA != "bbbb222" {
+		t.Fatalf("stalls = %+v, want one for bbbb222", stalls)
+	}
+	s.Rows = append(s.Rows, operatorRow("qitem-op-1", stalls[0].Text))
+	// The head moves: the old question stands, nothing new is asked yet.
+	s.CRs[0].HeadSHA = "cccc333"
+	plan = PlanTick(s, planNow)
+	if got := stallIntents(plan); len(got) != 0 {
+		t.Fatalf("stalls = %+v, want none for the old head once asked", got)
+	}
+	// The new head's re-review row, aged and nudged, is a new question.
+	s.Rows = append(s.Rows, staleRow("cccc333", 46*time.Minute, 5*time.Minute))
+	plan = PlanTick(s, planNow)
+	stalls = stallIntents(plan)
+	if len(stalls) != 1 || stalls[0].HeadSHA != "cccc333" {
+		t.Fatalf("stalls = %+v, want one for the new head cccc333", stalls)
+	}
+}
+
+// TestStaleStallAnsweredBeforeThresholdIsQuiet: an answer or a young row asks
+// nothing — the reviewer answered at 10 minutes, or the re-review row is
+// simply not old enough yet.
+func TestStaleStallAnsweredBeforeThresholdIsQuiet(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "bbbb222"}}
+	// Answered at 10 minutes: the verdict now names the head, so nothing is
+	// stale and no question is raised — the aged reviewer row notwithstanding.
+	s.Verdicts = []VerdictState{{Item: 5, SHA: "bbbb222", Decision: "accept"}}
+	s.Rows = []Row{staleRow("bbbb222", 46*time.Minute, 5*time.Minute)}
+	plan := PlanTick(s, planNow)
+	if got := findIntents(plan, IntentRaiseDecision); len(got) != 0 {
+		t.Fatalf("raises = %+v, want none once the review is answered", got)
+	}
+	// Not yet answered, but young: the reviewer row keeps its own nudges.
+	s.Verdicts = []VerdictState{{Item: 5, SHA: "aaaa111", Decision: "accept"}}
+	s.Rows = []Row{staleRow("bbbb222", 10*time.Minute, 5*time.Minute)}
+	plan = PlanTick(s, planNow)
+	if got := stallIntents(plan); len(got) != 0 {
+		t.Fatalf("stalls = %+v, want none inside the threshold", got)
+	}
+}
+
+// TestStaleStallWithoutNudgeIsQuiet: a row no nudge ever reached has not
+// outlived its nudges — asking the human would skip the reviewer entirely.
+func TestStaleStallWithoutNudgeIsQuiet(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "bbbb222"}}
+	s.Verdicts = []VerdictState{{Item: 5, SHA: "aaaa111", Decision: "accept"}}
+	row := staleRow("bbbb222", 2*time.Hour, 0)
+	row.LastNudgeAt = time.Time{}
+	s.Rows = []Row{row}
+	plan := PlanTick(s, planNow)
+	if got := stallIntents(plan); len(got) != 0 {
+		t.Fatalf("stalls = %+v, want none while no nudge was sent", got)
+	}
+}
+
 func TestIncidentParkedSuppressedByLiveRow(t *testing.T) {
 	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
 	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "abc123"}}
