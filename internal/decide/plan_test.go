@@ -393,6 +393,19 @@ func operatorRow(qitem, body string) Row {
 		Destination: "human@kernel", Body: body}
 }
 
+// malformedRow is the reviewer row the malformed ask left behind: its text is
+// the §0 literal, which carries the note id and the head but no item token —
+// so, unlike staleRow, it names no #5 for the plan to find.
+func malformedRow(head string, age, nudgeAge time.Duration) Row {
+	return Row{
+		QItemID: "qitem-mv-1", State: "pending", Pickup: "unclaimed",
+		Destination: "dev-review@r",
+		Body:        fmt.Sprintf("The merge gate reads one line: ACCEPT %s or REJECT %s. Your note 6847905312's first line was \"## QA Verdict: ACCEPT ✅\", which names no commit. Post a new comment whose first line is:\n\nACCEPT %s", head, head, head),
+		CreatedAt:   planNow.Add(-age),
+		LastNudgeAt: planNow.Add(-nudgeAge),
+	}
+}
+
 // TestStaleStallAsksOnce: a re-review that outlives its nudges asks the human
 // once per head — quiet at 30 minutes, exactly one at the 45-minute
 // threshold, and quiet again while the raised question stands.
@@ -499,6 +512,109 @@ func TestStaleStallWithoutNudgeIsQuiet(t *testing.T) {
 	plan := PlanTick(s, planNow)
 	if got := stallIntents(plan); len(got) != 0 {
 		t.Fatalf("stalls = %+v, want none while no nudge was sent", got)
+	}
+}
+
+// TestMalformedStallAfterTwoNudgeCycles: the malformed ask escalates to the
+// operator on the same deadline the stale re-review uses — quiet at 44
+// minutes, exactly one decision.stall at 46, and once a parseable verdict
+// stands for the head, neither a nudge nor an escalation.
+func TestMalformedStallAfterTwoNudgeCycles(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "cccc333"}}
+	s.MalformedVerdicts = map[int]MalformedVerdict{
+		5: {NoteID: "6847905312", Head: "cccc333", Line: "## QA Verdict: ACCEPT ✅"},
+	}
+
+	t.Run("44_minutes_raises_nothing_to_the_operator", func(t *testing.T) {
+		s.Rows = []Row{malformedRow("cccc333", 44*time.Minute, 1*time.Minute)}
+		plan := PlanTick(s, planNow)
+		if got := stallIntents(plan); len(got) != 0 {
+			t.Fatalf("stalls = %+v, want none at 44 minutes — inside the threshold", got)
+		}
+	})
+
+	t.Run("46_minutes_asks_the_operator_once", func(t *testing.T) {
+		s.Rows = []Row{malformedRow("cccc333", 46*time.Minute, 1*time.Minute)}
+		plan := PlanTick(s, planNow)
+		stalls := stallIntents(plan)
+		if len(stalls) != 1 {
+			t.Fatalf("stalls = %d, want exactly one at the threshold", len(stalls))
+		}
+		stall := stalls[0]
+		if stall.Event.Kind != "decision.stall" || stall.Audience != AudienceOperator ||
+			stall.HeadSHA != "cccc333" || stall.ChangeRequest != 20 {
+			t.Fatalf("stall = %+v, want the operator asked for #20 at cccc333", stall)
+		}
+		if !strings.Contains(stall.Event.Detail, "head=cccc333; note=6847905312; row qitem-mv-1; age=46m; nudges=2") {
+			t.Fatalf("detail = %q, want the facts grammar with the note id", stall.Event.Detail)
+		}
+		for _, want := range []string{
+			"test #5", "malformed verdict stalled", "6847905312", "## QA Verdict: ACCEPT ✅",
+			"cccc333", "46m", "2 unanswered nudges",
+			"The merge gate reads one line: ACCEPT cccc333 or REJECT cccc333",
+			"Post a new comment whose first line is:\n\nACCEPT cccc333",
+			"POST /api/items/5/verdict", "instruct the reviewer", "A hand merge is not one of the moves",
+		} {
+			if !strings.Contains(stall.Text, want) {
+				t.Fatalf("text = %q, want it to name %q", stall.Text, want)
+			}
+		}
+	})
+
+	t.Run("a_parseable_verdict_in_between_stops_both", func(t *testing.T) {
+		s.Rows = []Row{malformedRow("cccc333", 46*time.Minute, 1*time.Minute)}
+		s.Verdicts = []VerdictState{{Item: 5, SHA: "cccc333", Decision: "accept"}}
+		plan := PlanTick(s, planNow)
+		if got := stallIntents(plan); len(got) != 0 {
+			t.Fatalf("stalls = %+v, want none once the verdict stands for the head", got)
+		}
+		if hasEvent(plan, "decision.malformed_verdict", "#5") {
+			t.Fatalf("events = %+v, want no re-ask beside the captured verdict", plan.Events)
+		}
+		if got := findIntents(plan, IntentNudge); len(got) != 0 {
+			t.Fatalf("nudges = %+v, want none once the verdict stands for the head", got)
+		}
+	})
+}
+
+// TestMalformedStallAsksOnce: the operator row the escalation leaves behind is
+// the record — later ticks stay quiet, the reviewer's literal is not re-asked
+// beside it, and the operator's own aged row is never mistaken for the
+// reviewer row a new escalation would key on.
+func TestMalformedStallAsksOnce(t *testing.T) {
+	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "cccc333"}}
+	s.MalformedVerdicts = map[int]MalformedVerdict{
+		5: {NoteID: "6847905312", Head: "cccc333", Line: "## QA Verdict: ACCEPT ✅"},
+	}
+	s.Rows = []Row{malformedRow("cccc333", 46*time.Minute, 1*time.Minute)}
+	plan := PlanTick(s, planNow)
+	stalls := stallIntents(plan)
+	if len(stalls) != 1 {
+		t.Fatalf("stalls = %d, want exactly one at the threshold", len(stalls))
+	}
+	// Ten more ticks at the same head with the question standing: no second
+	// stall, and no re-ask of the reviewer beside it (act's ledger turns a
+	// repeat of either into a NoOp).
+	s.Rows = append(s.Rows, operatorRow("qitem-op-1", stalls[0].Text))
+	for tick := 0; tick < 10; tick++ {
+		plan = PlanTick(s, planNow)
+		if got := stallIntents(plan); len(got) != 0 {
+			t.Fatalf("tick %d raised %+v, want none while the question stands", tick, got)
+		}
+		if hasEvent(plan, "decision.malformed_verdict", "#5") {
+			t.Fatalf("events = %+v, want no re-ask while the operator question stands", plan.Events)
+		}
+	}
+	// The reviewer's row has since been ended, but the operator's aged row
+	// remains: no fresh escalation keys on it — act's ledger is the backstop.
+	s.Rows = s.Rows[1:]
+	s.Rows[0].CreatedAt = planNow.Add(-2 * time.Hour)
+	s.Rows[0].LastNudgeAt = planNow.Add(-5 * time.Minute)
+	plan = PlanTick(s, planNow)
+	if got := stallIntents(plan); len(got) != 0 {
+		t.Fatalf("stalls = %+v, want none keyed on the operator's own row", got)
 	}
 }
 
