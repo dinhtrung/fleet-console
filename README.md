@@ -40,6 +40,7 @@ The manual workflow it productises: [`docs/my-stack.md`](docs/my-stack.md) §3.
 | `openspec/changes/fleet-console-v1/` | the contract: proposal, design, phased tasks, four capability deltas |
 | `cmd/`, `internal/` | the Go service skeleton: Fiber API, SQLite store, rig compat probe |
 | `docs/my-stack.md` | the stack and the workflow this app automates (project details removed) |
+| `docs/forge-token.md` | the forge token each write needs (merge is Contents: write), and how to verify it |
 | `src/`, `DESIGN.md`, `PRODUCT.md` | the web scaffold inherited from admin-panel; the board will replace its screens |
 
 ## Usage

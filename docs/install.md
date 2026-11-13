@@ -35,8 +35,11 @@ The script never holds a credential. Each of these prints one copy-pasteable
 command and exits `3`; run `./install.sh --verify` afterwards.
 
 1. Harness login — open `omp`, or import credentials with `omp auth import`.
-2. `gh auth login` — device flow.
-3. `glab auth login` — token entry.
+2. `gh auth login` — device flow. The scopes are not optional: a classic token needs `repo` (plus `workflow` if
+   builders touch `.github/workflows`); a fine-grained token needs Contents, Pull requests and Issues at write,
+   because a merge is filed under Contents and nothing else merges — see
+   [`forge-token.md`](forge-token.md) for the per-operation table.
+3. `glab auth login` — token entry. The `api` scope, and Developer or better on the project.
 4. Seat provider key — export `OMP_PROVIDER_KEY` in the environment (or write
    `~/.openrig/state/omp/<seat>/agent/config.yml`). The value is never printed
    and never written to the log.
@@ -56,7 +59,9 @@ existing rig spec under `~/.openrig/specs/rigs/` are left untouched.
   other harnesses' login findings are accepted because the fleet's harness is
   pinned by `stack.lock`);
 - the rig daemon answers;
-- one real forge read succeeds (`gh api user` or `glab api user`);
+- one real forge read succeeds (`gh api user` or `glab api user`). A read never proves a write: no scope check
+  sees a missing merge permission, so the first merge on a new box is the real test —
+  [`forge-token.md`](forge-token.md) has the per-operation permission table and the symptom→cause list;
 - `fleet-console --compat` exits 0 with the parsed queue and seat shapes;
 - `GET http://127.0.0.1:8787/api/health` is 200;
 - the user units are `active` and `enabled`, and linger is on;
