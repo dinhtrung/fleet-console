@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -37,12 +38,16 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 
 // Project is one project registry entry from the file.
 type Project struct {
-	Key            string  `yaml:"key"`
-	Name           string  `yaml:"name"`
-	Forge          string  `yaml:"forge"`
-	Repo           string  `yaml:"repo"`
-	RepoURL        string  `yaml:"repo_url"`
-	DefaultBranch  string  `yaml:"default_branch"`
+	Key           string `yaml:"key"`
+	Name          string `yaml:"name"`
+	Forge         string `yaml:"forge"`
+	Repo          string `yaml:"repo"`
+	RepoURL       string `yaml:"repo_url"`
+	// ForgeHost names the host the forge API lives on (forge-host, design D1):
+	// host[:port], no scheme, no path. Normalised by ValidateProject; resolved
+	// by the package-level ForgeHost function. Unset keeps today's behaviour.
+	ForgeHost     string `yaml:"forge_host"`
+	DefaultBranch string `yaml:"default_branch"`
 	Rig            string  `yaml:"rig,omitempty"`
 	Rigs           RigRefs `yaml:"rigs"`
 	RigTemplate    string  `yaml:"rig_template"`
@@ -622,6 +627,15 @@ func readSecretFile(path, key string) (string, error) {
 	return value, nil
 }
 
+// projectPrint is one project as --print-config shows it: the project's own
+// fields plus the forge host the process resolved (forge-host, design D1).
+// Empty host (GitHub, or a repo_url that carries no host) prints no host line —
+// there is nothing the process would use.
+type projectPrint struct {
+	Project `yaml:",inline"`
+	Host    string `yaml:"host,omitempty"`
+}
+
 // Print renders the effective configuration as YAML without the token value and
 // with the source of every value.
 func (e *Effective) Print() ([]byte, error) {
@@ -656,7 +670,7 @@ func (e *Effective) Print() ([]byte, error) {
 			IdlePollMax string `yaml:"idle_poll_max"`
 		} `yaml:"rig_lifecycle"`
 		Lifecycles []ProjectLifecycle `yaml:"lifecycles,omitempty"`
-		Projects   []Project          `yaml:"projects,omitempty"`
+		Projects   []projectPrint     `yaml:"projects,omitempty"`
 		Sources    map[string]string  `yaml:"sources"`
 		Warnings   []string           `yaml:"warnings,omitempty"`
 	}
@@ -664,7 +678,7 @@ func (e *Effective) Print() ([]byte, error) {
 		Config: e.ConfigPath, Listen: e.Listen, Database: e.Database, TokenFile: e.TokenFile,
 		RigBinary: e.RigBinary, GhBinary: e.GhBinary, GlabBinary: e.GlabBinary,
 		Tick: e.TickInterval.String(), Notify: e.NotifyInterval.String(),
-		Act: e.Act, Projects: e.Projects, Sources: e.Sources, Warnings: e.Warnings,
+		Act: e.Act, Sources: e.Sources, Warnings: e.Warnings,
 		DecisionNotes: e.DecisionNotes, DecisionAnswerers: e.DecisionAnswerers,
 		Housekeeping: e.HousekeepingInterval.String(),
 	}
@@ -675,6 +689,17 @@ func (e *Effective) Print() ([]byte, error) {
 	out.RigLifecycle.IdleAfter = e.RigLifecycle.IdleAfter.String()
 	out.RigLifecycle.IdlePollMax = e.RigLifecycle.IdlePollMax.String()
 	out.Lifecycles = e.Lifecycles
+	// The forge host is resolved here with the one resolver (forge-host D1), so
+	// --print-config shows the host and source the process itself would use —
+	// not a re-derivation. A resolver error (a repo_url with no host) leaves the
+	// line out: the field says what could be resolved, not what could not.
+	for _, project := range e.Projects {
+		printed := projectPrint{Project: project}
+		if host, source, err := ForgeHost(project); err == nil {
+			printed.Host = fmt.Sprintf("%s (%s)", host, source)
+		}
+		out.Projects = append(out.Projects, printed)
+	}
 	if out.Config == "" {
 		out.Config = "(none)"
 	}
@@ -701,6 +726,30 @@ func (e *Effective) RelayFor(projectKey string) (mode, seat string) {
 		return "", ""
 	}
 	return project.VerdictRelay.Mode, project.VerdictRelay.Seat
+}
+
+// ForgeHost resolves one project's forge API host (forge-host, design D1).
+// The order is the whole design: forge_host when set, otherwise repo_url's
+// host, otherwise gitlab.com for GitLab and empty for GitHub. source names
+// where the answer came from ("forge_host", "repo_url" or "default"), so
+// --print-config can prove what the process actually resolved. This is the
+// one resolver: no caller, here or elsewhere, parses repo_url for a host on
+// its own.
+func ForgeHost(p Project) (host, source string, err error) {
+	if normalized := strings.TrimSpace(p.ForgeHost); normalized != "" {
+		return normalized, "forge_host", nil
+	}
+	if p.RepoURL != "" {
+		parsed, parseErr := url.Parse(p.RepoURL)
+		if parseErr != nil || parsed.Host == "" {
+			return "", "", fmt.Errorf("project %q: repo_url %q has no host", p.Key, p.RepoURL)
+		}
+		return strings.ToLower(parsed.Host), "repo_url", nil
+	}
+	if strings.EqualFold(strings.TrimSpace(p.Forge), "gitlab") {
+		return "gitlab.com", "default", nil
+	}
+	return "", "", nil
 }
 
 // findProjectByKey is the linear lookup by key. findProject in
@@ -788,6 +837,18 @@ func ValidateProject(p *Project, dir, home string) error {
 	p.Name = strings.TrimSpace(p.Name)
 	p.DefaultBranch = strings.TrimSpace(p.DefaultBranch)
 	p.Lifecycle = strings.TrimSpace(p.Lifecycle)
+
+	// forge_host (forge-host, design D1): normalised here so the loader and the
+	// board's 422 share one path — trim, drop one trailing slash, lower-case.
+	// A URL-shaped value is refused: the field says host.
+	p.ForgeHost = strings.TrimSpace(p.ForgeHost)
+	if strings.HasSuffix(p.ForgeHost, "/") {
+		p.ForgeHost = strings.TrimSuffix(p.ForgeHost, "/")
+	}
+	p.ForgeHost = strings.ToLower(p.ForgeHost)
+	if strings.Contains(p.ForgeHost, "://") || strings.Contains(p.ForgeHost, "/") {
+		add("forge_host", "forge_host must be a host, not a URL")
+	}
 
 	switch {
 	case p.Key == "":
@@ -877,6 +938,23 @@ func ValidateProject(p *Project, dir, home string) error {
 		}
 		if relay.Mode != "" && relay.Seat == "" {
 			add("verdict_relay.seat", "verdict_relay.seat is required when verdict_relay.mode is set")
+		}
+	}
+	// forge_host's contradictions (forge-host, design D3): a host that
+	// disagrees with repo_url's would clone from one instance and merge in
+	// another, and GitHub's host is gh's business (GH_HOST). Both refuse on
+	// forge_host. A GitLab project with neither field keeps today's behaviour —
+	// the existing repo_url warning stays verbatim.
+	if p.ForgeHost != "" && p.Forge == "github" {
+		add("forge_host", "forge_host is only read for gitlab; GitHub's host is gh's business (GH_HOST)")
+	}
+	if p.ForgeHost != "" && p.RepoURL != "" && p.Forge == "gitlab" {
+		repoHost := ""
+		if parsed, parseErr := url.Parse(p.RepoURL); parseErr == nil {
+			repoHost = strings.ToLower(parsed.Host)
+		}
+		if repoHost != "" && repoHost != p.ForgeHost {
+			add("forge_host", "forge_host %q contradicts repo_url's host %q", p.ForgeHost, repoHost)
 		}
 	}
 	if p.RigTemplate == "" {
