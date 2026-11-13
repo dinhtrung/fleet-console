@@ -115,7 +115,9 @@ the file resolve against the file's directory and `~` expands, so the file can
 live in `~/.config/fleet-console/` and point at `~/src/...`.
 
 A project entry takes `key`, `name`, `forge` (`github`/`gitlab`), `repo`
-(`owner/name`), `default_branch` (default `main`), `rigs`, `rig_template`
+(`owner/name`), `repo_url` (the full clone URL; drives clone and preflight),
+`forge_host` (GitLab only: the API host; defaults to `repo_url`'s host, else
+`gitlab.com`), `default_branch` (default `main`), `rigs`, `rig_template`
 (default `default`), `concurrency_cap`, `gate_cmd`, `labels`, `onhold`, and
 `paths.main` / `paths.worktrees`. `rigs` is the ordered list of rigs for this
 project; `rig: name` is the one-element form, and using both in one file is an

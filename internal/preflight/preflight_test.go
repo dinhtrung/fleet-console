@@ -410,6 +410,109 @@ func TestForgeWriteChecks(t *testing.T) {
 	}
 }
 
+// TestForgeWriteNamesTheProbedHost pins forge-host D5: the write probe names
+// the host it aimed at in every gitlab exit, and an unregistered host fails
+// with glab's own sentence plus the login remedy — not a sixth check, just the
+// probe's own answer saying which forge instance it answered for.
+func TestForgeWriteNamesTheProbedHost(t *testing.T) {
+	const unregistered = `! GITLAB_TOKEN is set, but "gitlab.horisen.org" is neither the default host nor a configured host, so glab did not send the credential to it.`
+	answer := func(stdout, stderr string, err error) func(context.Context, string, ...string) (string, string, error) {
+		return func(context.Context, string, ...string) (string, string, error) { return stdout, stderr, err }
+	}
+	gitlab400 := answer(`{"message":{"source_branch":["is invalid"]}}`,
+		"glab: HTTP 400: Bad Request", errors.New("exit status 1"))
+
+	tests := []struct {
+		name    string
+		project Project
+		forge   func(ctx context.Context, binary string, args ...string) (string, string, error)
+		want    State
+		details []string // every substring the Detail must carry
+		command string   // substring the Fix.Command must carry; "" skips
+	}{
+		{
+			name:    "fail: an unregistered host fails with glab's own sentence and the login remedy",
+			project: Project{Forge: "gitlab", Repo: "g/p", ForgeHost: "gitlab.horisen.org"},
+			forge:   answer("", unregistered+"\n", errors.New("exit status 1")),
+			want:    Fail,
+			details: []string{
+				unregistered,
+				"glab auth login --hostname gitlab.horisen.org",
+				"API host: gitlab.horisen.org",
+			},
+			command: "glab auth login --hostname gitlab.horisen.org",
+		},
+		{
+			name:    "ok: a green validation still names the host it probed",
+			project: Project{Forge: "gitlab", Repo: "g/p", ForgeHost: "gitlab.horisen.org"},
+			forge:   gitlab400,
+			want:    OK,
+			details: []string{"may comment and open a change request", "API host: gitlab.horisen.org"},
+		},
+		{
+			name:    "fail: a permission refusal names the host too",
+			project: Project{Forge: "gitlab", Repo: "g/p", ForgeHost: "gitlab.horisen.org"},
+			forge:   answer(`{"message":"403 Forbidden"}`, "glab: error: 403 Forbidden", errors.New("exit status 1")),
+			want:    Fail,
+			details: []string{"403 Forbidden", "API host: gitlab.horisen.org"},
+		},
+		{
+			name:    "unknown: an unclassified refusal names the host",
+			project: Project{Forge: "gitlab", Repo: "g/p", ForgeHost: "gitlab.horisen.org"},
+			forge:   answer("", "glab: API rate limit exceeded", errors.New("exit status 1")),
+			want:    Unknown,
+			details: []string{"did not classify", "API host: gitlab.horisen.org"},
+		},
+		{
+			name:    "an empty forge host reads as glab's own default",
+			project: Project{Forge: "gitlab", Repo: "g/p"},
+			forge:   gitlab400,
+			want:    OK,
+			details: []string{"API host: glab's default"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := depsFor(t.TempDir())
+			deps.Forge = tc.forge
+			report := RunWith(context.Background(), tc.project, config.Effective{}, deps)
+			check := checkByID(t, report, CheckForgeWrite)
+			if check.State != tc.want {
+				t.Fatalf("state = %q, want %q (detail %q)", check.State, tc.want, check.Detail)
+			}
+			for _, detail := range tc.details {
+				if !strings.Contains(check.Detail, detail) {
+					t.Fatalf("detail = %q, want it to contain %q", check.Detail, detail)
+				}
+			}
+			if tc.command != "" && !strings.Contains(check.Fix.Command, tc.command) {
+				t.Fatalf("fix command = %q, want it to contain %q", check.Fix.Command, tc.command)
+			}
+		})
+	}
+}
+
+// TestForgeWriteKeepsFiveChecks: the host is part of the write probe's own
+// answer, not a new row (forge-host D5) — the check list keeps its five ids
+// and their order.
+func TestForgeWriteKeepsFiveChecks(t *testing.T) {
+	deps := depsFor(t.TempDir())
+	deps.Forge = func(ctx context.Context, binary string, args ...string) (string, string, error) {
+		return "", `! GITLAB_TOKEN is set, but "gitlab.horisen.org" is neither the default host nor a configured host, so glab did not send the credential to it.`, errors.New("exit status 1")
+	}
+	report := RunWith(context.Background(),
+		Project{Forge: "gitlab", Repo: "g/p", ForgeHost: "gitlab.horisen.org"}, config.Effective{}, deps)
+	want := []string{CheckGitURL, CheckForgeWrite, CheckBaseDir, CheckRig, CheckRuntime}
+	if len(report.Checks) != len(want) {
+		t.Fatalf("checks = %d, want %d — the host names no new check", len(report.Checks), len(want))
+	}
+	for i, id := range want {
+		if report.Checks[i].ID != id {
+			t.Fatalf("check %d = %s, want %s — the order is part of the answer", i, report.Checks[i].ID, id)
+		}
+	}
+}
+
 // TestForgeWriteNeverWarnsAndNeverLeavesState: Warn is the one state this
 // check must never produce (a token that cannot write means no item can be
 // delivered), and a probe that left state behind must not read as green.
