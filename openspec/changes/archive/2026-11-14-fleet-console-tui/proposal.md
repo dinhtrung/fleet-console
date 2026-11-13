@@ -1,3 +1,8 @@
+> **Dropped 2026-11-13.** The owner reviewed this change set and chose not to build the
+> terminal surface: 23 tasks, nine days, zero progress, and no recorded demand for a surface the
+> board already covers. Archived with `--skip-specs`, so no spec tree promises it. The audit that
+> raised this (#399) stands: an unticked task list is what made "tasks ticked" untrustworthy.
+
 # Proposal — a terminal surface for the board
 
 ## Why
