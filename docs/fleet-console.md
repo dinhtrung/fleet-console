@@ -103,6 +103,41 @@ brief already emit the full head sha, so the abbreviated form is the exception, 
 documented path. Nothing is written to the store for a refusal, so the next tick retries and the
 note stays until it is answered.
 
+### A note that names no commit
+
+The reviewer's line is the note's **first non-empty line**, undecorated: `ACCEPT <sha>` or
+`REJECT <sha>`, with a reason after the sha allowed. What a model wraps around the line is read
+past — heading marks, quote and bullet marks, emphasis, a `Verdict:`-style label closed by a
+separator, the separator after the token itself (`ACCEPT: <sha>` says what `ACCEPT <sha>` says) —
+but the sha itself is never invented: `## QA Verdict: ACCEPT ✅` names no commit, and an emoji
+where the sha belongs is not a verdict. The line is refused, not guessed.
+
+**What a malformed note produces.** When the first line starts with the token but carries no
+parseable sha, the tick writes one `verdict.malformed` journal line per note — once, not once per
+tick — recording the note id, the head under review, and the line as written. The plan then asks
+the **reviewer**, once per note and head, with the one line that repairs it:
+
+```
+The merge gate reads one line: ACCEPT <head> or REJECT <head>. Your note <id>'s first line was
+"<line>", which names no commit. Post a new comment whose first line is:
+
+ACCEPT <head>
+```
+
+The same text is posted once as a comment on the change request, so the thread carries the
+instruction the row points at. The operator's "has no verdict" question does not fire beside it:
+the reviewer plainly tried, so that question would be false.
+
+**The operator's deadline.** The reviewer row keeps the ordinary nudges — the first at 15
+minutes, then one every 30. If the note is still unanswered after 45 minutes in total, two full
+nudge cycles, the question moves to `human@kernel` once for that note and head: the text names the
+note, the line as written, the head and the same literal, and offers the two lawful moves — cast
+the verdict on the item drawer (`POST /api/items/<n>/verdict`, which writes `ACCEPT <sha>` at the
+head), or instruct the reviewer to post the line. Merging by hand is not one of the moves: a hand
+merge skips the gate's four facts — the verdict, the head it names, the green pipeline, the
+mergeable `Closes #<id>` body — and the gate is the only thing that reads them. The reviewer's row
+stays open the whole time: the human reading and the seat repairing are concurrent, by design.
+
 ### When the app asks a human
 
 The operator question — *this change request has no verdict; approve or reject it* — is not
