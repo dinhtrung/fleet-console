@@ -115,7 +115,7 @@ type UnattributedRejectError struct {
 }
 
 func (e *UnattributedRejectError) Error() string {
-	return fmt.Sprintf("REJECT %s does not name head %s (note %s)", e.Written, e.Head, e.NoteID)
+	return fmt.Sprintf("the note is older than the head: this REJECT names %s, the head is %s; a verdict naming %s unblocks the merge (note %s)", e.Written, e.Head, e.Head, e.NoteID)
 }
 
 func (e *UnattributedRejectError) Is(target error) bool { return target == ErrUnattributableVerdict }

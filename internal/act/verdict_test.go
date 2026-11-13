@@ -3,7 +3,9 @@ package act
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -332,6 +334,47 @@ func TestCaptureStillErrorsOnRejectForAnotherSHA(t *testing.T) {
 	}
 	if !errors.Is(err, ErrUnattributableVerdict) {
 		t.Fatalf("err = %v, want it in the ErrUnattributableVerdict family", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("verdict rows = %+v, want none", rows)
+	}
+}
+
+// dateRe matches a date- or timestamp-shaped token, so the wording test can
+// assert the refusal does not state or imply a commit time.
+var dateRe = regexp.MustCompile(`\b20\d\d[-/]\d\d|\d\d:\d\d(:\d\d)?|\bT\d\d\b`)
+
+// TestUnattributableRejectText pins the refusal's wording (#312): the note is
+// older than the head, both shas are named, and the sentence says what
+// unblocks the merge — a verdict naming the head. It must not state or imply
+// a commit time (stale-verdict-visibility spec), so the text carries no
+// timestamp; the note's CreatedAt field stays unread for the wording.
+func TestUnattributableRejectText(t *testing.T) {
+	const head = "5690552c1e8f5a6d7b8c9d0e1f2a3b4c5d6e7f80"
+	_, rows, err := captureAt(t, head, []forge.Comment{
+		{ID: "37482", CreatedAt: "2026-11-12T09:00:00Z", Body: "REJECT a746312"},
+	})
+	var refusal *UnattributedRejectError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("err = %v, want an UnattributedRejectError — the typed fact #311 added", err)
+	}
+	if refusal.NoteID != "37482" || refusal.Written != "a746312" || refusal.Head != head {
+		t.Fatalf("refusal = %+v, want note 37482, written a746312, head %s", refusal, head)
+	}
+	// The sentence T3 (#312) fixes: the order, both shas, and the unblocking
+	// action. No quote of the reviewer's line: T2's error carries no Line field,
+	// and the note id names the note instead.
+	want := fmt.Sprintf(
+		"the note is older than the head: this REJECT names a746312, the head is %s; a verdict naming %s unblocks the merge (note 37482)",
+		head, head)
+	if got := err.Error(); got != want {
+		t.Fatalf("err =\n  %s\nwant\n  %s", got, want)
+	}
+	// No commit time: the interface carries none, and the wording must not
+	// imply one. A date-shaped token in the text would claim knowledge the
+	// forge read does not have.
+	if dateRe.MatchString(err.Error()) {
+		t.Fatalf("err = %v, want no timestamp in the refusal", err)
 	}
 	if len(rows) != 0 {
 		t.Fatalf("verdict rows = %+v, want none", rows)
