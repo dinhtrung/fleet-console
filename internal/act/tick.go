@@ -158,11 +158,27 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			// is best-effort: a ledger failure keeps the skip line and moves
 			// on — a missed audit row never becomes a crashed tick or a merge,
 			// and the next tick retries the write.
-			var unattributed *UnattributedAcceptError
-			if errors.As(err, &unattributed) {
-				noteUnattributedAccept(ctx, actions, item, unattributed)
+			var accepted *UnattributedAcceptError
+			var rejected *UnattributedRejectError
+			// The parse failure keeps today's behaviour: it is a malformed note
+			// a reviewer typo causes, not a fact about this head, so it is
+			// neither recorded nor deduped (design D1).
+			alreadyNoted := false
+			if errors.As(err, &accepted) {
+				alreadyNoted = noteUnattributedVerdict(ctx, actions, item, keyFor(accepted.NoteID),
+					fmt.Sprintf("%s sha=%s; head=%s", keyFor(accepted.NoteID), accepted.Written, accepted.Head))
+			} else if errors.As(err, &rejected) {
+				alreadyNoted = noteUnattributedVerdict(ctx, actions, item, keyFor(rejected.NoteID),
+					fmt.Sprintf("%s sha=%s; head=%s", keyFor(rejected.NoteID), rejected.Written, rejected.Head))
 			}
-			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d verdict: %v", item, err))
+			// The line is silence only on a later tick over the same note —
+			// already on the ledger (design D2); the audit row is the durable
+			// signal. The tick that wrote the row prints it, and a ledger
+			// failure keeps today's line: the flow never changes for a missed
+			// audit row.
+			if !alreadyNoted {
+				report.Skipped = append(report.Skipped, fmt.Sprintf("#%d verdict: %v", item, err))
+			}
 			continue
 		}
 		if captured != nil {
@@ -438,21 +454,30 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	return report, nil
 }
 
-// noteUnattributedAccept writes the once-per-note audit row for an ACCEPT that
-// names another sha (epic #289's fixed vocabulary: kind verdict.unattributed,
-// subject #<item>, detail "note=<id>; sha=<written>; head=<head>"). The
-// trailing `;` on the dedupe key is the terminator, so note 12 can never match
-// note 123. Every error is swallowed on purpose: the skip line already records
-// the refusal in the tick log, and a ledger failure must not change the flow.
-func noteUnattributedAccept(ctx context.Context, actions *Actions, item int, refused *UnattributedAcceptError) {
+// keyFor is a note's dedupe key: `note=<id>;` — the trailing `;` is the
+// terminator, so note 12 can never match note 123.
+func keyFor(noteID string) string {
+	return fmt.Sprintf("note=%s;", noteID)
+}
+
+// noteUnattributedVerdict writes the once-per-note audit row for an
+// unattributable verdict (epic #309's fixed vocabulary: kind
+// verdict.unattributed, subject #<item>, detail "note=<id>; sha=<written>;
+// head=<head>"). One helper, two callers — the ACCEPT and the REJECT arm — so
+// a reader of the audit surface never learns a second vocabulary for one fact.
+// It answers whether the note was already on the ledger before this tick —
+// the one case the line goes quiet on: the tick that writes the row prints
+// it, and a later tick over the same note is silence. A ledger failure writes
+// nothing and answers false, so the line keeps printing — the best-effort
+// rule: a missed audit row never becomes a crashed tick or a merge.
+func noteUnattributedVerdict(ctx context.Context, actions *Actions, item int, key, detail string) bool {
 	subject := fmt.Sprintf("#%d", item)
-	key := fmt.Sprintf("note=%s;", refused.NoteID)
 	noted, err := actions.Store.HasEvent(ctx, "verdict.unattributed", subject, key)
 	if err != nil || noted {
-		return
+		return noted
 	}
-	_, _ = actions.event(ctx, "act", "verdict.unattributed", subject,
-		fmt.Sprintf("%s sha=%s; head=%s", key, refused.Written, refused.Head))
+	_, _ = actions.event(ctx, "act", "verdict.unattributed", subject, detail)
+	return false
 }
 
 func refusalReason(err error) string {
