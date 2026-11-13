@@ -190,6 +190,9 @@ export interface Project {
   dispatches: number;
   live_dispatch: number;
   gate_cmd?: string;
+  /** The reviewer seat's member prefix (#384): review rows go to `<reviewer>@<rig>`. Empty means
+   *  the service's default, so the edit dialog carries it back unchanged. */
+  reviewer?: string;
 }
 
 export interface ProjectsResponse {
@@ -262,6 +265,8 @@ export interface CreateProjectInput {
     main: string;
     worktrees: string;
   };
+  /** Carried so a whole-definition save never clears it (#384); empty is the default. */
+  reviewer?: string;
 }
 
 export interface CreateProjectResponse {

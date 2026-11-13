@@ -65,7 +65,10 @@ type ProjectRequest struct {
 	// loader would refuse.
 	RelayMode string `json:"relay_mode"`
 	RelaySeat string `json:"relay_seat"`
-	Paths     struct {
+	// Reviewer is the member prefix review rows go to (#384). Empty means the
+	// default; the whole-definition PUT carries it or an edit would drop it.
+	Reviewer string `json:"reviewer"`
+	Paths    struct {
 		Main      string `json:"main"`
 		Worktrees string `json:"worktrees"`
 	} `json:"paths"`
@@ -103,7 +106,10 @@ type ProjectResponse struct {
 	// tick, so the board edits the pair the gate actually uses.
 	RelayMode string `json:"relay_mode"`
 	RelaySeat string `json:"relay_seat"`
-	Paths     struct {
+	// Reviewer is the member prefix review rows go to (#384). Empty means the
+	// default; the whole-definition PUT carries it or an edit would drop it.
+	Reviewer string `json:"reviewer"`
+	Paths    struct {
 		Main      string `json:"main"`
 		Worktrees string `json:"worktrees"`
 	} `json:"paths"`
@@ -276,6 +282,7 @@ func renderRow(row *store.ProjectRow, count store.ProjectCount, source string) P
 		Source:         source,
 		RelayMode:      row.RelayMode,
 		RelaySeat:      row.RelaySeat,
+		Reviewer:       config.DefaultReviewer,
 	}
 	if out.Rigs == nil {
 		out.Rigs = []string{}
@@ -684,6 +691,7 @@ func requestProject(req ProjectRequest) config.Project {
 		OnHold:         req.OnHold,
 		CultureFile:    req.CultureFile,
 		VerdictRelay:   relayFromRequest(req.RelayMode, req.RelaySeat),
+		Reviewer:       req.Reviewer,
 	}
 	project.Paths.Main = req.Paths.Main
 	project.Paths.Worktrees = req.Paths.Worktrees
@@ -724,6 +732,11 @@ func writtenProject(project config.Project) configfile.Project {
 	if project.VerdictRelay != nil {
 		written.VerdictRelay = &configfile.VerdictRelay{Mode: project.VerdictRelay.Mode, Seat: project.VerdictRelay.Seat}
 	}
+	// The default is what an absent key means, so a whole-definition write
+	// omits it and the file stays as the operator wrote it.
+	if project.Reviewer != config.DefaultReviewer {
+		written.Reviewer = project.Reviewer
+	}
 	written.Paths.Main = project.Paths.Main
 	written.Paths.Worktrees = project.Paths.Worktrees
 	return written
@@ -758,6 +771,7 @@ func projectDiff(oldEntry, newEntry config.Project) (changed, identity []string)
 	add("gate_cmd", false, oldEntry.GateCmd == newEntry.GateCmd)
 	add("labels", false, maps.Equal(oldEntry.Labels, newEntry.Labels))
 	add("culture_file", false, oldEntry.CultureFile == newEntry.CultureFile)
+	add("reviewer", false, oldEntry.Reviewer == newEntry.Reviewer)
 	add("relay_mode", false, relayOf(oldEntry).Mode == relayOf(newEntry).Mode)
 	add("relay_seat", false, relayOf(oldEntry).Seat == relayOf(newEntry).Seat)
 	add("paths.main", true, oldEntry.Paths.Main == newEntry.Paths.Main)
@@ -784,6 +798,7 @@ func diffDetail(oldEntry, newEntry config.Project, changed []string) string {
 		"concurrency_cap": oldEntry.ConcurrencyCap, "rig_template": oldEntry.RigTemplate,
 		"gate_cmd": oldEntry.GateCmd, "labels": oldEntry.Labels,
 		"culture_file": oldEntry.CultureFile,
+		"reviewer":     oldEntry.Reviewer,
 		"relay_mode":   relayOf(oldEntry).Mode, "relay_seat": relayOf(oldEntry).Seat,
 		"paths.main": oldEntry.Paths.Main, "paths.worktrees": oldEntry.Paths.Worktrees,
 	}
@@ -794,6 +809,7 @@ func diffDetail(oldEntry, newEntry config.Project, changed []string) string {
 		"concurrency_cap": newEntry.ConcurrencyCap, "rig_template": newEntry.RigTemplate,
 		"gate_cmd": newEntry.GateCmd, "labels": newEntry.Labels,
 		"culture_file": newEntry.CultureFile,
+		"reviewer":     newEntry.Reviewer,
 		"relay_mode":   relayOf(newEntry).Mode, "relay_seat": relayOf(newEntry).Seat,
 		"paths.main": newEntry.Paths.Main, "paths.worktrees": newEntry.Paths.Worktrees,
 	}
@@ -925,6 +941,7 @@ func projectResponse(project config.Project, source string) ProjectResponse {
 	if project.VerdictRelay != nil {
 		out.RelayMode, out.RelaySeat = project.VerdictRelay.Mode, project.VerdictRelay.Seat
 	}
+	out.Reviewer = project.Reviewer
 	out.Paths.Main = project.Paths.Main
 	out.Paths.Worktrees = project.Paths.Worktrees
 	return out

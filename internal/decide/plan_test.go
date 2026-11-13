@@ -927,3 +927,26 @@ func TestMalformedNoteForAnOlderHeadYieldsNeither(t *testing.T) {
 		t.Fatalf("events = %+v, want no malformed question for another head", plan.Events)
 	}
 }
+
+// TestPlanRelayReviewerRowConfiguredName (#384): a project that names its
+// reviewer seat has its finished rows recognised there, and a row at the
+// default name no longer counts — the destination act writes and the
+// recognition decide reads follow the same configured prefix.
+func TestPlanRelayReviewerRowConfiguredName(t *testing.T) {
+	const head = "aaaa1111111111111111111111111111111a"
+
+	configured := relaySnapshot()
+	configured.Project.Reviewer = "dev-reviewer"
+	row := reviewerRow("done", head)
+	row.Destination = "dev-reviewer@rig-a"
+	configured.Rows = []Row{row}
+	if relays := findIntents(PlanTick(configured, planNow), IntentRelayVerdict); len(relays) != 1 {
+		t.Fatalf("relays = %d, want 1: the configured reviewer's finished row is a review", len(relays))
+	}
+
+	// The default name is somebody else's row for this project now.
+	configured.Rows = []Row{reviewerRow("done", head)}
+	if relays := findIntents(PlanTick(configured, planNow), IntentRelayVerdict); len(relays) != 0 {
+		t.Fatalf("relays = %d, want 0: %q is not this project's reviewer", len(relays), "dev-review@rig-a")
+	}
+}
