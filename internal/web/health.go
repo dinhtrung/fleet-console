@@ -16,7 +16,13 @@ import (
 // request, so the queue answer arrives through QueueRead and is cached here.
 type Readiness struct {
 	TickInterval time.Duration
-	Now          func() time.Time
+	// MaxWait is the longest the mirror's poll may legitimately sleep between
+	// ticks — the cadence's own cap (rig_lifecycle.idle_poll_max when the block
+	// is written, tick_interval otherwise). The stale threshold is derived from
+	// it: a heartbeat written by the poll loop cannot be fresher than the loop's
+	// wait, so 2 x tick_interval alone would call every quiet box stale (#393).
+	MaxWait time.Duration
+	Now     func() time.Time
 	// QueueRead performs one `rig queue list`. Nil answers "not configured" as a
 	// failure, which is honest: a control plane with no queue read is not ready.
 	QueueRead func(context.Context) error
@@ -61,6 +67,23 @@ func (r *Readiness) now() time.Time {
 	return time.Now().UTC()
 }
 
+// staleThreshold is twice the tick interval, raised to the poll's own cap plus
+// one tick of scheduling grace: a quiet box writes its heartbeat once per
+// backoff window, so the window itself is the floor a healthy heartbeat can be
+// judged against.
+func (r *Readiness) staleThreshold() time.Duration {
+	threshold := 2 * r.TickInterval
+	if threshold <= 0 {
+		threshold = 2 * time.Minute
+	}
+	if r.MaxWait > 0 {
+		if wait := r.MaxWait + r.TickInterval; wait > threshold {
+			threshold = wait
+		}
+	}
+	return threshold
+}
+
 func (r *Readiness) ttl() time.Duration {
 	if r.QueueTTL > 0 {
 		return r.QueueTTL
@@ -90,10 +113,7 @@ func readyHandler(st *store.Store, readiness *Readiness) fiber.Handler {
 			readiness = &Readiness{}
 		}
 		now := readiness.now()
-		threshold := 2 * readiness.TickInterval
-		if threshold <= 0 {
-			threshold = 2 * time.Minute
-		}
+		threshold := readiness.staleThreshold()
 
 		// The store first: everything below reads it, and one named database
 		// failure is more useful than a cascade of reads failing.

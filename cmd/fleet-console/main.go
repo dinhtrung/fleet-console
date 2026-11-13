@@ -997,6 +997,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		// per request.
 		Ready: &web.Readiness{
 			TickInterval: eff.TickInterval,
+			MaxWait:      pollCadence(eff).Max,
 			QueueRead: func(ctx context.Context) error {
 				_, err := rig.NewAdapter(rigRunner).QueueList(ctx)
 				return err

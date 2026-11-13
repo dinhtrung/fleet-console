@@ -231,3 +231,48 @@ func TestHealthStaysAConstantWithDependenciesDown(t *testing.T) {
 		t.Fatalf("failures = %+v, want the database named first", readyBody.Failures)
 	}
 }
+
+// TestReadyQuietBoxIsNotStale (#393): the poll's wait backs off to its own cap
+// (idle_poll_max, 10m on the live box), so a heartbeat as old as that cadence
+// is a healthy quiet box — not a 503 that a restart-on-failure supervisor would
+// turn into a restart loop.
+func TestReadyQuietBoxIsNotStale(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
+	st, pid := readyStore(t)
+	const idlePollMax = 10 * time.Minute
+	// One cadence old, inside the threshold the caller derives.
+	quiet := now.Add(-idlePollMax)
+	if err := st.SetForgeStamp(ctx, pid, quiet); err != nil {
+		t.Fatalf("forge stamp: %v", err)
+	}
+	if err := st.SetRigStamp(ctx, pid, quiet); err != nil {
+		t.Fatalf("rig stamp: %v", err)
+	}
+	if err := st.PutSnapshot(ctx, pid, "status", map[string]any{}, quiet); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+
+	app, err := New(Config{
+		Token: "test-token", Store: st, ConfigPath: "/tmp/fake-config.yaml",
+		Ready: &Readiness{
+			TickInterval: time.Minute, MaxWait: idlePollMax,
+			Now: func() time.Time { return now }, QueueRead: func(context.Context) error { return nil },
+		},
+	})
+	if err != nil {
+		t.Fatalf("new app: %v", err)
+	}
+	if status, body := getReady(t, app); status != http.StatusOK || len(body.Failures) != 0 {
+		t.Fatalf("status = %d failures = %+v, want 200 for a heartbeat one idle cadence old", status, body.Failures)
+	}
+
+	// Past the cadence plus its grace is genuinely stale.
+	late := now.Add(-(idlePollMax + 5*time.Minute))
+	if err := st.SetForgeStamp(ctx, pid, late); err != nil {
+		t.Fatalf("forge stamp: %v", err)
+	}
+	if status, body := getReady(t, app); status != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d failures = %+v, want 503 past the idle cadence", status, body.Failures)
+	}
+}
