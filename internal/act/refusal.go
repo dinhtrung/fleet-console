@@ -23,12 +23,18 @@ import (
 // answer either way, so the skip line keeps carrying the code through
 // RefusalError.Error().
 func noteRefusal(ctx context.Context, st *store.Store, item int, err error) error {
+	return noteRefusalSubject(ctx, st, fmt.Sprintf("#%d", item), err)
+}
+
+// noteRefusalSubject is noteRefusal with the subject spelled by the caller: a
+// raise that is about a change request rather than an item keys its refusal on
+// `cr-<n>`, so it never reads as a fact about an item with the same number.
+func noteRefusalSubject(ctx context.Context, st *store.Store, subject string, err error) error {
 	var refused *rig.RefusalError
 	if st == nil || err == nil || !errors.As(err, &refused) {
 		return nil
 	}
 	kind := "queue.refused"
-	subject := fmt.Sprintf("#%d", item)
 	needle := fmt.Sprintf("code=%s;", refused.Code)
 	exists, err := st.HasEvent(ctx, kind, subject, needle)
 	if err != nil || exists {

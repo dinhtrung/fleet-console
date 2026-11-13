@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 )
@@ -235,6 +236,92 @@ func (a *Actions) RaiseOperatorQuestion(ctx context.Context, project store.Proje
 	}
 	detail := fmt.Sprintf("%s; head=%s; row %s", firstLine(question), sha, row.ID)
 	eventID, err := a.event(ctx, "act", kind, subject, detail)
+	if err != nil {
+		return nil, err
+	}
+	return &RaiseResult{QItemID: row.ID, Events: []int64{eventID}}, nil
+}
+
+// noItemQuestion is the one question a change request that closes no item
+// raises (#368). The two cases ask different things because only one of them
+// has a body edit that could work: an open item can be closed by the body, a
+// closed one cannot — the gate needs an open item, and adoption additionally
+// requires the branch to be feature/<item>- (merge.go).
+func noItemQuestion(projectKey string, cr forge.ChangeRequest, named int, namedOpen bool) string {
+	head := cr.HeadSHA
+	if head == "" {
+		head = "unknown"
+	}
+	if namedOpen {
+		return fmt.Sprintf("%s change request #%d closes no item: it names #%d, which is open. The gate merges only on \"Closes #%d\" in the body. If this change request is #%d's work, add \"Closes #%d\" to the body (head %s); if the work is not #%d's, open a follow-up item and re-home the branch to feature/<new item>- so the gate can adopt it.",
+			projectKey, cr.Number, named, named, named, named, head, named)
+	}
+	return fmt.Sprintf("%s change request #%d closes no item: it names #%d, which is not open. Adding \"Closes #%d\" cannot help — the gate merges only on an open item (head %s). Merge it by hand once it is reviewed, or open a follow-up item and re-home the branch to feature/<new item>- so the gate can adopt it.",
+		projectKey, cr.Number, named, named, head)
+}
+
+// RaiseNoItemQuestion asks the operator about a change request whose body
+// closes no item but whose title or branch names one (#368). The change
+// request cannot merge without an open item, so silence is a dead end, not an
+// answer. The row carries the change request, the head sha and the named item
+// with its state, and the ledger dedupes per (change request, head) — a moved
+// head is a new question, and a resolved row does not silence it. It never
+// associates the change request with the item: the title and the branch are
+// mentions (#314), and this row only asks a human.
+func (a *Actions) RaiseNoItemQuestion(ctx context.Context, project store.ProjectRow, cr forge.ChangeRequest, named int, namedOpen bool, worktreeRoot, destination string) (*RaiseResult, error) {
+	if a.Store == nil || a.Rig == nil {
+		return nil, fmt.Errorf("raise no-item question: store and rig are required")
+	}
+	subject := fmt.Sprintf("cr-%d", cr.Number)
+	sha := strings.ToLower(cr.HeadSHA)
+	key := fmt.Sprintf("cr=%d; head=%s;", cr.Number, sha)
+	exists, err := a.Store.HasEvent(ctx, "decision.no_item", subject, key)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return &RaiseResult{NoOp: true}, nil
+	}
+
+	dir := worktreeRoot
+	if dir == "" {
+		dir = os.TempDir()
+	} else {
+		dir = filepath.Join(dir, "briefs")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("raise no-item question: brief dir: %w", err)
+	}
+	question := noItemQuestion(project.Key, cr, named, namedOpen)
+	sum := sha256.Sum256([]byte(question))
+	path := filepath.Join(dir, fmt.Sprintf("operator-%s-cr-%d-%s.md", slug(project.Key), cr.Number, hex.EncodeToString(sum[:4])))
+	head := sha
+	if head == "" {
+		head = "unknown"
+	}
+	state := "not open (closed, or not in the open list this read saw)"
+	if namedOpen {
+		state = "open"
+	}
+	body := fmt.Sprintf("# %s cr-%d - change request closes no item\n\n%s\n\nChange request: #%d\nHead: %s\nNamed item: #%d (%s)\n\nA title or branch mention never associates a change request with an item (#314); this row asks a human and does not set the association. Do not expect the merge gate to take this change request: it has no lawful path.\n",
+		project.Key, cr.Number, question, cr.Number, head, named, state)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		return nil, fmt.Errorf("raise no-item question: write brief: %w", err)
+	}
+	word := "not open"
+	if namedOpen {
+		word = "open"
+	}
+	summary := fmt.Sprintf("%s change request #%d closes no item; names #%d (%s)", project.Key, cr.Number, named, word)
+	row, err := a.Rig.QueueCreate(ctx, rig.CreateRequest{
+		Destination: destination, Summary: summary, BodyFile: path, Source: "human@kernel", EvidenceRef: path,
+	})
+	if err != nil {
+		_ = noteRefusalSubject(ctx, a.Store, subject, err)
+		return nil, err
+	}
+	detail := fmt.Sprintf("cr=%d; head=%s; named=%d; state=%s; row %s", cr.Number, sha, named, strings.ReplaceAll(word, " ", "-"), row.ID)
+	eventID, err := a.event(ctx, "act", "decision.no_item", subject, detail)
 	if err != nil {
 		return nil, err
 	}

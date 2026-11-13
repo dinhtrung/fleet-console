@@ -240,3 +240,42 @@ func TestNoteRefusalLeavesTheRefusalErrorIntactThroughARaise(t *testing.T) {
 		t.Fatalf("HasEvent = %v, %v; want the refusal audited", exists, err)
 	}
 }
+
+// TestRaiseNoItemQuestionCarriesEvidence: the no-item row names its brief the
+// way every human raise does.
+func TestRaiseNoItemQuestionCarriesEvidence(t *testing.T) {
+	var created *rig.CreateRequest
+	refusalEvidence(t, &created, func(a *Actions) error {
+		project := store.ProjectRow{ID: a.ProjectID, Key: "app", ForgeKind: "gitlab", ForgeProject: "o/r"}
+		cr := forge.ChangeRequest{Number: 683, HeadSHA: noItemHead, Title: noItemTitle, Branch: noItemBranch}
+		_, err := a.RaiseNoItemQuestion(context.Background(), project, cr, 448, true, a.WorktreeRoot, "human@kernel")
+		return err
+	})
+	if base := filepath.Base(created.EvidenceRef); !strings.HasPrefix(base, "operator-app-cr-683-") {
+		t.Fatalf("evidence_ref = %q, want the no-item brief name", created.EvidenceRef)
+	}
+}
+
+// TestRaiseNoItemQuestionRefusalKeysOnTheChangeRequest: a refused create is
+// audited under cr-<n>, never under a subject that reads as an item number.
+func TestRaiseNoItemQuestionRefusalKeysOnTheChangeRequest(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	queue := &queueStub{createErr: &rig.RefusalError{
+		Code: "human_route_fields_required", Missing: []string{"evidence_ref"}, Command: "rig queue create",
+	}}
+	actions := &Actions{Store: st, Rig: queue, ProjectID: 1, ProjectKey: "app", WorktreeRoot: t.TempDir()}
+	project := store.ProjectRow{ID: 1, Key: "app", ForgeKind: "gitlab", ForgeProject: "o/r"}
+	cr := forge.ChangeRequest{Number: 683, HeadSHA: noItemHead}
+
+	if _, err := actions.RaiseNoItemQuestion(ctx, project, cr, 448, false, actions.WorktreeRoot, "human@kernel"); err == nil {
+		t.Fatal("raise: want the daemon's refusal")
+	}
+	exists, err := st.HasEvent(ctx, "queue.refused", "cr-683", "code=human_route_fields_required;")
+	if err != nil || !exists {
+		t.Fatalf("HasEvent = %v, %v; want the refusal audited under cr-683", exists, err)
+	}
+	if wrong, _ := st.HasEvent(ctx, "queue.refused", "#683", "code=human_route_fields_required;"); wrong {
+		t.Fatal("refusal audited under an item-shaped subject")
+	}
+}
