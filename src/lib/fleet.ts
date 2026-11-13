@@ -150,6 +150,10 @@ export interface Project {
   name: string;
   forge: "github" | "gitlab";
   repo: string;
+  /** The clone URL and the forge API's host (forge-host, design D6): the board writes the same
+   *  two fields it reads. Both are read for GitLab; forge_host set for GitHub is a 422. */
+  repo_url?: string;
+  forge_host?: string;
   default_branch: string;
   rigs: string[];
   concurrency_cap: number;
@@ -232,6 +236,9 @@ export interface CreateProjectInput {
   name: string;
   forge: "github" | "gitlab";
   repo: string;
+  /** Same two fields as Project (forge-host, design D6). Empty keeps the resolver's answer. */
+  repo_url?: string;
+  forge_host?: string;
   default_branch: string;
   rigs: string[];
   concurrency_cap: number;

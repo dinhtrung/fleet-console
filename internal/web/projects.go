@@ -34,10 +34,18 @@ func rigRefsFromNames(names []string) config.RigRefs {
 }
 
 type ProjectRequest struct {
-	Key            string            `json:"key"`
-	Name           string            `json:"name"`
-	Forge          string            `json:"forge"`
-	Repo           string            `json:"repo"`
+	Key   string `json:"key"`
+	Name  string `json:"name"`
+	Forge string `json:"forge"`
+	Repo  string `json:"repo"`
+	// RepoURL is the clone URL (forge-host, design D6): it drives setup and
+	// preflight, and for GitLab its host is the forge API's host when
+	// forge_host is empty. Empty keeps today's slug-derived behaviour.
+	RepoURL string `json:"repo_url"`
+	// ForgeHost names the host the forge API lives on. Empty is the resolver's
+	// answer (repo_url's host, else gitlab.com); set, it is read for GitLab
+	// only — config.ValidateProject refuses it for GitHub.
+	ForgeHost      string            `json:"forge_host"`
 	DefaultBranch  string            `json:"default_branch"`
 	Rigs           []string          `json:"rigs"`
 	RigTemplate    string            `json:"rig_template"`
@@ -62,10 +70,15 @@ type ProjectRequest struct {
 // per-project loop (design D7). A file-only project reports enabled and its
 // file-pinned onhold, with zero counts.
 type ProjectResponse struct {
-	Key            string            `json:"key"`
-	Name           string            `json:"name"`
-	Forge          string            `json:"forge"`
-	Repo           string            `json:"repo"`
+	Key   string `json:"key"`
+	Name  string `json:"name"`
+	Forge string `json:"forge"`
+	Repo  string `json:"repo"`
+	// RepoURL and ForgeHost are the two clone/API fields (forge-host, design
+	// D6): the board writes the same two it reads, so an edit round-trips.
+	RepoURL   string `json:"repo_url"`
+	ForgeHost string `json:"forge_host"`
+
 	DefaultBranch  string            `json:"default_branch"`
 	Rigs           []string          `json:"rigs"`
 	RigTemplate    string            `json:"rig_template"`
@@ -293,6 +306,8 @@ func createProject(st *store.Store, configPath string, write func(string, config
 			Name:           req.Name,
 			Forge:          req.Forge,
 			Repo:           req.Repo,
+			RepoURL:        req.RepoURL,
+			ForgeHost:      req.ForgeHost,
 			DefaultBranch:  req.DefaultBranch,
 			Rigs:           rigRefsFromNames(req.Rigs),
 			RigTemplate:    req.RigTemplate,
@@ -640,6 +655,8 @@ func requestProject(req ProjectRequest) config.Project {
 		Name:           req.Name,
 		Forge:          req.Forge,
 		Repo:           req.Repo,
+		RepoURL:        req.RepoURL,
+		ForgeHost:      req.ForgeHost,
 		DefaultBranch:  req.DefaultBranch,
 		Rigs:           rigRefsFromNames(req.Rigs),
 		RigTemplate:    req.RigTemplate,
@@ -662,6 +679,8 @@ func writtenProject(project config.Project) configfile.Project {
 		Name:           project.Name,
 		Forge:          project.Forge,
 		Repo:           project.Repo,
+		RepoURL:        project.RepoURL,
+		ForgeHost:      project.ForgeHost,
 		DefaultBranch:  project.DefaultBranch,
 		Rigs:           project.Rigs.Names(),
 		RigTemplate:    project.RigTemplate,
@@ -678,7 +697,10 @@ func writtenProject(project config.Project) configfile.Project {
 
 // projectDiff compares two file entries on the fields the API carries and
 // classifies each as identity (frozen while a dispatch is live, design D3) or
-// harmless. Fields the API does not carry — repo_url, runtime, lifecycle —
+// harmless. repo_url and forge_host are identity (forge-host design D3): the
+// first drives clone, the second drives the forge API the merge gate talks to,
+// and a change under a live dispatch splits what the builder built from where
+// the gate judges it. Fields the API does not carry — runtime, lifecycle —
 // pass through the write unchanged and are never in the diff.
 func projectDiff(oldEntry, newEntry config.Project) (changed, identity []string) {
 	add := func(name string, isIdentity bool, equal bool) {
@@ -693,6 +715,8 @@ func projectDiff(oldEntry, newEntry config.Project) (changed, identity []string)
 	add("name", false, oldEntry.Name == newEntry.Name)
 	add("forge", true, oldEntry.Forge == newEntry.Forge)
 	add("repo", true, oldEntry.Repo == newEntry.Repo)
+	add("repo_url", true, oldEntry.RepoURL == newEntry.RepoURL)
+	add("forge_host", true, oldEntry.ForgeHost == newEntry.ForgeHost)
 	add("default_branch", true, oldEntry.DefaultBranch == newEntry.DefaultBranch)
 	add("rigs", true, slices.Equal(oldEntry.Rigs.Names(), newEntry.Rigs.Names()))
 	add("concurrency_cap", false, oldEntry.ConcurrencyCap == newEntry.ConcurrencyCap)
@@ -710,19 +734,21 @@ func projectDiff(oldEntry, newEntry config.Project) (changed, identity []string)
 func diffDetail(oldEntry, newEntry config.Project, changed []string) string {
 	oldValues := map[string]any{
 		"name": oldEntry.Name, "forge": oldEntry.Forge, "repo": oldEntry.Repo,
+		"repo_url": oldEntry.RepoURL, "forge_host": oldEntry.ForgeHost,
 		"default_branch": oldEntry.DefaultBranch, "rigs": oldEntry.Rigs.Names(),
 		"concurrency_cap": oldEntry.ConcurrencyCap, "rig_template": oldEntry.RigTemplate,
 		"gate_cmd": oldEntry.GateCmd, "labels": oldEntry.Labels,
 		"culture_file": oldEntry.CultureFile,
-		"paths.main": oldEntry.Paths.Main, "paths.worktrees": oldEntry.Paths.Worktrees,
+		"paths.main":   oldEntry.Paths.Main, "paths.worktrees": oldEntry.Paths.Worktrees,
 	}
 	newValues := map[string]any{
 		"name": newEntry.Name, "forge": newEntry.Forge, "repo": newEntry.Repo,
+		"repo_url": newEntry.RepoURL, "forge_host": newEntry.ForgeHost,
 		"default_branch": newEntry.DefaultBranch, "rigs": newEntry.Rigs.Names(),
 		"concurrency_cap": newEntry.ConcurrencyCap, "rig_template": newEntry.RigTemplate,
 		"gate_cmd": newEntry.GateCmd, "labels": newEntry.Labels,
 		"culture_file": newEntry.CultureFile,
-		"paths.main": newEntry.Paths.Main, "paths.worktrees": newEntry.Paths.Worktrees,
+		"paths.main":   newEntry.Paths.Main, "paths.worktrees": newEntry.Paths.Worktrees,
 	}
 	parts := make([]string, 0, len(changed))
 	for _, field := range changed {
@@ -836,6 +862,8 @@ func projectResponse(project config.Project, source string) ProjectResponse {
 		Name:           project.Name,
 		Forge:          project.Forge,
 		Repo:           project.Repo,
+		RepoURL:        project.RepoURL,
+		ForgeHost:      project.ForgeHost,
 		DefaultBranch:  project.DefaultBranch,
 		Rigs:           project.Rigs.Names(),
 		RigTemplate:    project.RigTemplate,

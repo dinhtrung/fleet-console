@@ -602,13 +602,13 @@ func TestProjectEditStatuses(t *testing.T) {
 	}{
 		{
 			name: "edited", key: "existing-1",
-			body:  editBody("existing-1", func(r *ProjectRequest) { r.Name = "Renamed one" }),
-			want:  http.StatusOK, wantIn: "Renamed one",
+			body: editBody("existing-1", func(r *ProjectRequest) { r.Name = "Renamed one" }),
+			want: http.StatusOK, wantIn: "Renamed one",
 		},
 		{
 			name: "body renames the key", key: "existing-1",
-			body:     editBody("existing-2", nil),
-			want:     http.StatusUnprocessableEntity, wantIn: "key is immutable; delete and recreate",
+			body: editBody("existing-2", nil),
+			want: http.StatusUnprocessableEntity, wantIn: "key is immutable; delete and recreate",
 			fileSame: true,
 		},
 		{
@@ -617,14 +617,14 @@ func TestProjectEditStatuses(t *testing.T) {
 		},
 		{
 			name: "unknown key", key: "nope",
-			body:  editBody("nope", nil),
-			want:  http.StatusNotFound, wantIn: "not registered",
+			body: editBody("nope", nil),
+			want: http.StatusNotFound, wantIn: "not registered",
 			fileSame: true,
 		},
 		{
 			name: "unknown forge", key: "existing-1",
-			body:  editBody("existing-1", func(r *ProjectRequest) { r.Forge = "bitbucket" }),
-			want:  http.StatusUnprocessableEntity, wantIn: "forge",
+			body: editBody("existing-1", func(r *ProjectRequest) { r.Forge = "bitbucket" }),
+			want: http.StatusUnprocessableEntity, wantIn: "forge",
 			fileSame: true,
 		},
 		{
@@ -633,7 +633,7 @@ func TestProjectEditStatuses(t *testing.T) {
 			write: func(string, configfile.Project, *[32]byte) (configfile.Outcome, error) {
 				return "", configfile.ErrStaleRead
 			},
-			want:     http.StatusConflict, wantIn: "changed on disk; reload and retry",
+			want: http.StatusConflict, wantIn: "changed on disk; reload and retry",
 			fileSame: true,
 		},
 		{
@@ -1176,3 +1176,201 @@ func TestProjectRoutesRequireAuth(t *testing.T) {
 	}
 }
 
+// TestProjectForgeHostRefusalsAre422: the two shapes forge-host design D3
+// refuses arrive as 422 with the message on the forge_host field — the same
+// message config.Load answers — and a refused create changes no bytes.
+func TestProjectForgeHostRefusalsAre422(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "contradiction",
+			body: `{"key":"hosted","name":"Hosted","forge":"gitlab","repo":"o/r",` +
+				`"repo_url":"https://gitlab.other/o/r","forge_host":"gitlab.example.com",` +
+				`"rigs":["rig-c"],"concurrency_cap":1,"paths":{"main":"./c","worktrees":"./w"}}`,
+			want: `forge_host "gitlab.example.com" contradicts repo_url's host "gitlab.other"`,
+		},
+		{
+			name: "github host",
+			body: `{"key":"gh-host","name":"GH","forge":"github","repo":"o/r",` +
+				`"forge_host":"git.example.com","rigs":["rig-c"],"concurrency_cap":1,` +
+				`"paths":{"main":"./c","worktrees":"./w"}}`,
+			want: "forge_host is only read for gitlab; GitHub's host is gh's business (GH_HOST)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newProjectsHarness(t, nil)
+			resp, raw := h.post(t, tc.body)
+			if resp.StatusCode != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want 422 (%s)", resp.StatusCode, raw)
+			}
+			var answer ErrorResponse
+			if err := json.Unmarshal(raw, &answer); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if answer.Errors["forge_host"] != tc.want {
+				t.Fatalf("errors = %v, want forge_host: %q", answer.Errors, tc.want)
+			}
+			if !bytes.Equal(h.bytes(t), h.orig) {
+				t.Fatal("a refused create changed the file")
+			}
+		})
+	}
+}
+
+// TestProjectRepoURLForgeHostRoundTrip is the promise the spec states (D6):
+// a project created from the board with both fields carries them in the file,
+// in config.Load's answer — what --print-config prints — in the list read,
+// and an edit that does not name them leaves the file's two lines alone.
+func TestProjectRepoURLForgeHostRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	h := newProjectsHarness(t, nil)
+	body := `{"key":"hosted","name":"Hosted","forge":"gitlab","repo":"o/r",` +
+		`"repo_url":"https://gitlab.example.com/o/r.git","forge_host":"gitlab.example.com",` +
+		`"rigs":["rig-c"],"concurrency_cap":1,"paths":{"main":"./c","worktrees":"./w"}}`
+	resp, raw := h.post(t, body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (%s)", resp.StatusCode, raw)
+	}
+	var created CreateProjectResponse
+	if err := json.Unmarshal(raw, &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.Project.RepoURL != "https://gitlab.example.com/o/r.git" || created.Project.ForgeHost != "gitlab.example.com" {
+		t.Fatalf("project = %+v, want both fields echoed", created.Project)
+	}
+
+	written := string(h.bytes(t))
+	for _, want := range []string{
+		"key: hosted",
+		"repo_url: https://gitlab.example.com/o/r.git",
+		"forge_host: gitlab.example.com",
+	} {
+		if !strings.Contains(written, want) {
+			t.Fatalf("file lost %q:\n%s", want, written)
+		}
+	}
+
+	// What --print-config prints is config.Load's answer: both fields survive
+	// the write, and the resolver names the file's host.
+	eff, err := config.Load(config.Options{FlagPath: h.path})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	entry, ok := findProject(eff.Projects, "hosted")
+	if !ok {
+		t.Fatalf("load = %+v, want hosted", eff.Projects)
+	}
+	if entry.RepoURL != "https://gitlab.example.com/o/r.git" || entry.ForgeHost != "gitlab.example.com" {
+		t.Fatalf("entry = %+v, want both fields", entry)
+	}
+	if host, source, err := config.ForgeHost(entry); err != nil || host != "gitlab.example.com" || source != "forge_host" {
+		t.Fatalf("ForgeHost = (%q, %q, %v), want gitlab.example.com from forge_host", host, source, err)
+	}
+
+	respList, rawList := h.get(t, "/api/projects")
+	if respList.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d (%s)", respList.StatusCode, rawList)
+	}
+	var list ProjectsListResponse
+	if err := json.Unmarshal(rawList, &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	var listed *ProjectResponse
+	for i := range list.Projects {
+		if list.Projects[i].Key == "hosted" {
+			listed = &list.Projects[i]
+		}
+	}
+	if listed == nil || listed.RepoURL != "https://gitlab.example.com/o/r.git" || listed.ForgeHost != "gitlab.example.com" {
+		t.Fatalf("list row = %+v, want both fields", listed)
+	}
+
+	// The same definition back with one harmless change: the file's two lines
+	// survive, and the diff names neither of them.
+	edit := `{"key":"hosted","name":"Hosted","forge":"gitlab","repo":"o/r",` +
+		`"repo_url":"https://gitlab.example.com/o/r.git","forge_host":"gitlab.example.com",` +
+		`"rigs":["rig-c"],"concurrency_cap":3,"paths":{"main":"./c","worktrees":"./w"}}`
+	respEdit, rawEdit := h.do(t, http.MethodPut, "/api/projects/hosted", edit)
+	if respEdit.StatusCode != http.StatusOK {
+		t.Fatalf("edit status = %d (%s)", respEdit.StatusCode, rawEdit)
+	}
+	var answer EditProjectResponse
+	if err := json.Unmarshal(rawEdit, &answer); err != nil {
+		t.Fatalf("decode edit: %v", err)
+	}
+	if len(answer.Changed) != 1 || answer.Changed[0] != "concurrency_cap" {
+		t.Fatalf("changed = %v, want [concurrency_cap]", answer.Changed)
+	}
+	written = string(h.bytes(t))
+	for _, want := range []string{
+		"repo_url: https://gitlab.example.com/o/r.git",
+		"forge_host: gitlab.example.com",
+	} {
+		if !strings.Contains(written, want) {
+			t.Fatalf("edit lost %q:\n%s", want, written)
+		}
+	}
+	row, err := h.st.ProjectByKey(ctx, "hosted")
+	if err != nil || row == nil || row.ConcurrencyCap != 3 {
+		t.Fatalf("store row = %+v (%v), want cap 3", row, err)
+	}
+}
+
+// TestProjectEditRefusesForgeHostChangeUnderLiveDispatch: forge_host is an
+// identity field (forge-host design D3) — it names the forge the merge gate
+// judges on, so a change under a live dispatch is refused naming the dispatch,
+// like repo.
+func TestProjectEditRefusesForgeHostChangeUnderLiveDispatch(t *testing.T) {
+	h := newProjectsHarness(t, nil)
+	body := `{"key":"hosted","name":"Hosted","forge":"gitlab","repo":"o/r",` +
+		`"repo_url":"https://gitlab.example.com/o/r.git","forge_host":"gitlab.example.com",` +
+		`"rigs":["rig-c"],"concurrency_cap":1,"paths":{"main":"./c","worktrees":"./w"}}`
+	resp, raw := h.post(t, body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201 (%s)", resp.StatusCode, raw)
+	}
+	// The create registered the store row; the live dispatch hangs off it.
+	seeded, err := h.st.ProjectByKey(context.Background(), "hosted")
+	if err != nil || seeded == nil {
+		t.Fatalf("store row = %+v (%v), want the created project", seeded, err)
+	}
+	h.seedLiveDispatch(t, seeded.ID)
+	before, err := os.Stat(h.path)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+
+	// Both fields move together, so validation passes and only the identity
+	// rule can refuse: the host the merge gate judges on must not move under
+	// a live dispatch.
+	edit := `{"key":"hosted","name":"Hosted","forge":"gitlab","repo":"o/r",` +
+		`"repo_url":"https://gitlab.moved.example/o/r.git","forge_host":"gitlab.moved.example",` +
+		`"rigs":["rig-c"],"concurrency_cap":1,"paths":{"main":"./c","worktrees":"./w"}}`
+	respEdit, rawEdit := h.do(t, http.MethodPut, "/api/projects/hosted", edit)
+	if respEdit.StatusCode != http.StatusConflict {
+		t.Fatalf("edit status = %d, want 409 (%s)", respEdit.StatusCode, rawEdit)
+	}
+	message := string(rawEdit)
+	for _, want := range []string{"dispatch 1", "pause the project"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("409 body %q does not name %q", message, want)
+		}
+	}
+	after, err := os.Stat(h.path)
+	if err != nil {
+		t.Fatalf("stat config: %v", err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Fatal("a refused identity edit touched the config file")
+	}
+	if !strings.Contains(string(h.bytes(t)), "forge_host: gitlab.example.com") {
+		t.Fatalf("file:\n%s", h.bytes(t))
+	}
+	if row, _ := h.st.ProjectByKey(context.Background(), "hosted"); row == nil {
+		t.Fatalf("store row = %+v, want it untouched", row)
+	}
+}
