@@ -1,6 +1,7 @@
 package decide
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -353,5 +354,159 @@ func TestIncidentVerdictForHeadRaisesNothing(t *testing.T) {
 	plan := PlanTick(s, planNow)
 	if len(findIntents(plan, IntentRaiseDecision)) != 0 {
 		t.Fatalf("intents = %+v, want none for an accepted head", plan.Intents)
+	}
+}
+
+// relaySnapshot is the shared shape for the relay arm's tests: an open item,
+// an open unmerged change request on head aaaa1111111111111111111111111111111a,
+// and a project that opted into the scribe relay mode. Everything a case needs
+// differently, it changes on this base.
+func relaySnapshot() Snapshot {
+	s := base(task(5))
+	s.Project.RelayMode = "scribe"
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "aaaa1111111111111111111111111111111a"}}
+	return s
+}
+
+// reviewerRow is the row a raise leaves for the reviewer seat, naming the item
+// and the head.
+func reviewerRow(state, head string) Row {
+	return Row{
+		QItemID:     "q-1",
+		State:       state,
+		Destination: "dev-review@rig-a",
+		Body:        "test #5: review change request #20, head " + head,
+		Summary:     "re-review #5",
+	}
+}
+
+func TestPlanRelayReviewerRowPending(t *testing.T) {
+	s := relaySnapshot()
+	s.Rows = []Row{reviewerRow("pending", "aaaa1111111111111111111111111111111a")}
+	plan := PlanTick(s, planNow)
+	if relays := findIntents(plan, IntentRelayVerdict); len(relays) != 0 {
+		t.Fatalf("relays = %+v, want none: the reviewer is still working", relays)
+	}
+}
+
+func TestPlanRelayReviewerRowEnded(t *testing.T) {
+	s := relaySnapshot()
+	s.Rows = []Row{reviewerRow("done", "aaaa1111111111111111111111111111111a")}
+	plan := PlanTick(s, planNow)
+	relays := findIntents(plan, IntentRelayVerdict)
+	if len(relays) != 1 {
+		t.Fatalf("relays = %d, want 1: the review ended without a verdict", len(relays))
+	}
+	relay := relays[0]
+	if relay.Item != 5 || relay.ChangeRequest != 20 || relay.HeadSHA != "aaaa1111111111111111111111111111111a" {
+		t.Fatalf("relay = %+v, want item 5 cr 20 head aaaa111", relay)
+	}
+	if relay.Seat != "" {
+		t.Fatalf("relay.Seat = %q, want empty: act resolves the destination", relay.Seat)
+	}
+	for _, fact := range []string{"#5", "#20", "aaaa1111111111111111111111111111111a", "without a verdict"} {
+		if !strings.Contains(relay.Text, fact) {
+			t.Fatalf("relay text %q missing %q", relay.Text, fact)
+		}
+	}
+	if !hasEvent(plan, "verdict.relayed", "#5") {
+		t.Fatalf("events = %+v, want verdict.relayed for #5", plan.Events)
+	}
+}
+
+func TestPlanRelayVerdictAtHeadSuppresses(t *testing.T) {
+	full := "aaaa1111111111111111111111111111111a"
+	for _, sha := range []string{full, "aaaa111", "AAAA1111111111111111111111111111111A"} {
+		s := relaySnapshot()
+		s.Verdicts = []VerdictState{{Item: 5, SHA: sha, Decision: "accept"}}
+		s.Rows = []Row{reviewerRow("done", full)}
+		plan := PlanTick(s, planNow)
+		if relays := findIntents(plan, IntentRelayVerdict); len(relays) != 0 {
+			t.Fatalf("sha %q: relays = %+v, want none: a verdict at the head suppresses the relay", sha, relays)
+		}
+	}
+}
+
+func TestPlanRelayMovedHeadAsksAgain(t *testing.T) {
+	s := relaySnapshot()
+	s.RelayedHeads = []RelayedHead{{Item: 5, Head: "aaaa1111111111111111111111111111111a"}}
+	s.Rows = []Row{
+		reviewerRow("done", "aaaa1111111111111111111111111111111a"),
+		reviewerRow("done", "bbbb2222222222222222222222222222222b"),
+	}
+	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "bbbb2222222222222222222222222222222b"}}
+	plan := PlanTick(s, planNow)
+	relays := findIntents(plan, IntentRelayVerdict)
+	if len(relays) != 1 {
+		t.Fatalf("relays = %d, want 1: the moved head is a new fact the ledger has not seen", len(relays))
+	}
+	if relays[0].HeadSHA != "bbbb2222222222222222222222222222222b" {
+		t.Fatalf("relay head = %q, want the moved head", relays[0].HeadSHA)
+	}
+}
+
+func TestPlanRelayOffWithoutMode(t *testing.T) {
+	s := relaySnapshot()
+	s.Project.RelayMode = ""
+	s.Rows = []Row{reviewerRow("done", "aaaa1111111111111111111111111111111a")}
+	before := PlanTick(s, planNow)
+	if relays := findIntents(before, IntentRelayVerdict); len(relays) != 0 {
+		t.Fatalf("relays = %+v, want none: the project never opted in", relays)
+	}
+	decisions := findIntents(before, IntentRaiseDecision)
+	if len(decisions) == 0 || decisions[0].Event.Kind != "decision.no_verdict" {
+		t.Fatalf("decisions = %+v, want the unchanged decision.no_verdict question", decisions)
+	}
+}
+
+func TestPlanRelayLedgerDedupe(t *testing.T) {
+	s := relaySnapshot()
+	s.Rows = []Row{reviewerRow("done", "aaaa1111111111111111111111111111111a")}
+	plan := PlanTick(s, planNow)
+	if relays := findIntents(plan, IntentRelayVerdict); len(relays) != 1 {
+		t.Fatalf("first plan: relays = %d, want 1", len(relays))
+	}
+	// The ledger holds the event; the next plan over the same snapshot differs
+	// by zero relays (tasks 2.2). The snapshot carries the fact; the plan has
+	// no memory of its own.
+	s.RelayedHeads = []RelayedHead{{Item: 5, Head: "aaaa1111111111111111111111111111111a"}}
+	after := PlanTick(s, planNow)
+	if relays := findIntents(after, IntentRelayVerdict); len(relays) != 0 {
+		t.Fatalf("after ledger: relays = %+v, want none", relays)
+	}
+}
+
+func TestPlanRelayLedgerAbbreviatedEntryCounts(t *testing.T) {
+	s := relaySnapshot()
+	s.Rows = []Row{reviewerRow("done", "aaaa1111111111111111111111111111111a")}
+	s.RelayedHeads = []RelayedHead{{Item: 5, Head: "aaaa111"}}
+	plan := PlanTick(s, planNow)
+	if relays := findIntents(plan, IntentRelayVerdict); len(relays) != 0 {
+		t.Fatalf("relays = %+v, want none: an abbreviated ledger entry still names the head", relays)
+	}
+}
+
+func TestPlanRelayDoesNotTouchDecisionArms(t *testing.T) {
+	// The relay arm must not change what the existing decision arms plan: the
+	// same snapshot with and without relay facts plans the same decision.*.
+	with := relaySnapshot()
+	with.Rows = []Row{reviewerRow("done", "aaaa1111111111111111111111111111111a")}
+	without := relaySnapshot()
+	without.Project.RelayMode = ""
+	without.Rows = with.Rows
+	a, b := PlanTick(with, planNow), PlanTick(without, planNow)
+	var sa, sb []string
+	for _, intent := range a.Intents {
+		if intent.Kind == IntentRaiseDecision {
+			sa = append(sa, intent.Event.Kind+" "+fmt.Sprint(intent.Item))
+		}
+	}
+	for _, intent := range b.Intents {
+		if intent.Kind == IntentRaiseDecision {
+			sb = append(sb, intent.Event.Kind+" "+fmt.Sprint(intent.Item))
+		}
+	}
+	if strings.Join(sa, "|") != strings.Join(sb, "|") {
+		t.Fatalf("decision intents differ with relay on: %v vs off: %v", sa, sb)
 	}
 }

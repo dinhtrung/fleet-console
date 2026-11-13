@@ -74,6 +74,10 @@ const (
 	// produced no change request (#261). It is a question, not a reset: the
 	// seat is not killed and nothing is re-dispatched.
 	IntentSilentDispatch IntentKind = "silent_dispatch"
+	// IntentRelayVerdict asks for a verdict to be relayed from a finished
+	// review to the forge (verdict-relay design D1). It never sets Seat: the
+	// act side resolves the destination from the project's relay config.
+	IntentRelayVerdict IntentKind = "relay_verdict"
 )
 
 // Event is the audit row an intent writes.
@@ -357,6 +361,105 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 			Event: Event{Actor: "decide", Kind: "decision.raise", Subject: fmt.Sprintf("#%d", item.Number), Detail: text},
 		})
 	}
+
+	// Incident: a finished review without a verdict (verdict-relay, design D1).
+	// The trigger is the reviewer row ending, not a clock: a queue row naming
+	// this head, addressed to the reviewer seat, that is terminal is the fact
+	// that the review happened and decided nothing. The plan is pure, so two
+	// facts ride the snapshot: the project's relay mode (empty means the
+	// project never opted in, and today's behaviour stands) and the ledger's
+	// verdict.relayed entries (D7) — one relay per (item, head), a moved head
+	// is a new fact and asks again. A verdict at the head, full or abbreviated,
+	// suppresses it. The act side resolves the destination from the project's
+	// config and writes the brief; the intent never names a seat.
+	relayPlanned := map[int]bool{}
+	for _, cr := range s.CRs {
+		item, ok := items[cr.Item]
+		if !ok || !item.open() || relayPlanned[item.Number] {
+			continue
+		}
+		if s.Project.RelayMode == "" || cr.Merged || !strings.EqualFold(cr.State, "open") || cr.HeadSHA == "" {
+			continue
+		}
+		head := strings.ToLower(cr.HeadSHA)
+		if verdictAtHead(s.Verdicts, item.Number, head) || relayedInLedger(s.RelayedHeads, item.Number, head) {
+			continue
+		}
+		if !reviewerRowEndedFor(s.Rows, item.Number, head) {
+			continue
+		}
+		relayPlanned[item.Number] = true
+		text := fmt.Sprintf("%s #%d: the review of change request #%d ended without a verdict for head %s. Post the verdict note for head %s on the change request, or answer INCONCLUSIVE on your row with what the review actually says.",
+			key, item.Number, cr.Number, head, head)
+		add(Intent{
+			Kind: IntentRelayVerdict, Project: key, Item: item.Number, Text: text,
+			ChangeRequest: cr.Number, HeadSHA: cr.HeadSHA,
+			Event: Event{Actor: "decide", Kind: "verdict.relayed", Subject: fmt.Sprintf("#%d", item.Number),
+				Detail: fmt.Sprintf("head=%s; planned", head)},
+		})
+	}
+}
+
+// sameSHA reports whether a recorded sha and a head name the same commit:
+// case-insensitive, and one may abbreviate the other, in either direction.
+// It mirrors internal/act's sameSHA — decide cannot import act, and the
+// abbreviation rule must not drift between the two packages.
+func sameSHA(note, head string) bool {
+	note, head = strings.ToLower(note), strings.ToLower(head)
+	if len(note) < 7 || len(head) < 7 {
+		return false
+	}
+	return strings.HasPrefix(head, note) || strings.HasPrefix(note, head)
+}
+
+// verdictAtHead reports whether any stored verdict for the item names the
+// head, full or abbreviated (spec: "a verdict at the head needs no relay").
+func verdictAtHead(verdicts []VerdictState, item int, head string) bool {
+	for _, verdict := range verdicts {
+		if verdict.Item == item && sameSHA(verdict.SHA, head) {
+			return true
+		}
+	}
+	return false
+}
+
+// relayedInLedger reports whether the ledger already holds a verdict.relayed
+// for the (item, head), folded into the snapshot by the caller (design D7).
+func relayedInLedger(relayed []RelayedHead, item int, head string) bool {
+	for _, entry := range relayed {
+		if entry.Item == item && sameSHA(entry.Head, head) {
+			return true
+		}
+	}
+	return false
+}
+
+// reviewerRowEndedFor reports whether a terminal queue row addressed to the
+// reviewer seat names this item and head: the review the row carried is over,
+// whatever it wrote (design D1). A row naming another head is not evidence
+// about this one, and a pending or in-progress row is the reviewer still
+// working — neither plans a relay.
+func reviewerRowEndedFor(rows []Row, item int, head string) bool {
+	for _, row := range rows {
+		if !rowNamesItem(row, item) || row.Destination == "" {
+			continue
+		}
+		destination := strings.ToLower(row.Destination)
+		if destination != "dev-review" && !strings.HasPrefix(destination, "dev-review@") {
+			continue
+		}
+		state := strings.ToLower(row.Pickup)
+		if state == "" {
+			state = strings.ToLower(row.State)
+		}
+		if _, terminal := terminalRowStates[state]; !terminal {
+			continue
+		}
+		if head != "" && strings.Contains(strings.ToLower(rowText(row)), head) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasLabel(labels []string, want string) bool {

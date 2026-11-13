@@ -45,6 +45,12 @@ type Project struct {
 	OnHold         bool     `json:"onhold"`
 	ConcurrencyCap int      `json:"concurrency_cap"` // 0 = no cap beyond free builders
 	Rigs           []RigRef `json:"rigs,omitempty"`
+	// RelayMode is the project's verdict_relay mode ("scribe" or "operator"),
+	// resolved by the caller from the config. Empty means the project never
+	// opted in: no relay intent is planned. Decide keeps a string, not a config
+	// type, so this package stays free of config imports; the act side resolves
+	// the destination seat from the config it already holds.
+	RelayMode string `json:"relay_mode,omitempty"`
 }
 
 // RigRef is one declared rig and its place in the fill order. The config type carries the
@@ -131,6 +137,19 @@ type Snapshot struct {
 	Dispatches []DispatchState `json:"dispatches,omitempty"`
 	CRs        []CRState       `json:"change_requests,omitempty"`
 	Verdicts   []VerdictState  `json:"verdicts,omitempty"`
+
+	// RelayedHeads carries the (item, head) pairs the event ledger already
+	// holds a verdict.relayed for. The plan is pure and cannot read the ledger
+	// itself, so the caller folds this fact in — the same way Dispatched folds
+	// an earlier tick's dispatches. An empty slice means nothing was relayed;
+	// the entries are lowercased shas.
+	RelayedHeads []RelayedHead `json:"relayed_heads,omitempty"`
+}
+
+// RelayedHead is one (item, head) the ledger already relayed.
+type RelayedHead struct {
+	Item int    `json:"item"`
+	Head string `json:"head"`
 }
 
 // Reason is a skip reason. Every candidate carries one; a candidate with no reason is a
