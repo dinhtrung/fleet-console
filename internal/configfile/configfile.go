@@ -600,10 +600,18 @@ func writeAtomic(path string, data []byte) error {
 
 // Project is the subset of config.Project that the file stores.
 type Project struct {
-	Key            string            `yaml:"key"`
-	Name           string            `yaml:"name"`
-	Forge          string            `yaml:"forge"`
-	Repo           string            `yaml:"repo"`
+	Key   string `yaml:"key"`
+	Name  string `yaml:"name"`
+	Forge string `yaml:"forge"`
+	Repo  string `yaml:"repo"`
+	// RepoURL is the clone URL and ForgeHost the forge API's host (forge-host,
+	// design D6): the board writes the same two fields it reads, and a
+	// round-trip must not lose them. Omitted when empty — a written
+	// `repo_url: ""` would be a different (invalid) statement than "unset",
+	// and forge_host set for GitHub is a load error.
+	RepoURL   string `yaml:"repo_url,omitempty"`
+	ForgeHost string `yaml:"forge_host,omitempty"`
+
 	DefaultBranch  string            `yaml:"default_branch"`
 	Rigs           []string          `yaml:"rigs"`
 	RigTemplate    string            `yaml:"rig_template"`

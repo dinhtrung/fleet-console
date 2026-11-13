@@ -64,6 +64,8 @@ const FIELD_KEYS: Record<string, true> = {
   name: true,
   forge: true,
   repo: true,
+  repo_url: true,
+  forge_host: true,
   default_branch: true,
   rigs: true,
   concurrency_cap: true,
@@ -76,6 +78,8 @@ type Draft = {
   name: string;
   forge: string;
   repo: string;
+  repo_url: string;
+  forge_host: string;
   default_branch: string;
   rigs: string;
   concurrency_cap: string;
@@ -92,6 +96,8 @@ const ERROR_KEY: Record<keyof Draft, string> = {
   name: "name",
   forge: "forge",
   repo: "repo",
+  repo_url: "repo_url",
+  forge_host: "forge_host",
   default_branch: "default_branch",
   rigs: "rigs",
   concurrency_cap: "concurrency_cap",
@@ -105,6 +111,8 @@ const BLANK: Draft = {
   name: "",
   forge: "github",
   repo: "",
+  repo_url: "",
+  forge_host: "",
   default_branch: "main",
   rigs: "",
   concurrency_cap: "2",
@@ -121,6 +129,10 @@ function draftInput(draft: Draft): CreateProjectInput {
     name: draft.name.trim(),
     forge: draft.forge === "gitlab" ? "gitlab" : "github",
     repo: draft.repo.trim(),
+    repo_url: draft.repo_url.trim(),
+    // Sent as typed, so GitHub with a host is the service's 422 on forge_host —
+    // never a silently cleared value (forge-host design D3: the refusal is the fact).
+    forge_host: draft.forge_host.trim(),
     default_branch: draft.default_branch.trim(),
     rigs: splitRigs(draft.rigs),
     concurrency_cap: Number(draft.concurrency_cap),
@@ -160,6 +172,8 @@ function draftFromProject(project: Project): Draft {
     name: project.name,
     forge: project.forge === "gitlab" ? "gitlab" : "github",
     repo: project.repo,
+    repo_url: project.repo_url ?? "",
+    forge_host: project.forge_host ?? "",
     default_branch: project.default_branch,
     rigs: project.rigs.join(", "),
     concurrency_cap: String(project.concurrency_cap),
@@ -630,6 +644,34 @@ export function ProjectsScreen() {
                   onChange={(event) => change("repo", event.target.value)}
                   error={errors.repo}
                   hint="owner/name, as the forge spells it."
+                  autoComplete="off"
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <TextInput
+                  label="Forge host"
+                  value={draft.forge_host}
+                  onChange={(event) => change("forge_host", event.target.value)}
+                  error={errors.forge_host}
+                  disabled={draft.forge !== "gitlab"}
+                  hint={
+                    draft.forge === "gitlab"
+                      ? "host[:port] of the GitLab instance; leave empty to use repo_url's host, or gitlab.com."
+                      : "GitHub's host is gh's business (GH_HOST) — leave it empty."
+                  }
+                  autoComplete="off"
+                />
+                <TextInput
+                  label="Repo URL"
+                  value={draft.repo_url}
+                  onChange={(event) => change("repo_url", event.target.value)}
+                  error={errors.repo_url}
+                  disabled={draft.forge !== "gitlab"}
+                  hint={
+                    draft.forge === "gitlab"
+                      ? "The clone URL; drives setup and preflight."
+                      : "GitHub needs no clone URL here — repo owner/name and gh drive it."
+                  }
                   autoComplete="off"
                 />
               </div>
