@@ -457,6 +457,77 @@ func (s *Store) EventByKindAndSubject(ctx context.Context, kind, subject string)
 	return &events[0], nil
 }
 
+// MalformedVerdict is one recorded malformed verdict: a note whose first line
+// parsed as a verdict but named no sha. NoteID is the note carrying the line,
+// Head is the change request's head when the fact was written — never the
+// note's, because the note named no commit, which is the fact — Line is the
+// note's first non-empty line, and FirstSeen is when the ledger first
+// recorded it.
+type MalformedVerdict struct {
+	NoteID    string `json:"note_id"`
+	Head      string `json:"head"`
+	Line      string `json:"line"`
+	FirstSeen string `json:"first_seen"`
+}
+
+// MalformedVerdicts returns, per item of one project, the newest
+// `verdict.malformed` event, as a read over the existing event table (epic
+// #345 T1): no schema change, no migration. The event table carries no
+// project id, so the join scopes the read through the item table: only
+// subjects naming a number this project actually mirrors come back. That is
+// the strongest scoping the row allows — a subject names a number, not a
+// project — and where two projects mirror the same number the read cannot
+// tell their events apart, the granularity every other event read here
+// already accepts (EventsForItem, HasEvent). The detail line is the audit
+// vocabulary fixed by tasks §0 (`note=<id>; head=<sha>; line=<line>`); a row
+// that does not match it is skipped rather than guessed at, so a format
+// drift shows up as an absence, not as fabricated fields.
+func (s *Store) MalformedVerdicts(ctx context.Context, projectID int64) (map[int]MalformedVerdict, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.number, MAX(e.id), e.at, e.detail
+		FROM event e JOIN item i ON i.project_id = ? AND e.subject = '#' || i.number
+		WHERE e.kind = 'verdict.malformed'
+		GROUP BY i.number`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("store: malformed verdicts: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[int]MalformedVerdict)
+	for rows.Next() {
+		var number int
+		var v MalformedVerdict
+		var maxID int64
+		var detail string
+		if err := rows.Scan(&number, &maxID, &v.FirstSeen, &detail); err != nil {
+			return nil, fmt.Errorf("store: malformed verdicts: %w", err)
+		}
+		if parsed, ok := parseMalformedDetail(detail); ok {
+			parsed.FirstSeen = v.FirstSeen
+			out[number] = parsed
+		}
+	}
+	return out, rows.Err()
+}
+
+// parseMalformedDetail splits the audit detail into its three fields. The
+// line is the tail: it may itself contain `;`, so head is bounded by the
+// literal `; line=` separator, not by the next semicolon.
+func parseMalformedDetail(detail string) (MalformedVerdict, bool) {
+	rest, ok := strings.CutPrefix(detail, "note=")
+	if !ok {
+		return MalformedVerdict{}, false
+	}
+	noteID, rest, ok := strings.Cut(rest, ";")
+	if !ok {
+		return MalformedVerdict{}, false
+	}
+	head, line, ok := strings.Cut(strings.TrimPrefix(rest, " head="), "; line=")
+	if !ok {
+		return MalformedVerdict{}, false
+	}
+	return MalformedVerdict{NoteID: noteID, Head: head, Line: line}, true
+}
+
 // HasEvent reports whether an event of kind for subject already carries the text.
 // It is the once-per-key ledger for intents that must not repeat every tick.
 func (s *Store) HasEvent(ctx context.Context, kind, subject, contains string) (bool, error) {
