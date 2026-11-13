@@ -170,6 +170,24 @@ The full schema and every default are in the README's Configuration section.
 prints YAML beginning `config: /home/<user>/.config/fleet-console/config.yaml`,
 with `token: <redacted>` and a `sources:` block; it never prints the token.
 
+### Optional: verdict relay
+
+When a reviewer finishes a review without posting a parseable verdict, fleet-console can relay
+that review to a seat that turns it into the verdict note. The block is optional and per project
+(under the project entry, next to `concurrency_cap`):
+
+```yaml
+    verdict_relay:
+      mode: scribe            # scribe asks a seat in this project's rig; operator asks the kernel operator
+      seat: verdict-scribe    # required when mode is set
+```
+
+Without the block nothing changes: no relay rows, operator questions keep going to
+`human@kernel` — today's behaviour. Two things fail loudly at load rather than at runtime: a
+`mode` other than `scribe` or `operator` is refused on `verdict_relay.mode`, and a `mode` with an
+empty `seat` is refused on `verdict_relay.seat`. What the relay does and does not do is in
+[the architecture map](fleet-console.md#when-a-review-is-not-a-verdict).
+
 ## 5. Seed and check
 
 ```bash

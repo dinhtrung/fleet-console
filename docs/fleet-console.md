@@ -83,6 +83,46 @@ brief already emit the full head sha, so the abbreviated form is the exception, 
 documented path. Nothing is written to the store for a refusal, so the next tick retries and the
 note stays until it is answered.
 
+### When a review is not a verdict
+
+A reviewer can finish a review without producing anything the grammar above can read: prose that
+hedges, no notes at all, or a note about a different head. When that happens — the change request
+and its item are open, the head carries no verdict, and a terminal reviewer row names that head —
+the plan carries one relay intent, and the act loop turns the finished review into work someone can
+answer. It reads the review's notes through the forge, writes a brief carrying them verbatim with
+the exact note to post, and creates one queue row. One relay per item and head, deduped on the
+ledger: the same head never asks twice, and a moved head is a new fact that asks again.
+
+The project opts in with a `verdict_relay` block per project (off when absent — today's behaviour):
+
+```yaml
+verdict_relay:
+  mode: scribe
+  seat: verdict-scribe
+```
+
+The two modes differ in what each one may do:
+
+- **`scribe`** sends only the relay row, to a seat of the project's own rig — that rig already
+  holds the project's queue, culture and budget, so the project can size the seat to its own cost.
+- **`operator`** additionally routes the project's *operator questions* (the
+  `decision.no_verdict` raises above) to the configured seat instead of `human@kernel`. The kernel
+  operator is shared by every rig and is the human's front door, so pointing project work at it is
+  a decision each project makes for itself, never a default. The relay row's destination is the
+  configured seat in both modes; only the questions switch.
+
+The note the relay posts carries a **`via:` marker**: `ACCEPT <sha>` on the first line,
+`via: <seat>` on the second. When the gate captures a verdict whose second non-empty line is
+exactly `via: <seat>`, the `verdict.capture` audit event's detail gains `; via=<seat>` — the
+ledger records that this verdict reached the forge through the relay seat rather than the
+reviewer's own hand. A missing or malformed marker records nothing and never blocks.
+
+If the review does not decide, the relay never invents a verdict: it answers its own row
+(`denied` / `no-follow-on`) naming what it read, writes nothing on the forge, and the operator
+question the next tick raises is the escalation. **The relay never merges — the merge gate does.**
+It also never closes, never edits code, and never re-reviews; the note it posts is judged by the
+gate's own facts on a later tick, like any other verdict.
+
 ### Closing the epic
 
 After a merge, the tick asks one more question: was that item the last open sub-issue of its parent
