@@ -623,6 +623,10 @@ type Project struct {
 	// config.Load derives it from the first rig, and a written `culture_file: ""`
 	// would be a different (invalid) statement than "unset".
 	CultureFile string `yaml:"culture_file,omitempty"`
+	// Reviewer is the member prefix the project's review rows go to (#384).
+	// Omitted when unset: the loader's default then applies, and a written
+	// empty string would be a different statement.
+	Reviewer string `yaml:"reviewer,omitempty"`
 	// VerdictRelay is the verdict relay block (#375). A whole-definition write
 	// must carry it, or a board edit would silently drop a block the operator
 	// set — the API writes the same pair it reads.

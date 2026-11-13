@@ -506,7 +506,7 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 		if verdictAtHead(s.Verdicts, item.Number, head) || relayedInLedger(s.RelayedHeads, item.Number, head) {
 			continue
 		}
-		if !reviewerRowEndedFor(s.Rows, item.Number, head) {
+		if !reviewerRowEndedFor(s.Rows, s.Project.Reviewer, item.Number, head) {
 			continue
 		}
 		relayPlanned[item.Number] = true
@@ -560,13 +560,15 @@ func relayedInLedger(relayed []RelayedHead, item int, head string) bool {
 // whatever it wrote (design D1). A row naming another head is not evidence
 // about this one, and a pending or in-progress row is the reviewer still
 // working — neither plans a relay.
-func reviewerRowEndedFor(rows []Row, item int, head string) bool {
+func reviewerRowEndedFor(rows []Row, reviewer string, item int, head string) bool {
 	for _, row := range rows {
 		if !rowNamesItem(row, item) || row.Destination == "" {
 			continue
 		}
-		destination := strings.ToLower(row.Destination)
-		if destination != "dev-review" && !strings.HasPrefix(destination, "dev-review@") {
+		// The reviewer's name is the project's (#384), not a constant: a rig
+		// whose reviewer is named anything else still has its finished rows
+		// recognised here.
+		if !IsReviewerSeat(reviewer, row.Destination) {
 			continue
 		}
 		state := strings.ToLower(row.Pickup)

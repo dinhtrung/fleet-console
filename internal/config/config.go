@@ -70,11 +70,21 @@ type Project struct {
 	// both are off, but an empty block is still validated. Off means today's
 	// behaviour — no relay rows, operator questions stay on human@kernel.
 	VerdictRelay *VerdictRelay `yaml:"verdict_relay,omitempty"`
-	Paths        struct {
+	// Reviewer is the project's reviewer member prefix (#384): review rows go
+	// to "<reviewer>@<rig>" and the plan recognises one there. Unset is
+	// DefaultReviewer, so a project that never names one keeps today's
+	// behaviour; a rig whose reviewer is named anything else names it here
+	// instead of waiting for the code to be edited.
+	Reviewer string `yaml:"reviewer,omitempty"`
+	Paths    struct {
 		Main      string `yaml:"main"`
 		Worktrees string `yaml:"worktrees"`
 	} `yaml:"paths"`
 }
+
+// DefaultReviewer is the reviewer member prefix a project uses when its config
+// names none (#384). It is the name every project had before the field existed.
+const DefaultReviewer = "dev-review"
 
 // Relay modes. The relay is off unless a project names one of these in its
 // verdict_relay block; there is no default (D8 — an upgraded binary must not
@@ -715,6 +725,22 @@ func (e *Effective) Print() ([]byte, error) {
 	return yaml.Marshal(out)
 }
 
+// reviewerName is a member prefix a seat can carry: lowercase letters, digits
+// and dashes, no "@" (the rig is appended by the caller).
+var reviewerName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// ReviewerFor resolves a project's reviewer member prefix (#384). Unset is
+// DefaultReviewer; the caller appends "@<rig>" for the destination seat. This is
+// the one lookup path: the tick's raises and the plan's recognition both read
+// the project through it, so a renamed seat moves both together.
+func (e *Effective) ReviewerFor(projectKey string) string {
+	project := findProjectByKey(e.Projects, projectKey)
+	if project == nil || strings.TrimSpace(project.Reviewer) == "" {
+		return DefaultReviewer
+	}
+	return strings.TrimSpace(project.Reviewer)
+}
+
 // RelayRow is the store's half of a project's verdict relay (#375). The zero
 // value is "the row names nothing", which is what a project without a database
 // row (or before the migration backfilled it) resolves with.
@@ -973,6 +999,15 @@ func ValidateProject(p *Project, dir, home string) error {
 	}
 	if p.RigTemplate == "" {
 		p.RigTemplate = "default"
+	}
+	// reviewer (#384): the member prefix a project's review rows go to. Unset
+	// is the name every project had before the field existed. A bad value is a
+	// field error here rather than an unroutable row at dispatch time.
+	p.Reviewer = strings.TrimSpace(p.Reviewer)
+	if p.Reviewer == "" {
+		p.Reviewer = DefaultReviewer
+	} else if !reviewerName.MatchString(p.Reviewer) {
+		add("reviewer", "reviewer must be a member prefix like %q, not %q", DefaultReviewer, p.Reviewer)
 	}
 	p.Paths.Main = resolve(dir, p.Paths.Main, home)
 	p.Paths.Worktrees = resolve(dir, p.Paths.Worktrees, home)

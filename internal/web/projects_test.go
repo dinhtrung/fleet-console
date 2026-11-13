@@ -1489,3 +1489,41 @@ func TestProjectRelayLivesOnTheRow(t *testing.T) {
 		t.Fatalf("body = %s, want the seat field named", body)
 	}
 }
+
+// TestProjectReviewerRoundTrip (#384): the board carries the reviewer prefix
+// through the whole-definition edit — wrote it, it is in the file and the
+// answer; cleared it, the file says nothing and the default applies.
+func TestProjectReviewerRoundTrip(t *testing.T) {
+	h := newProjectsHarness(t, nil)
+
+	resp, body := h.do(t, http.MethodPut, "/api/projects/existing-1",
+		editBody("existing-1", func(r *ProjectRequest) { r.Reviewer = "dev-reviewer" }))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", resp.StatusCode, body)
+	}
+	var answer EditProjectResponse
+	if err := json.Unmarshal(body, &answer); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if answer.Project.Reviewer != "dev-reviewer" {
+		t.Fatalf("answer reviewer = %q, want dev-reviewer", answer.Project.Reviewer)
+	}
+	if !strings.Contains(string(h.bytes(t)), "reviewer: dev-reviewer") {
+		t.Fatalf("file does not carry the reviewer:\n%s", h.bytes(t))
+	}
+
+	resp, body = h.do(t, http.MethodPut, "/api/projects/existing-1",
+		editBody("existing-1", func(r *ProjectRequest) { r.Reviewer = "" }))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("clear status = %d, want 200 (%s)", resp.StatusCode, body)
+	}
+	if err := json.Unmarshal(body, &answer); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if answer.Project.Reviewer != "dev-review" {
+		t.Fatalf("cleared reviewer = %q, want the default filled in", answer.Project.Reviewer)
+	}
+	if strings.Contains(string(h.bytes(t)), "reviewer:") {
+		t.Fatalf("file kept a default reviewer key:\n%s", h.bytes(t))
+	}
+}

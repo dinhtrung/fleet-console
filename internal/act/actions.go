@@ -48,6 +48,10 @@ type Actions struct {
 	// raise treats as a best-effort default.
 	ProjectKey   string
 	WorktreeRoot string
+	// Reviewer is the project's reviewer member prefix (#384), resolved by the
+	// caller from the config. Empty is decide.DefaultReviewer, so every caller
+	// that predates the field keeps today's destination.
+	Reviewer string
 }
 
 func (a *Actions) now() time.Time {

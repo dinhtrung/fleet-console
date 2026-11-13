@@ -772,3 +772,43 @@ func TestForgeHostValidation(t *testing.T) {
 		}
 	})
 }
+
+// TestReviewer (#384): the reviewer member prefix defaults to dev-review,
+// resolves from the block when set, and a name that is not a member prefix is
+// a field error here rather than an unroutable row at dispatch time.
+func TestReviewer(t *testing.T) {
+	dir := t.TempDir()
+	t.Run("absent is the default", func(t *testing.T) {
+		path := writeConfig(t, dir, "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if got := eff.ReviewerFor("a"); got != DefaultReviewer {
+			t.Fatalf("reviewer = %q, want %q", got, DefaultReviewer)
+		}
+		if eff.Projects[0].Reviewer != DefaultReviewer {
+			t.Fatalf("project reviewer = %q, want it filled in", eff.Projects[0].Reviewer)
+		}
+	})
+	t.Run("configured resolves", func(t *testing.T) {
+		path := writeConfig(t, dir, "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    reviewer: dev-reviewer\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if got := eff.ReviewerFor("a"); got != "dev-reviewer" {
+			t.Fatalf("reviewer = %q, want dev-reviewer", got)
+		}
+		if got := eff.ReviewerFor("missing"); got != DefaultReviewer {
+			t.Fatalf("unknown project reviewer = %q, want the default", got)
+		}
+	})
+	t.Run("a bad name is a field error", func(t *testing.T) {
+		path := writeConfig(t, dir, "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    reviewer: dev-reviewer@rig\n")
+		_, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err == nil || !strings.Contains(err.Error(), "reviewer") {
+			t.Fatalf("load = %v, want a reviewer field error", err)
+		}
+	})
+}

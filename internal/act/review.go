@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dinhtrung/fleet-console/internal/decide"
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
@@ -48,10 +49,7 @@ func (a *Actions) RaiseDecision(ctx context.Context, project store.ProjectRow, i
 	if rigName == "" && len(project.Rigs) > 0 {
 		rigName = project.Rigs[0]
 	}
-	reviewer := "dev-review"
-	if rigName != "" {
-		reviewer = "dev-review@" + rigName
-	}
+	reviewer := decide.ReviewerSeat(a.Reviewer, rigName)
 	dir := worktreeRoot
 	if dir == "" {
 		dir = os.TempDir()
@@ -125,10 +123,7 @@ func (a *Actions) RaiseMalformedVerdict(ctx context.Context, project store.Proje
 	if rigName == "" && len(project.Rigs) > 0 {
 		rigName = project.Rigs[0]
 	}
-	reviewer := "dev-review"
-	if rigName != "" {
-		reviewer = "dev-review@" + rigName
-	}
+	reviewer := decide.ReviewerSeat(a.Reviewer, rigName)
 	dir := worktreeRoot
 	if dir == "" {
 		dir = os.TempDir()

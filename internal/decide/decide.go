@@ -51,6 +51,41 @@ type Project struct {
 	// type, so this package stays free of config imports; the act side resolves
 	// the destination seat from the config it already holds.
 	RelayMode string `json:"relay_mode,omitempty"`
+	// Reviewer is the reviewer member prefix the project configured (#384),
+	// resolved by the caller from the config and defaulted to DefaultReviewer.
+	// The destination act writes and the recognition this package reads both
+	// come from ReviewerSeat/IsReviewerSeat, so they cannot drift.
+	Reviewer string `json:"reviewer,omitempty"`
+}
+
+// DefaultReviewer is the reviewer member prefix a project uses when its config
+// names none (#384) — the name every project had before the field existed.
+const DefaultReviewer = "dev-review"
+
+// ReviewerSeat is the session a project's review rows are addressed to: the
+// configured member prefix with the rig appended, or the prefix alone when the
+// rig is unknown.
+func ReviewerSeat(prefix, rig string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		prefix = DefaultReviewer
+	}
+	if rig == "" {
+		return prefix
+	}
+	return prefix + "@" + rig
+}
+
+// IsReviewerSeat reports whether a queue row's destination belongs to the
+// project's reviewer seat. One rule, so the destination act writes and the
+// recognition decide reads can never disagree.
+func IsReviewerSeat(prefix, destination string) bool {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		prefix = DefaultReviewer
+	}
+	destination = strings.ToLower(strings.TrimSpace(destination))
+	return destination == prefix || strings.HasPrefix(destination, prefix+"@")
 }
 
 // RigRef is one declared rig and its place in the fill order. The config type carries the

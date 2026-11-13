@@ -431,6 +431,7 @@ func runTick(ctx context.Context, eff *config.Effective, db *store.Store, out, e
 		}
 		result := read.Projects[project.Key]
 		snapshot := mirror.BuildSnapshot(project, result, dispatches, verdicts, malformed)
+		snapshot.Project.Reviewer = eff.ReviewerFor(project.Key)
 		output.Projects[project.Key] = decide.PlanTick(snapshot, read.At)
 		// A ghost rig is a config error the operator must see from the same dry
 		// run that plans the work: stderr for a human, the JSON field for a script.
@@ -516,6 +517,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	rigRunner := rig.ExecRunner{Path: eff.RigBinary}
 	forgeRunner := forge.CLIRunner{Binaries: map[string]string{"gh": eff.GhBinary, "glab": eff.GlabBinary}}
 	probe := rig.NewProbe(rigRunner, log.New(stderr, "", 0).Printf)
+	// #384: a reviewer the project names but no rig runs is a config error worth
+	// one line here, not an unroutable review row later. Best effort — a rig that
+	// cannot be read is a fact the compat probe already reports.
+	warnReviewerSeats(context.Background(), eff, rig.NewAdapter(rigRunner), stderr)
 
 	if *compat {
 		report := probe.Run(context.Background())
@@ -822,6 +827,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 					continue
 				}
 				snapshot := mirror.BuildSnapshot(project, projectRead, dispatches, verdicts, malformed)
+				snapshot.Project.Reviewer = eff.ReviewerFor(project.Key)
 				for item := range suppress {
 					snapshot.Dispatched = append(snapshot.Dispatched, item)
 				}
@@ -869,6 +875,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 							continue
 						}
 						snapshot := mirror.BuildSnapshot(project, projectRead, dispatches, verdicts, malformed)
+						snapshot.Project.Reviewer = eff.ReviewerFor(project.Key)
 						plans[project.Key] = decide.PlanTick(snapshot, read.At)
 					}
 				}
@@ -897,6 +904,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 					Items: projectRead.Items, CRs: projectRead.CRs, Rows: projectRead.Rows,
 					Plan: plan, WorktreeRoot: worktreeRoot(eff, project, source),
 					LifecycleFailed: lifecycleFailed, RelayMode: relayMode, RelaySeat: relaySeat,
+					Reviewer: eff.ReviewerFor(projectKey),
 					// A raised decision reaches the phone from here: the tick
 					// knows the row exists, and the notifier owns the transport.
 					// The note goes on the item first when decision_notes is on, so
@@ -1213,4 +1221,42 @@ func housekeepSummary(report act.HousekeepReport) string {
 		parts = append(parts, "forge-stale=1")
 	}
 	return strings.Join(parts, " ")
+}
+
+// warnReviewerSeats prints one line per project whose configured reviewer seat
+// is not running on any of its rigs (#384). It reads the roster once, at
+// startup, and never fails: a rig that cannot be read is already the compat
+// probe's fact to report.
+func warnReviewerSeats(ctx context.Context, eff *config.Effective, adapter *rig.Adapter, out io.Writer) {
+	seats, err := adapter.Seats(ctx)
+	if err != nil {
+		return
+	}
+	running := make(map[string]bool, len(seats))
+	for _, seat := range seats {
+		if seat.Session != "" {
+			running[seat.Session] = true
+		}
+	}
+	for _, project := range eff.Projects {
+		rigs := project.Rigs.Names()
+		if len(rigs) == 0 && project.Rig != "" {
+			rigs = []string{project.Rig}
+		}
+		if len(rigs) == 0 {
+			continue
+		}
+		reviewer := eff.ReviewerFor(project.Key)
+		found := false
+		for _, rigName := range rigs {
+			if running[decide.ReviewerSeat(reviewer, rigName)] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Fprintf(out, "fleet-console: config: project %q: reviewer %q is not a running seat on %s\n",
+				project.Key, reviewer, strings.Join(rigs, ","))
+		}
+	}
 }

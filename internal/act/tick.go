@@ -36,7 +36,10 @@ type TickInput struct {
 	// named reason.
 	RelayMode string
 	RelaySeat string
-	Now       func() time.Time
+	// Reviewer is the project's reviewer member prefix (#384), resolved by the
+	// caller from the config. Empty is decide.DefaultReviewer.
+	Reviewer string
+	Now      func() time.Time
 	// LifecycleFailed names, per rig, the launch failure this tick hit: every
 	// dispatch intent on that rig is skipped with the same named reason rather
 	// than writing a worktree and a row no seat will ever claim (design D5).
@@ -111,6 +114,7 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	actions := &Actions{
 		Store: in.Store, Forge: in.Forge, Rig: in.Rig, Git: in.Git, Now: in.Now,
 		ProjectID: in.Project.ID, ProjectKey: in.Project.Key, WorktreeRoot: in.WorktreeRoot,
+		Reviewer: in.Reviewer,
 	}
 
 	// Verdict capture and the merge watchdog run before new dispatches: a merged
