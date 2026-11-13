@@ -36,7 +36,7 @@ func (s *Store) PruneEvents(ctx context.Context, cutoff time.Time, batch int, ap
 	if err != nil {
 		return RetentionCounts{}, err
 	}
-	guarded, err := s.guardedProjects(ctx)
+	guardedProjects, guardedItems, err := s.unresolvedGuards(ctx)
 	if err != nil {
 		return RetentionCounts{}, err
 	}
@@ -77,7 +77,7 @@ func (s *Store) PruneEvents(ctx context.Context, cutoff time.Time, batch int, ap
 		for _, row := range page {
 			counts.Scanned++
 			cursor = row.id
-			if keepForLiveWork(row.subject, liveItems, guarded) {
+			if keepForLiveWork(row.subject, liveItems, guardedItems, guardedProjects) {
 				counts.KeptLive++
 				continue
 			}
@@ -103,13 +103,16 @@ func (s *Store) PruneEvents(ctx context.Context, cutoff time.Time, batch int, ap
 }
 
 // keepForLiveWork is the ledger's retention guard: evidence for work that is
-// still moving outlives the window, whatever its age.
-func keepForLiveWork(subject string, liveItems map[int]bool, guardedProjects map[string]bool) bool {
+// still open outlives the window, whatever its age. An item row is kept by a
+// live dispatch or by an unresolved queue row that names it; a project row is
+// kept by any unresolved queue row in that project.
+func keepForLiveWork(subject string, liveItems, guardedItems map[int]bool, guardedProjects map[string]bool) bool {
 	if number, ok := strings.CutPrefix(subject, "#"); ok {
-		if item, err := atoiSafe(number); err == nil && liveItems[item] {
-			return true
+		item, err := atoiSafe(number)
+		if err != nil {
+			return false
 		}
-		return false
+		return liveItems[item] || guardedItems[item]
 	}
 	if key, ok := strings.CutPrefix(subject, "project:"); ok {
 		return guardedProjects[strings.TrimSpace(key)]
@@ -149,16 +152,27 @@ func (s *Store) liveDispatchItems(ctx context.Context) (map[int]bool, error) {
 	return out, rows.Err()
 }
 
-// guardedProjects is every project whose last queue read holds a row that is
-// not finished. A missing or unreadable snapshot guards nothing: no evidence is
-// not the same as no work, but the window still has to be able to move.
-func (s *Store) guardedProjects(ctx context.Context) (map[string]bool, error) {
-	out := map[string]bool{}
-	projects, err := s.Projects(ctx)
+// unresolvedGuards is the retention guard set: every project whose last queue
+// read holds a row that is not finished, and every item named by such a row.
+// The item half needs the inverse mapping the ledger itself carries — the three
+// decision.* kinds that back a queue row all end their detail with
+// `; row <qitem-id>` and carry the item in their subject — so evidence for an
+// open question survives the window even when no dispatch is running.
+//
+// A missing or unreadable snapshot guards nothing: no evidence is not the same
+// as no work, but the window still has to be able to move.
+func (s *Store) unresolvedGuards(ctx context.Context) (map[string]bool, map[int]bool, error) {
+	projects := map[string]bool{}
+	items := map[int]bool{}
+	byQItem, err := s.qitemItems(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	for _, project := range projects {
+	all, err := s.Projects(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, project := range all {
 		payload, _, err := s.GetSnapshot(ctx, project.ID, "rig_queue")
 		if err != nil || len(payload) == 0 {
 			continue
@@ -168,11 +182,62 @@ func (s *Store) guardedProjects(ctx context.Context) (map[string]bool, error) {
 			continue
 		}
 		for _, row := range rows {
-			if !queueResolved(row) {
-				out[project.Key] = true
-				break
+			if queueResolved(row) {
+				continue
+			}
+			projects[project.Key] = true
+			if item, ok := byQItem[row.ID]; ok {
+				items[item] = true
 			}
 		}
 	}
-	return out, nil
+	return projects, items, nil
+}
+
+// qitemItems reads the qitem -> item mapping out of the ledger rows that back a
+// queue row: their subject is `#<item>` and their detail ends with
+// `; row <qitem-id>`.
+func (s *Store) qitemItems(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT subject, detail FROM event
+		WHERE kind IN ('decision.verdict_question', 'decision.merge_repair', 'decision.stale')`)
+	if err != nil {
+		return nil, fmt.Errorf("store: prune events: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var subject, detail string
+		if err := rows.Scan(&subject, &detail); err != nil {
+			return nil, fmt.Errorf("store: prune events: %w", err)
+		}
+		number, ok := strings.CutPrefix(subject, "#")
+		if !ok {
+			continue
+		}
+		item, err := atoiSafe(number)
+		if err != nil {
+			continue
+		}
+		if qitem := rowIDFromDetail(detail); qitem != "" {
+			out[qitem] = item
+		}
+	}
+	return out, rows.Err()
+}
+
+// rowIDFromDetail reads the qitem id the decision raises append as
+// `; row <id>`. It takes the last marker: the reason prose can contain other
+// semicolons, and the id is always the tail.
+func rowIDFromDetail(detail string) string {
+	const marker = "; row "
+	at := strings.LastIndex(detail, marker)
+	if at < 0 {
+		return ""
+	}
+	id := strings.TrimSpace(detail[at+len(marker):])
+	if id == "" || strings.ContainsAny(id, " \t\n") {
+		return ""
+	}
+	return id
 }

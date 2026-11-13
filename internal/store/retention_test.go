@@ -122,3 +122,46 @@ func TestPruneEventsDryRun(t *testing.T) {
 		t.Fatalf("subjects = %v, want the row still present after a dry run", subjects)
 	}
 }
+
+// TestPruneEventsKeepsUnresolvedQueueItem (#395): a question's ledger row is
+// the durable backstop for its queue row. With the dispatch long ended and only
+// the queue row still pending, the decision.* event names the item and the
+// qitem; the prune must keep it, or the board stops showing the question and the
+// reconcile can never close the row.
+func TestPruneEventsKeepsUnresolvedQueueItem(t *testing.T) {
+	ctx := context.Background()
+	st := upsertStore(t)
+	_, pid, err := st.UpsertProject(ctx, baseUpsert())
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	now := time.Now().UTC()
+
+	// The raise shape repair.go writes: subject #<item>, detail ending "; row <qitem>".
+	raised, err := st.AppendEvent(ctx, Event{
+		Actor: "act", Kind: "decision.merge_repair", Subject: "#7",
+		Detail: "app #7: change request #20 conflicts (dirty); asked human@kernel; to rebase; row qitem-7",
+	})
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	backdateEvent(t, st, raised, now.AddDate(0, 0, -100))
+
+	// No dispatch at all — the work is open only through its queue row.
+	if err := st.PutSnapshot(ctx, pid, "rig_queue", []map[string]string{
+		{"id": "qitem-7", "state": "pending", "pickup_state": "unclaimed"},
+	}, now); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+
+	counts, err := st.PruneEvents(ctx, now.AddDate(0, 0, -90), 500, true)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if counts.Scanned != 1 || counts.KeptLive != 1 || counts.Deleted != 0 {
+		t.Fatalf("counts = %+v, want the one row scanned and kept", counts)
+	}
+	if subjects := eventSubjects(t, st); len(subjects) != 1 || subjects[0] != "#7" {
+		t.Fatalf("subjects = %v, want #7 kept for its open queue row", subjects)
+	}
+}
