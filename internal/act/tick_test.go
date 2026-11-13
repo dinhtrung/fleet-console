@@ -746,7 +746,7 @@ func TestUnattributableRejectPrintsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first tick: %v", err)
 	}
-	if !hasSkip(first, "REJECT a7463125 does not name head 3f2a1b9c4d5e6f708192a3b4c5d6e7f8091a2b3c") {
+	if !hasSkip(first, "this REJECT names a7463125, the head is 3f2a1b9c4d5e6f708192a3b4c5d6e7f8091a2b3c; a verdict naming 3f2a1b9c4d5e6f708192a3b4c5d6e7f8091a2b3c unblocks the merge") {
 		t.Fatalf("first tick skipped = %v, want the full refusal line", first.Skipped)
 	}
 	for tick := 2; tick <= 5; tick++ {
@@ -795,7 +795,7 @@ func TestUnattributableRejectNewHeadPrintsAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second tick: %v", err)
 	}
-	if !hasSkip(second, "REJECT b8474236 does not name head") {
+	if !hasSkip(second, "this REJECT names b8474236, the head is") {
 		t.Fatalf("second tick skipped = %v, want the new note's line", second.Skipped)
 	}
 	events, err := st.EventsForItem(ctx, 5, 50)
@@ -839,7 +839,7 @@ func TestUnattributableRejectLedgerFailureStillPrints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tick with a refusing ledger: %v", err)
 	}
-	if !hasSkip(report, "does not name head") {
+	if !hasSkip(report, "unblocks the merge") {
 		t.Fatalf("skipped = %v, want the refusal named despite the ledger failure", report.Skipped)
 	}
 }
