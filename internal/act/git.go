@@ -3,6 +3,7 @@ package act
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +18,11 @@ type Git interface {
 	// WorktreeAddOrReuse reuses an existing worktree, adopts an existing branch, or
 	// creates both. It never deletes anything.
 	WorktreeAddOrReuse(ctx context.Context, worktree, branch, base string) (reused bool, err error)
+	// IsAncestor reports whether ancestor is an ancestor of descendant in this
+	// repository. The answer is the repository's, never a string comparison
+	// (superseded-verdict, design D1); an unknown commit is an error, so the
+	// caller can ask rather than assume (design D2).
+	IsAncestor(ctx context.Context, ancestor, descendant string) (bool, error)
 }
 
 // ExecGit runs git in one repository.
@@ -54,6 +60,32 @@ func (g ExecGit) BaseSHA(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// IsAncestor asks the repository whether one commit is an ancestor of another.
+// `git merge-base --is-ancestor` answers with its exit status: 0 is "yes", 1 is
+// "no, but both commits exist". Anything else — an unknown object, a broken
+// repository, a timeout — is an error, and the caller treats it as "not
+// superseded" so a note nobody could check still reaches the operator
+// (superseded-verdict, design D2). Abbreviated shas are the repository's
+// business, not the caller's: git resolves them here.
+func (g ExecGit) IsAncestor(ctx context.Context, ancestor, descendant string) (bool, error) {
+	if ancestor == "" || descendant == "" {
+		return false, fmt.Errorf("git merge-base: two commits are required, got %q and %q", ancestor, descendant)
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", g.RepoPath, "merge-base", "--is-ancestor", ancestor, descendant)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w: %s",
+		ancestor, descendant, err, strings.TrimSpace(stderr.String()))
 }
 
 // WorktreeAddOrReuse implements the reuse rule: never delete, reuse the right
