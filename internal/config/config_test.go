@@ -484,7 +484,7 @@ func TestVerdictRelay(t *testing.T) {
 		if eff.Projects[0].VerdictRelay != nil {
 			t.Fatalf("VerdictRelay = %+v, want nil (absent block)", eff.Projects[0].VerdictRelay)
 		}
-		mode, seat := eff.RelayFor("a")
+		mode, seat := eff.RelayFor("a", RelayRow{})
 		if mode != "" || seat != "" {
 			t.Fatalf("RelayFor = (%q, %q), want (\"\", \"\")", mode, seat)
 		}
@@ -499,7 +499,7 @@ func TestVerdictRelay(t *testing.T) {
 		if eff.Projects[0].VerdictRelay == nil {
 			t.Fatalf("VerdictRelay = nil, want an empty block (distinguishable from absent)")
 		}
-		mode, seat := eff.RelayFor("a")
+		mode, seat := eff.RelayFor("a", RelayRow{})
 		if mode != "" || seat != "" {
 			t.Fatalf("RelayFor = (%q, %q), want (\"\", \"\")", mode, seat)
 		}
@@ -513,11 +513,36 @@ func TestVerdictRelay(t *testing.T) {
 				if err != nil {
 					t.Fatalf("load: %v", err)
 				}
-				gotMode, seat := eff.RelayFor("a")
+				gotMode, seat := eff.RelayFor("a", RelayRow{})
 				if gotMode != mode || seat != "relay-seat@my-rig" {
 					t.Fatalf("RelayFor = (%q, %q), want (%q, relay-seat@my-rig)", gotMode, seat, mode)
 				}
 			})
+		}
+	})
+
+	// #375: the store row answers first, the file block is the fallback. A
+	// board-created project has no block at all, so the row is the only place
+	// its relay can come from.
+	t.Run("the row answers first, the block second", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    verdict_relay:\n      mode: scribe\n      seat: file-seat@my-rig\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if mode, seat := eff.RelayFor("a", RelayRow{Mode: RelayModeOperator, Seat: "operator-agent@kernel"}); mode != RelayModeOperator || seat != "operator-agent@kernel" {
+			t.Fatalf("row-first = (%q, %q), want the row's operator pair", mode, seat)
+		}
+		if mode, seat := eff.RelayFor("a", RelayRow{}); mode != RelayModeScribe || seat != "file-seat@my-rig" {
+			t.Fatalf("fallback = (%q, %q), want the file block", mode, seat)
+		}
+		// A seat without a mode names nothing: the block still answers.
+		if mode, seat := eff.RelayFor("a", RelayRow{Seat: "stray@my-rig"}); mode != RelayModeScribe || seat != "file-seat@my-rig" {
+			t.Fatalf("mode-less row = (%q, %q), want the file block", mode, seat)
+		}
+		// Neither layer sets a mode: off.
+		if mode, seat := eff.RelayFor("missing", RelayRow{}); mode != "" || seat != "" {
+			t.Fatalf("unknown project = (%q, %q), want (\"\", \"\")", mode, seat)
 		}
 	})
 

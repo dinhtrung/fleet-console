@@ -1412,3 +1412,80 @@ func TestProjectWritesWakeTheLoop(t *testing.T) {
 	}
 	expectWake("delete")
 }
+
+// TestProjectRelayLivesOnTheRow (#375): the board can set verdict_relay. The
+// edit writes the file block and the store row together, the answer reports
+// the pair, and the loader's rule — a mode needs a seat — refuses the pair the
+// file would refuse.
+func TestProjectRelayLivesOnTheRow(t *testing.T) {
+	h := newProjectsHarness(t, nil)
+
+	// The board's create carries the pair too: the row exists before any edit.
+	createBody := `{"key":"relay-created","name":"Relay created","forge":"github","repo":"org/relay",
+	 "default_branch":"main","rigs":["rig-a-2"],"concurrency_cap":2,
+	 "relay_mode":"operator","relay_seat":"operator-agent@kernel",
+	 "paths":{"main":"./checkouts/relay","worktrees":"./wt"}}`
+	if resp, body := h.post(t, createBody); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201 (%s)", resp.StatusCode, body)
+	}
+	created, err := h.st.ProjectByKey(context.Background(), "relay-created")
+	if err != nil || created == nil {
+		t.Fatalf("created row: %+v (%v)", created, err)
+	}
+	if created.RelayMode != "operator" || created.RelaySeat != "operator-agent@kernel" {
+		t.Fatalf("created relay = (%q, %q), want the posted pair", created.RelayMode, created.RelaySeat)
+	}
+
+	resp, body := h.do(t, http.MethodPut, "/api/projects/existing-1",
+		editBody("existing-1", func(r *ProjectRequest) {
+			r.RelayMode, r.RelaySeat = "operator", "operator-agent@kernel"
+		}))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", resp.StatusCode, body)
+	}
+	var answer EditProjectResponse
+	if err := json.Unmarshal(body, &answer); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if answer.Project.RelayMode != "operator" || answer.Project.RelaySeat != "operator-agent@kernel" {
+		t.Fatalf("answer relay = (%q, %q), want the posted pair", answer.Project.RelayMode, answer.Project.RelaySeat)
+	}
+	row, err := h.st.ProjectByKey(context.Background(), "existing-1")
+	if err != nil || row == nil {
+		t.Fatalf("row: %+v (%v)", row, err)
+	}
+	if row.RelayMode != "operator" || row.RelaySeat != "operator-agent@kernel" {
+		t.Fatalf("row relay = (%q, %q), want the posted pair", row.RelayMode, row.RelaySeat)
+	}
+	written := string(h.bytes(t))
+	if !strings.Contains(written, "verdict_relay:") || !strings.Contains(written, "operator-agent@kernel") {
+		t.Fatalf("file does not carry the relay block:\n%s", written)
+	}
+
+	// Clearing it is an explicit off on both layers.
+	resp, body = h.do(t, http.MethodPut, "/api/projects/existing-1",
+		editBody("existing-1", func(r *ProjectRequest) { r.RelayMode, r.RelaySeat = "", "" }))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("clear status = %d, want 200 (%s)", resp.StatusCode, body)
+	}
+	row, _ = h.st.ProjectByKey(context.Background(), "existing-1")
+	if row.RelayMode != "" || row.RelaySeat != "" {
+		t.Fatalf("row relay = (%q, %q), want cleared", row.RelayMode, row.RelaySeat)
+	}
+	// Clearing it is an explicit off on both layers: the row empties and the
+	// file keeps the empty block, which is the statement that clears it — an
+	// absent block would leave the row alone.
+	if !strings.Contains(string(h.bytes(t)), "verdict_relay: {}") {
+		t.Fatalf("file lost the explicit off block:\n%s", h.bytes(t))
+	}
+
+	// The file's own rule: a mode with no seat is refused on the field.
+	resp, body = h.do(t, http.MethodPut, "/api/projects/existing-1",
+		editBody("existing-1", func(r *ProjectRequest) { r.RelayMode, r.RelaySeat = "operator", "" }))
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (%s)", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "verdict_relay.seat") {
+		t.Fatalf("body = %s, want the seat field named", body)
+	}
+}

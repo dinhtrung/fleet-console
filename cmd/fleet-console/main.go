@@ -886,7 +886,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 				// asked to write into, and the destination an operator question
 				// goes to. Read once per tick from the effective config, so a
 				// project that sets no block keeps human@kernel.
-				relayMode, relaySeat := eff.RelayFor(projectKey)
+				// The project's verdict_relay resolution (#375): the row first —
+				// the board writes it and this tick reads rows — with the config
+				// block as the fallback, so a file-only project keeps working.
+				relayMode, relaySeat := eff.RelayFor(projectKey,
+					config.RelayRow{Mode: project.RelayMode, Seat: project.RelaySeat})
 				report, err := act.RunTick(ctx, act.TickInput{
 					Store: db, Project: project, Forge: source.Forge,
 					Rig: rig.NewAdapter(rigRunner), Git: gitRunner, Gate: gate, Apply: true,

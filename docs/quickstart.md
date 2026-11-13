@@ -204,7 +204,9 @@ that review to a seat that turns it into the verdict note. The block is optional
 Without the block nothing changes: no relay rows, operator questions keep going to
 `human@kernel` — today's behaviour. Two things fail loudly at load rather than at runtime: a
 `mode` other than `scribe` or `operator` is refused on `verdict_relay.mode`, and a `mode` with an
-empty `seat` is refused on `verdict_relay.seat`. What the relay does and does not do is in
+empty `seat` is refused on `verdict_relay.seat`. The same pair can be set on the board — the
+project edit carries `relay_mode` and `relay_seat`, writes the row and the block together, and the
+row answers first. What the relay does and does not do is in
 [the architecture map](fleet-console.md#when-a-review-is-not-a-verdict).
 
 ## 5. Seed and check

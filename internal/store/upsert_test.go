@@ -177,3 +177,43 @@ func TestProjectRigTiersRoundTripKeepsEveryName(t *testing.T) {
 		t.Fatalf("RigTiers[1] = %+v, want tier 1 on-unavailable", got.RigTiers[1])
 	}
 }
+
+// TestUpsertRelayIsDBOwnedUnlessSynced: the relay is the row's, like onhold
+// (#375). A config apply with no block leaves what the board wrote alone; a
+// block writes it; a later apply without a block must not erase it.
+func TestUpsertRelayIsDBOwnedUnlessSynced(t *testing.T) {
+	ctx := context.Background()
+	st := upsertStore(t)
+	in := baseUpsert()
+	if _, _, err := st.UpsertProject(ctx, in); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	// The board wrote the pair: a config apply with no block must keep it.
+	board := in
+	board.Project.RelayMode, board.Project.RelaySeat, board.SyncRelay = "operator", "operator-agent@kernel", true
+	if _, _, err := st.UpsertProject(ctx, board); err != nil {
+		t.Fatalf("board write: %v", err)
+	}
+	projects, _ := st.Projects(ctx)
+	if projects[0].RelayMode != "operator" || projects[0].RelaySeat != "operator-agent@kernel" {
+		t.Fatalf("relay = (%q, %q), want the board's pair", projects[0].RelayMode, projects[0].RelaySeat)
+	}
+	in.Project.Name = "renamed"
+	if _, _, err := st.UpsertProject(ctx, in); err != nil {
+		t.Fatalf("apply without block: %v", err)
+	}
+	projects, _ = st.Projects(ctx)
+	if projects[0].RelayMode != "operator" || projects[0].RelaySeat != "operator-agent@kernel" {
+		t.Fatalf("relay = (%q, %q), a blockless apply erased it", projects[0].RelayMode, projects[0].RelaySeat)
+	}
+	// An empty block is an explicit off: mode "" with SyncRelay clears the row.
+	off := in
+	off.SyncRelay = true
+	if _, _, err := st.UpsertProject(ctx, off); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	projects, _ = st.Projects(ctx)
+	if projects[0].RelayMode != "" || projects[0].RelaySeat != "" {
+		t.Fatalf("relay = (%q, %q), want cleared by an empty block", projects[0].RelayMode, projects[0].RelaySeat)
+	}
+}

@@ -174,3 +174,42 @@ func TestApplyOneIsIdempotent(t *testing.T) {
 		t.Fatalf("repo path = %q (%v), want /srv/new", path, err)
 	}
 }
+
+// TestApplyRelayFollowsTheBlock: registry.Apply is where a config block becomes
+// a project row (#375). A block writes the pair; an absent block leaves the row
+// alone, so an apply on boot never erases a relay the board set.
+func TestApplyRelayFollowsTheBlock(t *testing.T) {
+	ctx := context.Background()
+	st := testStore(t)
+	projects := testProjects()[:1]
+
+	if _, err := Apply(ctx, st, projects, false, false); err != nil {
+		t.Fatalf("apply without block: %v", err)
+	}
+	row := projectByKey(t, st, "a")
+	if row.RelayMode != "" || row.RelaySeat != "" {
+		t.Fatalf("relay = (%q, %q), want off without a block", row.RelayMode, row.RelaySeat)
+	}
+
+	// The board writes a pair the file does not name.
+	board := projects[0]
+	board.VerdictRelay = &config.VerdictRelay{Mode: config.RelayModeOperator, Seat: "operator-agent@kernel"}
+	if _, err := Apply(ctx, st, []config.Project{board}, false, false); err != nil {
+		t.Fatalf("apply with block: %v", err)
+	}
+	row = projectByKey(t, st, "a")
+	if row.RelayMode != config.RelayModeOperator || row.RelaySeat != "operator-agent@kernel" {
+		t.Fatalf("relay = (%q, %q), want the block's pair", row.RelayMode, row.RelaySeat)
+	}
+
+	// A later apply from a file that names no block keeps the row's pair.
+	quiet := projects[0]
+	quiet.Name = "A renamed"
+	if _, err := Apply(ctx, st, []config.Project{quiet}, false, false); err != nil {
+		t.Fatalf("apply after block removal: %v", err)
+	}
+	row = projectByKey(t, st, "a")
+	if row.RelayMode != config.RelayModeOperator || row.RelaySeat != "operator-agent@kernel" {
+		t.Fatalf("relay = (%q, %q), a blockless apply erased it", row.RelayMode, row.RelaySeat)
+	}
+}

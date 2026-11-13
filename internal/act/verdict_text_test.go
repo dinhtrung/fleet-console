@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dinhtrung/fleet-console/internal/config"
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
@@ -132,5 +133,70 @@ func TestRunTickAsksOperatorForUnresolvedVerdict(t *testing.T) {
 	}
 	if queue.createCalls != 1 {
 		t.Fatalf("queue create calls = %d after two ticks, want one", queue.createCalls)
+	}
+}
+
+// TestBoardCreatedProjectRelayReachesTheQuestion (#375): a project that exists
+// only as a store row — the shape a project created on the board leaves — has
+// its relay resolved from that row, and the question it raises goes to the
+// configured seat instead of human@kernel. The join is the whole item: the row
+// (written by the board), config.RelayFor (row first), and the tick's
+// destination resolution.
+func TestBoardCreatedProjectRelayReachesTheQuestion(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 13, 14, 0, 0, 0, time.UTC)
+	st := newStore(t)
+	_, pid, err := st.UpsertProject(ctx, store.UpsertInput{
+		Project: store.ProjectInput{
+			Key: "app", Name: "app", ForgeKind: "github", ForgeProject: "o/r",
+			Rig: "rig", RigTemplate: "default", ConcurrencyCap: 2, Enabled: true,
+			RelayMode: "operator", RelaySeat: "operator-agent@kernel",
+		},
+		LabelsJSON: "{}", RepoKey: "main", RepoPath: "/srv/app", WorktreeRoot: "/srv/wt",
+		SyncRelay: true,
+	})
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	row, err := st.ProjectByKey(ctx, "app")
+	if err != nil || row == nil {
+		t.Fatalf("project row: %v", err)
+	}
+	// No file block at all: the row is the only place the relay can come from.
+	mode, seat := (&config.Effective{}).RelayFor(row.Key, config.RelayRow{Mode: row.RelayMode, Seat: row.RelaySeat})
+	if mode != "operator" || seat != "operator-agent@kernel" {
+		t.Fatalf("relay = (%q, %q), want the row's operator pair", mode, seat)
+	}
+
+	const itemNumber, changeRequestNumber = 63, 75
+	if _, err := st.CreateDispatch(ctx, store.NewDispatch{
+		ProjectID: pid, ItemNumber: itemNumber, Attempt: 1, Seat: "seat@rig",
+		Branch: "feature/63-x", Worktree: "wt", BaseSHA: "base", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	fake := forge.NewFake(forge.KindGitHub)
+	fake.ItemsValue = []forge.Item{{Number: itemNumber, Kind: forge.KindTask, State: forge.StateOpen, Title: "Sixty-three"}}
+	fake.RequestsValue = []forge.ChangeRequest{{
+		Number: changeRequestNumber, HeadSHA: "d00f0dd", Mergeable: true,
+		Body: "Closes #63", DocsOnly: true,
+	}}
+	fake.NotesValue = []forge.Comment{{ID: "n1", Body: "QA ACCEPT", CreatedAt: "2026-11-13T13:00:00Z"}}
+
+	queue := &queueStub{item: &rig.QueueItem{ID: "qitem-1", State: "pending"}, created: &rig.CreateRequest{}}
+	in := TickInput{
+		Store: st, Project: *row, Forge: fake, Rig: queue, Git: &fakeGit{},
+		Gate: openGate(), Apply: true, Items: fake.ItemsValue, CRs: fake.RequestsValue,
+		Now: func() time.Time { return now }, WorktreeRoot: t.TempDir(),
+		RelayMode: mode, RelaySeat: seat,
+	}
+	if _, err := RunTick(ctx, in); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if queue.createCalls != 1 {
+		t.Fatalf("queue create calls = %d, want one question", queue.createCalls)
+	}
+	if queue.created.Destination != "operator-agent@kernel" {
+		t.Fatalf("destination = %q, want the project's relay seat", queue.created.Destination)
 	}
 }

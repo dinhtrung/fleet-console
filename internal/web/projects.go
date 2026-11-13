@@ -59,7 +59,13 @@ type ProjectRequest struct {
 	// with no culture file, and nothing derives one (design: "a missing culture
 	// file is explained, not created").
 	CultureFile string `json:"culture_file"`
-	Paths       struct {
+	// RelayMode and RelaySeat are the verdict relay (#375): "" (off), scribe or
+	// operator, with a seat required whenever a mode is set. The rule is the
+	// file's own (config.ValidateProject), so the API cannot write a pair the
+	// loader would refuse.
+	RelayMode string `json:"relay_mode"`
+	RelaySeat string `json:"relay_seat"`
+	Paths     struct {
 		Main      string `json:"main"`
 		Worktrees string `json:"worktrees"`
 	} `json:"paths"`
@@ -92,7 +98,12 @@ type ProjectResponse struct {
 	Dispatches     int64             `json:"dispatches"`
 	LiveDispatch   int64             `json:"live_dispatch"`
 	CultureFile    string            `json:"culture_file"`
-	Paths          struct {
+	// RelayMode and RelaySeat are the effective verdict relay (#375): the store
+	// row first, the file block second — the same answer RelayFor gives the
+	// tick, so the board edits the pair the gate actually uses.
+	RelayMode string `json:"relay_mode"`
+	RelaySeat string `json:"relay_seat"`
+	Paths     struct {
 		Main      string `json:"main"`
 		Worktrees string `json:"worktrees"`
 	} `json:"paths"`
@@ -233,6 +244,11 @@ func (v *mergedView) render(key string) ProjectResponse {
 	if row != nil {
 		out.Enabled = row.Enabled
 		out.OnHold = row.OnHold
+		// The row answers first, exactly as RelayFor does (#375): a store-only
+		// relay is what the tick uses, so it is what the board shows.
+		if row.RelayMode != "" {
+			out.RelayMode, out.RelaySeat = row.RelayMode, row.RelaySeat
+		}
 		if count, ok := v.counts[row.ID]; ok {
 			out.Items, out.Dispatches, out.LiveDispatch = count.Items, count.Dispatches, count.LiveDispatch
 		}
@@ -258,6 +274,8 @@ func renderRow(row *store.ProjectRow, count store.ProjectCount, source string) P
 		Dispatches:     count.Dispatches,
 		LiveDispatch:   count.LiveDispatch,
 		Source:         source,
+		RelayMode:      row.RelayMode,
+		RelaySeat:      row.RelaySeat,
 	}
 	if out.Rigs == nil {
 		out.Rigs = []string{}
@@ -313,24 +331,7 @@ func createProject(st *store.Store, configPath string, write func(string, config
 		}
 
 		dir := filepath.Dir(configPath)
-		project := config.Project{
-			Key:            req.Key,
-			Name:           req.Name,
-			Forge:          req.Forge,
-			Repo:           req.Repo,
-			RepoURL:        req.RepoURL,
-			ForgeHost:      req.ForgeHost,
-			DefaultBranch:  req.DefaultBranch,
-			Rigs:           rigRefsFromNames(req.Rigs),
-			RigTemplate:    req.RigTemplate,
-			ConcurrencyCap: req.ConcurrencyCap,
-			GateCmd:        req.GateCmd,
-			Labels:         req.Labels,
-			OnHold:         req.OnHold,
-			CultureFile:    req.CultureFile,
-		}
-		project.Paths.Main = req.Paths.Main
-		project.Paths.Worktrees = req.Paths.Worktrees
+		project := requestProject(req)
 
 		// One rule set: the same function the loader runs, answering one message
 		// per field.
@@ -682,10 +683,23 @@ func requestProject(req ProjectRequest) config.Project {
 		Labels:         req.Labels,
 		OnHold:         req.OnHold,
 		CultureFile:    req.CultureFile,
+		VerdictRelay:   relayFromRequest(req.RelayMode, req.RelaySeat),
 	}
 	project.Paths.Main = req.Paths.Main
 	project.Paths.Worktrees = req.Paths.Worktrees
 	return project
+}
+
+// relayFromRequest is the API's relay pair as the file's block. An empty pair
+// is an explicit off, written as an empty block rather than no block at all:
+// a whole-definition PUT states every field, and "absent block leaves the row
+// alone" is the rule that lets a hand-edited file keep a board-set relay — so
+// the board's own "off" has to be a statement, or it could never clear one.
+// The rest of the rule — the two modes, and a seat required whenever a mode is
+// set — is ValidateProject's, so an edit cannot write a pair the loader would
+// refuse at the next boot.
+func relayFromRequest(mode, seat string) *config.VerdictRelay {
+	return &config.VerdictRelay{Mode: strings.TrimSpace(mode), Seat: strings.TrimSpace(seat)}
 }
 
 // writtenProject is the config-file shape of a validated definition, the same
@@ -706,6 +720,9 @@ func writtenProject(project config.Project) configfile.Project {
 		Labels:         project.Labels,
 		OnHold:         project.OnHold,
 		CultureFile:    project.CultureFile,
+	}
+	if project.VerdictRelay != nil {
+		written.VerdictRelay = &configfile.VerdictRelay{Mode: project.VerdictRelay.Mode, Seat: project.VerdictRelay.Seat}
 	}
 	written.Paths.Main = project.Paths.Main
 	written.Paths.Worktrees = project.Paths.Worktrees
@@ -741,9 +758,20 @@ func projectDiff(oldEntry, newEntry config.Project) (changed, identity []string)
 	add("gate_cmd", false, oldEntry.GateCmd == newEntry.GateCmd)
 	add("labels", false, maps.Equal(oldEntry.Labels, newEntry.Labels))
 	add("culture_file", false, oldEntry.CultureFile == newEntry.CultureFile)
+	add("relay_mode", false, relayOf(oldEntry).Mode == relayOf(newEntry).Mode)
+	add("relay_seat", false, relayOf(oldEntry).Seat == relayOf(newEntry).Seat)
 	add("paths.main", true, oldEntry.Paths.Main == newEntry.Paths.Main)
 	add("paths.worktrees", true, oldEntry.Paths.Worktrees == newEntry.Paths.Worktrees)
 	return changed, identity
+}
+
+// relayOf reads a project's relay block as a value, so a nil block and an empty
+// one compare equal — both are off.
+func relayOf(project config.Project) config.VerdictRelay {
+	if project.VerdictRelay == nil {
+		return config.VerdictRelay{}
+	}
+	return *project.VerdictRelay
 }
 
 // diffDetail is the audit row's detail: the changed fields with their old and
@@ -756,7 +784,8 @@ func diffDetail(oldEntry, newEntry config.Project, changed []string) string {
 		"concurrency_cap": oldEntry.ConcurrencyCap, "rig_template": oldEntry.RigTemplate,
 		"gate_cmd": oldEntry.GateCmd, "labels": oldEntry.Labels,
 		"culture_file": oldEntry.CultureFile,
-		"paths.main":   oldEntry.Paths.Main, "paths.worktrees": oldEntry.Paths.Worktrees,
+		"relay_mode":   relayOf(oldEntry).Mode, "relay_seat": relayOf(oldEntry).Seat,
+		"paths.main": oldEntry.Paths.Main, "paths.worktrees": oldEntry.Paths.Worktrees,
 	}
 	newValues := map[string]any{
 		"name": newEntry.Name, "forge": newEntry.Forge, "repo": newEntry.Repo,
@@ -765,7 +794,8 @@ func diffDetail(oldEntry, newEntry config.Project, changed []string) string {
 		"concurrency_cap": newEntry.ConcurrencyCap, "rig_template": newEntry.RigTemplate,
 		"gate_cmd": newEntry.GateCmd, "labels": newEntry.Labels,
 		"culture_file": newEntry.CultureFile,
-		"paths.main":   newEntry.Paths.Main, "paths.worktrees": newEntry.Paths.Worktrees,
+		"relay_mode":   relayOf(newEntry).Mode, "relay_seat": relayOf(newEntry).Seat,
+		"paths.main": newEntry.Paths.Main, "paths.worktrees": newEntry.Paths.Worktrees,
 	}
 	parts := make([]string, 0, len(changed))
 	for _, field := range changed {
@@ -891,6 +921,9 @@ func projectResponse(project config.Project, source string) ProjectResponse {
 		OnHold:         project.OnHold != nil && *project.OnHold,
 		CultureFile:    project.CultureFile,
 		Source:         source,
+	}
+	if project.VerdictRelay != nil {
+		out.RelayMode, out.RelaySeat = project.VerdictRelay.Mode, project.VerdictRelay.Seat
 	}
 	out.Paths.Main = project.Paths.Main
 	out.Paths.Worktrees = project.Paths.Worktrees

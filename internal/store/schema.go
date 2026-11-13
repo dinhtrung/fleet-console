@@ -7,11 +7,11 @@ import (
 
 // schemaVersion is the number of migrations in migrations. A database at this
 // user_version is current.
-const schemaVersion = 4
+const schemaVersion = 5
 
 // migrations are applied in order; migrations[i] moves user_version from i to
 // i+1. Never edit an applied migration; append a new one.
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4}
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5}
 
 // schemaV1 is design §6 verbatim. Do not add the queue_row, decision, lease or
 // task tables here: that state belongs to the rig.
@@ -103,6 +103,17 @@ INSERT INTO verdict_new (id, dispatch_id, project_id, item_number, sha, decision
   FROM verdict v LEFT JOIN dispatch d ON d.id = v.dispatch_id;
 DROP TABLE verdict;
 ALTER TABLE verdict_new RENAME TO verdict;
+`
+
+// schemaV5 gives the project its verdict relay (#375). The relay was file-only:
+// a project created on the board writes a row and can carry a block in the
+// file, but nothing in the database could hold the pair, so the running tick —
+// which reads rows — always answered ("", "") for a row the file did not name.
+// Both columns default empty, which is off; the row is authoritative for the
+// resolver and the file block is the fallback.
+const schemaV5 = `
+ALTER TABLE project ADD COLUMN relay_mode TEXT NOT NULL DEFAULT '';
+ALTER TABLE project ADD COLUMN relay_seat TEXT NOT NULL DEFAULT '';
 `
 
 func (s *Store) migrate(ctx context.Context) error {
