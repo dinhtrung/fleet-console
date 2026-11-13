@@ -1021,8 +1021,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		WebhookSecret: eff.WebhookSecret,
 		Waker:         waker,
 		// The mirror cadence the board judges mirror-read ages against (#394);
-		// config.Load always resolves it, so this is the effective value.
+		// config.Load always resolves it, so this is the effective value. MaxWait is
+		// the cadence's own cap, the same fact pollCadence hands the mirror loop: a
+		// quiet box waits that long between reads, so the board's stall floor has to
+		// respect it (#408).
 		TickInterval: eff.TickInterval,
+		MaxWait:      pollCadence(eff).Max,
 	})
 	if err != nil {
 		return err

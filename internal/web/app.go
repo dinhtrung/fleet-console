@@ -29,6 +29,12 @@ type Config struct {
 	// mirror read is against it: quiet past two ticks, stalled past five
 	// (#394). Zero takes the config default.
 	TickInterval time.Duration
+	// MaxWait is the longest the poll may legitimately sleep between reads —
+	// pollCadence(eff).Max, the lifecycle block's idle_poll_max when it is
+	// written. The board's quiet/stalled floors are raised to it, so a healthy
+	// idle box is not painted stalled (#408). Zero means "no backoff": the
+	// floors fall back to the plain 2x/5x of TickInterval.
+	MaxWait time.Duration
 	// ForgeFor is the write path a board verdict needs. Nil answers 503 on the
 	// verdict route only; every read still serves.
 	ForgeFor func(ctx context.Context, project store.ProjectRow) (forge.Forge, error)
@@ -87,7 +93,7 @@ func New(cfg Config) (*fiber.App, error) {
 		IdleTimeout:  60 * time.Second,
 	})
 	hub := NewHub()
-	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor, Waker: cfg.Waker, Tick: cfg.TickInterval}
+	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor, Waker: cfg.Waker, Tick: cfg.TickInterval, MaxWait: cfg.MaxWait}
 
 	app.Use(idempotency())
 	app.Get("/api/health", func(c fiber.Ctx) error {

@@ -27,8 +27,14 @@ type Fleet struct {
 	// Tick is the mirror's poll cadence. The project header judges how old a
 	// mirror read is against it: quiet past two ticks, stalled past five (#394).
 	// Zero means the config default.
-	Tick   time.Duration
-	Compat func(ctx context.Context) rig.Report
+	Tick time.Duration
+	// MaxWait is the longest the mirror's poll may legitimately sleep between
+	// reads — the cadence's own cap (rig_lifecycle.idle_poll_max when the block
+	// is written, tick otherwise). A quiet box writes a stamp once per window,
+	// so the window, not the tick, is the age a healthy header must call fresh
+	// (#408, the same derivation web.Readiness.staleThreshold uses).
+	MaxWait time.Duration
+	Compat  func(ctx context.Context) rig.Report
 	// ForgeFor resolves a project's forge for the one write path the board
 	// owns: a human approve/reject posts a note on the change request. Every
 	// other write stays in the act loop.
@@ -317,8 +323,8 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 		}
 		// How old each mirror read is belongs on the project's own header (#394).
 		// The stamps are the only evidence a stalled mirror leaves behind.
-		bp.ForgeRead = mirrorReadAt(now, projectStatus.LastForgeAt, f.Tick, "forge")
-		bp.RigRead = mirrorReadAt(now, projectStatus.LastRigAt, f.Tick, "rig")
+		bp.ForgeRead = mirrorReadAt(now, projectStatus.LastForgeAt, f.Tick, f.MaxWait, "forge")
+		bp.RigRead = mirrorReadAt(now, projectStatus.LastRigAt, f.Tick, f.MaxWait, "rig")
 		// A question waiting an hour must not look like a project with nothing
 		// to do (#377): the ledger's unanswered verdict questions ride the same
 		// read the board already makes, and a row the queue says is finished
@@ -500,8 +506,8 @@ func (f *Fleet) Item(c fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
 		now := f.now()
-		detail.Project.ForgeRead = mirrorReadAt(now, status.LastForgeAt, f.Tick, "forge")
-		detail.Project.RigRead = mirrorReadAt(now, status.LastRigAt, f.Tick, "rig")
+		detail.Project.ForgeRead = mirrorReadAt(now, status.LastForgeAt, f.Tick, f.MaxWait, "forge")
+		detail.Project.RigRead = mirrorReadAt(now, status.LastRigAt, f.Tick, f.MaxWait, "rig")
 		dispatches, err := f.Store.Dispatches(ctx, p.ID, number)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())

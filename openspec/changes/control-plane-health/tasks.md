@@ -12,7 +12,8 @@
 ## 2. Staleness on the board
 
 - [x] 2.1 `mirror_meta` reaches the project surface: `last_forge_at`, `last_rig_at`, their ages, and the two
-      thresholds (`2 ×` quiet, `5 ×` stalled) computed once, server-side.
+      thresholds (`2 ×` quiet, `5 ×` stalled) computed once, server-side, and raised to the poll's own
+      `idle_poll_max` window when the backoff makes it longer (#408).
 - [x] 2.2 A project that has never read says so in words.
 - [x] 2.3 Tests: age formatting, both thresholds, and the never-read case.
 
