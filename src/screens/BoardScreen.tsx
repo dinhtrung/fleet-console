@@ -17,10 +17,11 @@ import {
 } from "../components/ui";
 import { PageHeader } from "../shell/PageHeader";
 
-function countLine(project: { counts: { building: number; review: number; waiting: number; parked: number; blocked: number } }): string {
+function countLine(project: { counts: { building: number; review: number; waiting: number; parked: number; blocked: number; stale: number } }): string {
   const parts = [
     project.counts.building ? `${project.counts.building} building` : "",
     project.counts.review ? `${project.counts.review} review` : "",
+    project.counts.stale ? `${project.counts.stale} stale` : "",
     project.counts.parked ? `${project.counts.parked} parked` : "",
     project.counts.waiting ? `${project.counts.waiting} waiting` : "",
     project.counts.blocked ? `${project.counts.blocked} blocked` : "",
@@ -176,12 +177,18 @@ export function BoardScreen() {
                           </td>
                           <td className="px-3 py-[var(--density-row-pad-y)]">
                             <StatusMagnet status={item.state} />
+                            {item.verdict_sha && item.head_sha ? (
+                              // console-ui: both commits on the row, not buried in a sentence.
+                              <span className="mt-0.5 block font-mono text-[0.625rem] leading-tight text-ink-muted">
+                                {item.verdict_sha} → {item.head_sha}
+                              </span>
+                            ) : null}
                           </td>
                           <td className="px-3 py-[var(--density-row-pad-y)] text-ink-muted">{item.seat ?? "—"}</td>
                           <td className="num px-3 py-[var(--density-row-pad-y)] text-ink-muted">{item.age}</td>
                           <td
                             className={
-                              item.state === "parked" || item.state === "paused"
+                              item.state === "parked" || item.state === "paused" || item.state === "stale"
                                 ? "px-3 py-[var(--density-row-pad-y)] text-ink"
                                 : "px-3 py-[var(--density-row-pad-y)] text-ink-muted"
                             }
