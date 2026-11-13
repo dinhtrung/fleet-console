@@ -148,6 +148,25 @@ The rule is deliberately conservative in three places:
 The epic being closed is a consequence of the merge, not a condition of it: a rollup that cannot
 run never un-merges anything.
 
+### What `tick: panicked:` means
+
+A journal line beginning `tick: panicked:` is a **contained** failure: one tick of the mirror
+loop crashed, the loop caught it, and the process is alive. The value after the prefix is the
+panic itself, and the stack that follows names the site — read it top-down until the first
+frame inside this repository, which is the code the tick was running. The loop returns to the
+base cadence after a panic, and when the wait changes the cadence line says so:
+`cadence … reset: tick: panicked: …`.
+
+Nothing else happened. A panic is not an item, not a decision, and not a page: the tick raised
+nothing, so nothing shows up on the board. The journal line and the fact that the box is
+supervised are the whole response.
+
+That is the requirement underneath the line: **the console must run under a supervisor that
+restarts it** — the `fleet-console.service` user unit, with `Restart=on-failure`. A contained
+panic still means the tick did nothing; an unsupervised box that starts the console from a task
+runner with no restart policy is dark after *any* panic, and that is the failure this section
+exists because of: the loop contained the crash, and nothing was left to restart it.
+
 ## What it refuses to be
 
 - **No model in the dispatch path.** Ordering is a contract, not a judgement call.

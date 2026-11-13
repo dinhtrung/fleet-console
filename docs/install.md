@@ -85,7 +85,9 @@ the log names the database backup.
 
 ## The Docker image is the exception
 
-The default deployment is the bare binary under systemd. `Dockerfile` builds an
+The default deployment is the bare binary under systemd. The unit's restart policy is what
+makes a contained tick panic survivable — see *What `tick: panicked:` means* in
+`docs/fleet-console.md`. `Dockerfile` builds an
 image that includes `gh`, `glab`, `rig`, `git` and `tmux` for boxes that prefer
 containers, but a container can only drive a host rig when it sees that host's
 state. The Dockerfile header lists the required mounts (`~/.openrig`, the tmux
