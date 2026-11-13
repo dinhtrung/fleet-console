@@ -17,6 +17,13 @@ import (
 // a wedged daemon must fail the caller, not hang the request or the tick.
 const DefaultTimeout = 20 * time.Second
 
+// StartTimeout bounds one cold launch (`rig up`). It boots a daemon, the
+// kernel and every seat, so the 20 s read budget is not enough — and a timeout
+// there is the worst outcome: the fleet comes up while the app records a
+// failure and declines to look again for the backoff window (epic #320, D5).
+// Adapter.Up names it explicitly; every other verb keeps the read budget.
+const StartTimeout = 5 * time.Minute
+
 // Runner executes one rig command and returns its stdout.
 type Runner interface {
 	Run(ctx context.Context, args ...string) ([]byte, error)
@@ -39,6 +46,18 @@ func (r ExecRunner) limit() time.Duration {
 	return DefaultTimeout
 }
 
+// resolveLimit is the budget one call gets. A deadline the caller put on the
+// context is the authority in both directions — Adapter.Up names its own
+// five-minute launch budget (epic #320, D5), and a shorter parent deadline
+// still wins — while the configured limit is only the budget for a caller
+// that set none, which is how every read verb keeps its 20 s.
+func (r ExecRunner) resolveLimit(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return r.limit()
+}
+
 // AsSession returns a runner for the same binary that speaks as one seat: the
 // child environment carries OPENRIG_SESSION_NAME on top of the parent's. The
 // rig CLI refuses the verbs that act as a seat without it (#253).
@@ -53,11 +72,11 @@ func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	if path == "" {
 		path = "rig"
 	}
-	limit := r.limit()
-	if deadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining < limit {
-			limit = remaining
-		}
+	limit := r.resolveLimit(ctx)
+	if limit < 0 {
+		// The caller's deadline has already passed; the child gets nothing and
+		// the error names the zero budget, not a negative duration.
+		limit = 0
 	}
 	runCtx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()

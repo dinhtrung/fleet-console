@@ -838,7 +838,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			// and its row exist (design D5). The facts come from the reads above:
 			// a project's fresh flag, its plan's Ready, and the rows and seats the
 			// tick already has, with no extra forge or rig call.
-			lifecycleActions := lifecycle.Decide(lifecycleFacts(rows, reads, plans, eff), !read.RigStale, read.At)
+			lifecycleActions := lifecycle.Decide(lifecycleFacts(rows, reads, plans, eff), !read.RigStale, read.RigDown, read.At)
 			lifecycleFailed := lifecycle.Start(ctx, lifecycleActions)
 			// The rig's roster and queue were read before the launch, so a rig that
 			// just came up would plan against a stale fleet and reach the next tick

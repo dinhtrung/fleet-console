@@ -328,19 +328,19 @@ func TestLifecycleDecideAdvancesTheWindowOnce(t *testing.T) {
 		Seats: []rig.Seat{{Rig: "r", Session: "dev-build-1@r", Lifecycle: "running"}},
 	}}
 
-	if actions := lifecycle.Decide(facts, true, t0); len(actions) != 0 {
+	if actions := lifecycle.Decide(facts, true, false, t0); len(actions) != 0 {
 		t.Fatalf("first quiet tick actions = %+v, want none", actions)
 	}
 	if got := lifecycle.quiet["r"]; !got.Equal(t0) {
 		t.Fatalf("window = %s, want it opened at %s", got, t0)
 	}
-	if actions := lifecycle.Decide(facts, true, t0.Add(time.Minute)); len(actions) != 0 {
+	if actions := lifecycle.Decide(facts, true, false, t0.Add(time.Minute)); len(actions) != 0 {
 		t.Fatalf("second quiet tick actions = %+v, want none yet", actions)
 	}
 	if got := lifecycle.quiet["r"]; !got.Equal(t0) {
 		t.Fatalf("window moved to %s, want it held at %s", got, t0)
 	}
-	if actions := lifecycle.Decide(facts, true, t0.Add(11*time.Minute)); len(actions) != 1 || actions[0].Kind != LifecycleStop {
+	if actions := lifecycle.Decide(facts, true, false, t0.Add(11*time.Minute)); len(actions) != 1 || actions[0].Kind != LifecycleStop {
 		t.Fatalf("actions after the window = %+v, want one stop", actions)
 	}
 }
@@ -350,7 +350,7 @@ func TestLifecycleDecideAdvancesTheWindowOnce(t *testing.T) {
 func TestLifecycleDisabledDecidesNothing(t *testing.T) {
 	lifecycle := &Lifecycle{Settings: config.LifecycleSettings{}, Executor: &LifecycleExecutor{}}
 	facts := []LifecycleProjectFacts{{Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: true, Ready: 5}}
-	if actions := lifecycle.Decide(facts, true, time.Now()); actions != nil {
+	if actions := lifecycle.Decide(facts, true, false, time.Now()); actions != nil {
 		t.Fatalf("actions = %+v, want none while disabled", actions)
 	}
 }
