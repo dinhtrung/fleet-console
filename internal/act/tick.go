@@ -138,6 +138,27 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			item = request.ClosesItem
 		}
 		if item == 0 {
+			// A change request whose body closes no item must not merge and must
+			// not have its notes read as a verdict for some guessed item — the
+			// behaviour is silence, but the silence itself is now visible (epic
+			// #309 T5, #314): one skip line and one audit row per (change
+			// request, head). A `#<n>` in the title or a `feature/<n>-` branch is
+			// a mention only — it names the item in the diagnostic and never
+			// associates the change request with the item.
+			named := decide.ItemToken(request.Title)
+			if named == 0 {
+				named = decide.BranchItem(request.Branch)
+			}
+			if !noteNoItemChangeRequest(ctx, actions, &request, named) {
+				if named != 0 {
+					report.Skipped = append(report.Skipped, fmt.Sprintf(
+						"#%d change request #%d: body closes no item: names #%d only in the title/branch; the gate reads \"Closes #%d\" in the body",
+						named, request.Number, named, named))
+				} else {
+					report.Skipped = append(report.Skipped, fmt.Sprintf(
+						"change request #%d: body closes no item", request.Number))
+				}
+			}
 			continue
 		}
 		// Capture first, decide second (design D3): the verdict is a fact about the
@@ -477,6 +498,30 @@ func noteUnattributedVerdict(ctx context.Context, actions *Actions, item int, ke
 		return noted
 	}
 	_, _ = actions.event(ctx, "act", "verdict.unattributed", subject, detail)
+	return false
+}
+
+// noteNoItemChangeRequest writes the once-per-(change request, head) audit row
+// for a change request whose body closes no item (#314, epic #309 T5: kind
+// change_request.no_item, subject #<item> when the title or branch named one
+// else cr-<number>, detail "cr=<n>; head=<sha>; named=<n|none>;" — the
+// trailing `;` terminator is the same rule verdict.unattributed follows). It
+// answers whether the row was already on the ledger before this tick — the
+// one case the skip line goes quiet on. A ledger failure writes nothing and
+// answers false, so the line keeps printing and the tick never fails.
+func noteNoItemChangeRequest(ctx context.Context, actions *Actions, cr *forge.ChangeRequest, named int) bool {
+	key := fmt.Sprintf("cr=%d; head=%s;", cr.Number, cr.HeadSHA)
+	subject := fmt.Sprintf("cr-%d", cr.Number)
+	detail := fmt.Sprintf("cr=%d; head=%s; named=none;", cr.Number, cr.HeadSHA)
+	if named != 0 {
+		subject = fmt.Sprintf("#%d", named)
+		detail = fmt.Sprintf("cr=%d; head=%s; named=%d;", cr.Number, cr.HeadSHA, named)
+	}
+	noted, err := actions.Store.HasEvent(ctx, "change_request.no_item", subject, key)
+	if err != nil || noted {
+		return noted
+	}
+	_, _ = actions.event(ctx, "act", "change_request.no_item", subject, detail)
 	return false
 }
 
