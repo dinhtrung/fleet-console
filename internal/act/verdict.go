@@ -123,6 +123,30 @@ func (e *UnattributedAcceptError) Error() string {
 	return fmt.Sprintf("ACCEPT %s does not name head %s (note %s)", e.Written, e.Head, e.NoteID)
 }
 
+// SupersededVerdictError is returned when the newest verdict-shaped note names
+// an ancestor of the head under review: the reviewer already decided an older
+// tree, and the review has since moved (superseded-verdict, design D1). It is
+// its own type so the tick can keep today's refusal and skip line while asking
+// nobody: the planner's `decision.stale` arm already asks the reviewer, and
+// sending the same fact to the operator was the duplicate this change removes.
+//
+// It answers errors.Is(err, ErrUnattributableVerdict) like its siblings: the
+// merge must still be refused, and every caller that treats the family as "the
+// merge waits" keeps its meaning. Only the *question* is suppressed (design D3).
+type SupersededVerdictError struct {
+	NoteID   string
+	Written  string // the sha as the reviewer wrote it
+	Head     string // the head under review
+	Decision string // "accept" or "reject"
+}
+
+func (e *SupersededVerdictError) Error() string {
+	return fmt.Sprintf("%s on a superseded commit: the note names %s, an ancestor of head %s; the review at %s has no verdict yet (note %s)",
+		strings.ToUpper(e.Decision), e.Written, e.Head, e.Head, e.NoteID)
+}
+
+func (e *SupersededVerdictError) Is(target error) bool { return target == ErrUnattributableVerdict }
+
 // viaSeat reads the relay marker from a note (verdict-relay, design D3): the
 // second non-empty line, and only when it is exactly `via: <seat>`. Absent or
 // malformed reads as no marker — never an error. A reviewer's own note has no
@@ -198,7 +222,7 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 				decision := strings.ToLower(match[1])
 				sha := strings.ToLower(match[2])
 				if headSHA != "" && !forge.SameSHA(sha, headSHA) {
-					return nil, unattributedDecision(note.ID, decision, match[2], headSHA)
+					return nil, a.unattributedDecision(ctx, note.ID, decision, match[2], headSHA)
 				}
 				return a.storeVerdict(ctx, dispatchID, item, note.ID, storedSHA(headSHA, sha), decision, viaSeat(note.Body))
 			}
@@ -231,7 +255,7 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 				}
 			}
 			if !sameHead(scan.SHA, headSHA) {
-				return nil, unattributedDecision(note.ID, scan.Decision, scan.SHA, headSHA)
+				return nil, a.unattributedDecision(ctx, note.ID, scan.Decision, scan.SHA, headSHA)
 			}
 			return a.storeVerdict(ctx, dispatchID, item, note.ID, storedSHA(headSHA, scan.SHA), scan.Decision, viaSeat(note.Body))
 		case scan.Reason != "":
@@ -249,12 +273,37 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 
 // unattributedDecision is the typed refusal for a verdict word that names
 // another commit: an accept is the milder one (the tick retries), a reject
-// stops the merge.
-func unattributedDecision(noteID, decision, written, head string) error {
+// stops the merge. A commit that is an ancestor of the head is a third case
+// (superseded-verdict, D1): the reviewer decided an older tree, so the note is
+// the reviewer's to restate — the planner asks them (decision.stale) and this
+// arm asks nobody, while the merge stays refused because no verdict names the
+// head (D3).
+func (a *Actions) unattributedDecision(ctx context.Context, noteID, decision, written, head string) error {
+	if a.supersededVerdict(ctx, written, head) {
+		return &SupersededVerdictError{NoteID: noteID, Written: written, Head: head, Decision: decision}
+	}
 	if decision == "accept" {
 		return &UnattributedAcceptError{NoteID: noteID, Written: written, Head: head}
 	}
 	return &UnattributedRejectError{NoteID: noteID, Written: written, Head: head}
+}
+
+// supersededVerdict reports whether a note's sha names a commit the head
+// descends from (superseded-verdict, D1): the repository answers through
+// git merge-base --is-ancestor, so an abbreviated sha counts and a typo or a
+// foreign branch never does. Every failure — no git seam, an unknown object, a
+// broken repository — answers false, because a note nobody could check still
+// reaches the operator (D2): the change removes a false alarm, never a question
+// whose answer we do not know.
+func (a *Actions) supersededVerdict(ctx context.Context, written, head string) bool {
+	if a.Git == nil || written == "" || head == "" {
+		return false
+	}
+	ancestor, err := a.Git.IsAncestor(ctx, written, head)
+	if err != nil {
+		return false
+	}
+	return ancestor
 }
 
 // storedSHA is what the row keeps: the head under review when there is one, so

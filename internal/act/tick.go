@@ -214,6 +214,7 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			// is best-effort: a ledger failure keeps the skip line and moves
 			// on — a missed audit row never becomes a crashed tick or a merge,
 			// and the next tick retries the write.
+			var superseded *SupersededVerdictError
 			var accepted *UnattributedAcceptError
 			var rejected *UnattributedRejectError
 			// A note that parses as a verdict but names no sha is recorded once
@@ -221,7 +222,15 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			// review, and the repeated line is noise a surface can now see past.
 			var malformed *UnattributableVerdictError
 			alreadyNoted := false
-			if errors.As(err, &accepted) {
+			if errors.As(err, &superseded) {
+				// The note decided an older commit (superseded-verdict, D1/D3).
+				// The merge stays refused and the journal still shows why, once
+				// per note — the same ledger key the accept and reject arms use,
+				// so a tick repeating every minute is silence. Nobody is asked:
+				// the reviewer already has the decision.stale question.
+				alreadyNoted = noteUnattributedVerdict(ctx, actions, item, keyFor(superseded.NoteID),
+					fmt.Sprintf("%s sha=%s; head=%s; superseded", keyFor(superseded.NoteID), superseded.Written, superseded.Head))
+			} else if errors.As(err, &accepted) {
 				alreadyNoted = noteUnattributedVerdict(ctx, actions, item, keyFor(accepted.NoteID),
 					fmt.Sprintf("%s sha=%s; head=%s", keyFor(accepted.NoteID), accepted.Written, accepted.Head))
 			} else if errors.As(err, &rejected) {
@@ -624,8 +633,10 @@ func keyFor(noteID string) string {
 // noteUnattributedVerdict writes the once-per-note audit row for an
 // unattributable verdict (epic #309's fixed vocabulary: kind
 // verdict.unattributed, subject #<item>, detail "note=<id>; sha=<written>;
-// head=<head>"). One helper, two callers — the ACCEPT and the REJECT arm — so
-// a reader of the audit surface never learns a second vocabulary for one fact.
+// head=<head>", with a trailing "; superseded" when the note decided an
+// ancestor of the head — superseded-verdict, D3). One helper, three callers —
+// the ACCEPT, the REJECT and the superseded arm — so a reader of the audit
+// surface never learns a second vocabulary for one fact.
 // It answers whether the note was already on the ledger before this tick —
 // the one case the line goes quiet on: the tick that writes the row prints
 // it, and a later tick over the same note is silence. A ledger failure writes

@@ -46,6 +46,14 @@ type fakeGit struct {
 	// worktree layout and the branch without running git.
 	worktreePaths []string
 	branches      []string
+	// ancestors is the set of shas this repository says are ancestors of a
+	// head, keyed "<ancestor> <head>"; ancestorErr answers the check with a
+	// failure instead (superseded-verdict, D2: the caller must ask).
+	ancestors   map[string]bool
+	ancestorErr error
+	// ancestorChecks records every question in order, so a test can prove the
+	// repository was asked rather than the strings compared.
+	ancestorChecks []string
 }
 
 func (g *fakeGit) Fetch(context.Context) error { g.fetched++; return g.err }
@@ -60,6 +68,14 @@ func (g *fakeGit) WorktreeAddOrReuse(_ context.Context, worktree, branch, _ stri
 	g.worktreePaths = append(g.worktreePaths, worktree)
 	g.branches = append(g.branches, branch)
 	return g.reused, g.err
+}
+
+func (g *fakeGit) IsAncestor(_ context.Context, ancestor, descendant string) (bool, error) {
+	g.ancestorChecks = append(g.ancestorChecks, ancestor+" "+descendant)
+	if g.ancestorErr != nil {
+		return false, g.ancestorErr
+	}
+	return g.ancestors[ancestor+" "+descendant], nil
 }
 
 func TestDispatchCreatesOneRowAndReusesIt(t *testing.T) {

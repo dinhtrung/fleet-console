@@ -144,6 +144,18 @@ same question, with `accept at the head`, `reject`, and `re-review` as the answe
 line and the `verdict.unattributed` audit event survive: the typed error is what tells the tick
 which question to ask.
 
+**Unless that commit is an ancestor of the head.** A note that decided an older tree — a reviewer
+reading `a1b2c3` while the head is `d4e5f6`, where the branch has simply moved on — is *superseded*,
+and the app says that instead of asking. The repository decides it: the tick resolves the written
+sha and asks `git merge-base --is-ancestor <written> <head>`, so an abbreviated sha counts and a
+typo, or a commit from another branch, never does. The merge stays refused exactly as before — no
+verdict names the head — and the skip line plus the `verdict.unattributed` event still record why
+the merge waits, once per note. Nobody is paged: the reviewer already has the plan's
+`decision.stale` question asking them to re-read the current head, and the operator question would
+only be the same fact sent to the wrong audience. When the check itself fails (no such object, a
+repository the tick cannot read) the note counts as *not* superseded and the operator question is
+raised as before: the rule removes a false alarm, never a question whose answer is unknown.
+
 ### When the app asks a human
 
 The operator question — *this change request has no verdict; approve or reject it* — is not

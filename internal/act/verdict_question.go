@@ -157,6 +157,15 @@ func orNone(value string) string {
 // resolve itself: an ambiguous note, a malformed verdict line, or a verdict
 // about a commit that is no longer the head.
 func questionFromError(err error, head string) (VerdictQuestion, bool) {
+	// A note on an ancestor of the head is the reviewer's question, never the
+	// operator's (superseded-verdict, D1/D3): the plan's decision.stale arm
+	// already asks the reviewer to re-read the head, so asking the operator the
+	// same thing is the duplicate this change removes. The merge stays refused —
+	// no verdict names the head — and the tick's skip line still says why.
+	var superseded *SupersededVerdictError
+	if errors.As(err, &superseded) {
+		return VerdictQuestion{}, false
+	}
 	var unresolved *UnresolvedVerdictError
 	if errors.As(err, &unresolved) {
 		return VerdictQuestion{
