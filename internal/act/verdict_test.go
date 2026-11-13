@@ -257,8 +257,8 @@ func TestSameSHA(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := sameSHA(tc.note, tc.head); got != tc.want {
-				t.Fatalf("sameSHA(%q, %q) = %t, want %t", tc.note, tc.head, got, tc.want)
+			if got := forge.SameSHA(tc.note, tc.head); got != tc.want {
+				t.Fatalf("SameSHA(%q, %q) = %t, want %t", tc.note, tc.head, got, tc.want)
 			}
 		})
 	}

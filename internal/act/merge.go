@@ -146,7 +146,7 @@ func (a *Actions) Merge(ctx context.Context, dispatchID int64, item int) (*Merge
 	if request == nil {
 		return nil, fmt.Errorf("refusing merge: no change request closes #%d", item)
 	}
-	if verdict.SHA != request.HeadSHA {
+	if !forge.SameSHA(verdict.SHA, request.HeadSHA) {
 		return nil, fmt.Errorf("refusing merge: verdict sha %s does not match head %s", verdict.SHA, request.HeadSHA)
 	}
 	if green, reason := request.HeadGreen(); !green {
@@ -357,7 +357,7 @@ func (a *Actions) MergeAdopted(ctx context.Context, projectID int64, item int, r
 	if verdict.Decision != "accept" {
 		return nil, fmt.Errorf("refusing merge: newest verdict for #%d is %s", item, verdict.Decision)
 	}
-	if verdict.SHA != request.HeadSHA {
+	if !forge.SameSHA(verdict.SHA, request.HeadSHA) {
 		return nil, fmt.Errorf("refusing merge: verdict sha %s does not match head %s", verdict.SHA, request.HeadSHA)
 	}
 	if green, reason := request.HeadGreen(); !green {

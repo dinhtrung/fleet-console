@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"fmt"
+
 	"github.com/dinhtrung/fleet-console/internal/decide"
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/rig"
@@ -38,8 +40,10 @@ func newRollupFixture(t *testing.T, epicState string, childStates [2]string) *ro
 	// Both children carry an accepted verdict on the current head and a docs-only
 	// change request, which is the shortest green path through Merge.
 	fake.RequestsValue = []forge.ChangeRequest{
-		{Number: 90, HeadSHA: "sha62", Mergeable: true, Body: "Closes #62", DocsOnly: true},
-		{Number: 91, HeadSHA: "sha63", Mergeable: true, Body: "Closes #63", DocsOnly: true},
+		// Full 40-char shas: the merge gate's matcher needs two ≥ 7-char
+		// spellings, and the fixture's old 5-char "sha62" would read as a typo.
+		{Number: 90, HeadSHA: testFullSHA(62), Mergeable: true, Body: "Closes #62", DocsOnly: true},
+		{Number: 91, HeadSHA: testFullSHA(63), Mergeable: true, Body: "Closes #63", DocsOnly: true},
 	}
 	dispatches := make(map[int]store.DispatchRow)
 	for _, number := range []int{62, 63} {
@@ -51,7 +55,7 @@ func newRollupFixture(t *testing.T, epicState string, childStates [2]string) *ro
 			t.Fatalf("dispatch: %v", err)
 		}
 		if _, err := st.AddVerdict(ctx, store.NewVerdict{
-			DispatchID: dispatchID, SHA: "sha" + itoa(number), Decision: "accept", Source: "note",
+			DispatchID: dispatchID, SHA: testFullSHA(number), Decision: "accept", Source: "note",
 		}); err != nil {
 			t.Fatalf("verdict: %v", err)
 		}
@@ -258,6 +262,13 @@ func TestRollupSkipLineIsSilentForANonEpicParent(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+// testFullSHA builds a distinct 40-char sha per item number, so a fixture's
+// verdict and change-request head name the same commit the way the merge gate
+// compares them (the gate's matcher refuses a sha shorter than 7 chars).
+func testFullSHA(n int) string {
+	return fmt.Sprintf("%038x%d", n, n)
+}
 
 func itoa(n int) string {
 	if n == 0 {
