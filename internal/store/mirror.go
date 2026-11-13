@@ -118,8 +118,11 @@ func (s *Store) SetRigStamp(ctx context.Context, projectID int64, at time.Time) 
 
 // MirrorStatus is the stamp/stale block the board reads.
 type MirrorStatus struct {
-	LastForgeAt    *time.Time `json:"last_forge_at,omitempty"`
-	LastRigAt      *time.Time `json:"last_rig_at,omitempty"`
+	LastForgeAt *time.Time `json:"last_forge_at,omitempty"`
+	LastRigAt   *time.Time `json:"last_rig_at,omitempty"`
+	// LastTickAt is when the mirror last wrote its status block — one per tick,
+	// whatever the reads did. Readiness reads it as "a tick completed" (#393).
+	LastTickAt     *time.Time `json:"last_tick_at,omitempty"`
 	ForgeStale     bool       `json:"forge_stale"`
 	ForgeForbidden bool       `json:"forge_forbidden"`
 	RigStale       bool       `json:"rig_stale"`
@@ -158,9 +161,12 @@ func (s *Store) MirrorStatus(ctx context.Context, projectID int64) (MirrorStatus
 			status.LastRigAt = &at
 		}
 	}
-	var payload string
-	if err := s.db.QueryRowContext(ctx, `SELECT payload_json FROM snapshot WHERE project_id = ? AND kind = 'status'`, projectID).
-		Scan(&payload); err == nil {
+	var payload, syncedAt string
+	if err := s.db.QueryRowContext(ctx, `SELECT payload_json, synced_at FROM snapshot WHERE project_id = ? AND kind = 'status'`, projectID).
+		Scan(&payload, &syncedAt); err == nil {
+		if at, parseErr := time.Parse(time.RFC3339Nano, syncedAt); parseErr == nil {
+			status.LastTickAt = &at
+		}
 		var block statusPayload
 		if json.Unmarshal([]byte(payload), &block) == nil {
 			status.ForgeStale, status.RigStale = block.ForgeStale, block.RigStale
@@ -355,4 +361,14 @@ func (s *Store) GetSnapshot(ctx context.Context, projectID int64, kind string) (
 	}
 	parsed, _ := time.Parse(time.RFC3339Nano, at)
 	return []byte(payload), parsed, nil
+}
+
+// Ping answers one read against the database: readiness's cheapest proof that
+// the store can serve. It names no table and changes nothing (#393).
+func (s *Store) Ping(ctx context.Context) error {
+	var one int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1`).Scan(&one); err != nil {
+		return fmt.Errorf("store: ping: %w", err)
+	}
+	return nil
 }
