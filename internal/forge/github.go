@@ -266,15 +266,16 @@ func (g *GitHub) blockedBy(ctx context.Context, number int) ([]Link, error) {
 }
 
 type ghPull struct {
-	Number       int     `json:"number"`
-	Draft        bool    `json:"draft"`
-	Body         string  `json:"body"`
-	HTMLURL      string  `json:"html_url"`
-	Mergeable    *bool   `json:"mergeable"`
-	MergeState   string  `json:"mergeable_state"`
-	State        string  `json:"state"`
-	MergedAt     *string `json:"merged_at"`
-	Head         struct {
+	Number     int     `json:"number"`
+	Title      string  `json:"title"`
+	Draft      bool    `json:"draft"`
+	Body       string  `json:"body"`
+	HTMLURL    string  `json:"html_url"`
+	Mergeable  *bool   `json:"mergeable"`
+	MergeState string  `json:"mergeable_state"`
+	State      string  `json:"state"`
+	MergedAt   *string `json:"merged_at"`
+	Head       struct {
 		SHA string `json:"sha"`
 		Ref string `json:"ref"`
 	} `json:"head"`
@@ -307,6 +308,7 @@ func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 			requests = append(requests, ChangeRequest{
 				Number: pull.Number, State: pull.State, Merged: pull.MergedAt != nil,
 				HeadSHA: pull.Head.SHA, Branch: pull.Head.Ref, Draft: pull.Draft, Body: pull.Body,
+				Title:      pull.Title,
 				ClosesItem: ParseCloses(pull.Body), URL: pull.HTMLURL,
 			})
 			continue
@@ -338,7 +340,7 @@ func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 		requests = append(requests, ChangeRequest{
 			Number: pull.Number, State: pull.State, Merged: pull.MergedAt != nil,
 			HeadSHA: pull.Head.SHA, Branch: pull.Head.Ref, Draft: pull.Draft,
-			Mergeable: mergeable, MergeState: pull.MergeState,
+			Mergeable: mergeable, MergeState: pull.MergeState, Title: pull.Title,
 			Body: pull.Body, ClosesItem: ParseCloses(pull.Body),
 			Checks: checks, DocsOnly: DocsOnly(paths), URL: pull.HTMLURL,
 		})

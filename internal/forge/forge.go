@@ -130,13 +130,18 @@ func (c Check) Pending() bool {
 
 // ChangeRequest is the normalized pull/merge request.
 type ChangeRequest struct {
-	Number     int     `json:"number"`
-	State      string  `json:"state"`  // open | closed | merged
-	Merged     bool    `json:"merged"` // the change landed
-	HeadSHA    string  `json:"head_sha"`
-	Branch     string  `json:"branch,omitempty"` // the head's branch name, e.g. feature/138-...
-	Draft      bool    `json:"draft"`
-	Mergeable  bool    `json:"mergeable"`
+	Number  int    `json:"number"`
+	State   string `json:"state"`  // open | closed | merged
+	Merged  bool   `json:"merged"` // the change landed
+	HeadSHA string `json:"head_sha"`
+	Branch  string `json:"branch,omitempty"` // the head's branch name, e.g. feature/138-...
+	// Title is the forge's own title, for the no-item diagnostic only
+	// (stale-verdict-visibility #314): it names an item mentioned elsewhere
+	// and nothing else. Merge, MergeAdopted, CaptureVerdict and decide never
+	// read it — a title is never an association, only a mention.
+	Title     string `json:"title,omitempty"`
+	Draft     bool   `json:"draft"`
+	Mergeable bool   `json:"mergeable"`
 	// MergeState is the forge's own word for why a change request is not mergeable:
 	// GitHub's `mergeable_state` (e.g. dirty) or GitLab's `detailed_merge_status`
 	// (e.g. cannot_be_merged). Empty when the forge named no reason. It is carried

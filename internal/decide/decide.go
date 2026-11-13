@@ -590,7 +590,7 @@ func branchIndex(branches []Branch) map[int]Branch {
 	for _, branch := range branches {
 		number := branch.Item
 		if number == 0 {
-			number = branchItem(branch.Name)
+			number = BranchItem(branch.Name)
 		}
 		if number == 0 {
 			continue
@@ -612,8 +612,28 @@ func branchIndex(branches []Branch) map[int]Branch {
 
 var branchPrefix = regexp.MustCompile(`^feature/(\d+)-`)
 
-func branchItem(name string) int {
+// BranchItem extracts the item number from a change request's branch name
+// (`feature/138-...` → 138), or 0 when the branch carries none. Shared with the
+// no-item diagnostic in act (#314): a branch number is a mention, never an
+// association.
+func BranchItem(name string) int {
 	match := branchPrefix.FindStringSubmatch(name)
+	if match == nil {
+		return 0
+	}
+	number, err := strconv.Atoi(match[1])
+	if err != nil {
+		return 0
+	}
+	return number
+}
+
+// ItemToken extracts the first `#<n>` mention anywhere in text, or 0 when the
+// text names no item. Shared with the no-item diagnostic in act (#314): the
+// first mention is the item the change request probably meant — diagnostic
+// only, never an association.
+func ItemToken(text string) int {
+	match := issueNumber.FindStringSubmatch(text)
 	if match == nil {
 		return 0
 	}

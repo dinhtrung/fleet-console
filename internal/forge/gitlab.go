@@ -310,6 +310,7 @@ func (g *GitLab) related(ctx context.Context, number int) ([]Link, error) {
 type glMergeRequest struct {
 	IID                int    `json:"iid"`
 	State              string `json:"state"`
+	Title              string `json:"title"`
 	SHA                string `json:"sha"`
 	Draft              bool   `json:"draft"`
 	MergeStatus        string `json:"merge_status"`
@@ -347,7 +348,8 @@ func (g *GitLab) ChangeRequestsFor(ctx context.Context, accepted map[string]stru
 				// conflict, ci_stale, discussions_pending and so on. It is the
 				// word the repair path quotes.
 				MergeState: mr.DetailedMergeState,
-				Body:       mr.Description, ClosesItem: ParseCloses(mr.Description), URL: mr.WebURL,
+				Body:       mr.Description, ClosesItem: ParseCloses(mr.Description), Title: mr.Title,
+				URL: mr.WebURL,
 			}
 			if mrNeedsDetails(mr, request.ClosesItem, accepted) {
 				paths, err := g.changedPaths(ctx, mr.IID)
