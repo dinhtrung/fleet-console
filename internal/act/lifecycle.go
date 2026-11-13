@@ -71,6 +71,11 @@ type LifecycleRig struct {
 	// QuietSince is the tick that opened the current quiet streak, zero when the
 	// rig was busy on the previous tick.
 	QuietSince time.Time
+	// RigDown is the tick's daemon fact (epic #320, D2): the rig read failed
+	// with ErrDaemonDown, so the rig cannot be up or quiet — a daemon that is
+	// not running can hold no fleet. The start branch treats it as a stopped
+	// rig with a known roster; the stop branch refuses it.
+	RigDown bool
 	// Projects are the projects bound to this rig.
 	Projects []LifecycleProject
 }
@@ -102,12 +107,25 @@ type LifecycleProjectFacts struct {
 // (design D3). It is pure; the queue is counted once per row, not once per
 // project, so a shared rig's row is not counted twice.
 func BuildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]time.Time, seatsKnown bool) []LifecycleRig {
+	return buildLifecycleRigs(projects, prevQuiet, seatsKnown, false)
+}
+
+// buildLifecycleRigs is the builder with the daemon-down fact. A down daemon is
+// not an unread roster (epic #320, D1): nothing can be running on a daemon that
+// does not exist, so the tick reports the roster as known, zero seats running,
+// and marks the rig down. The start branch reads that as "stopped rig, decide
+// on demand"; the stop branch keeps its own guard so it stays dark while down.
+func buildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]time.Time, seatsKnown, rigDown bool) []LifecycleRig {
 	order := make([]string, 0, len(projects))
 	byRig := make(map[string]*LifecycleRig, len(projects))
 	link := func(rigName string) *LifecycleRig {
 		entry, ok := byRig[rigName]
 		if !ok {
 			entry = &LifecycleRig{Name: rigName, SeatsKnown: seatsKnown, QuietSince: prevQuiet[rigName]}
+			if rigDown {
+				entry.SeatsKnown = true
+				entry.RigDown = true
+			}
 			byRig[rigName] = entry
 			order = append(order, rigName)
 		}
@@ -225,7 +243,9 @@ func DecideLifecycle(in LifecycleInput) []LifecycleAction {
 	var actions []LifecycleAction
 	for _, rigEntry := range in.Rigs {
 		// No roster: the tick can neither launch (which could duplicate a fleet
-		// that is already up) nor stop (which could stop a live one).
+		// that is already up) nor stop (which could stop a live one). A daemon
+		// that is not running is the exception on the start half only: nothing
+		// can be running on it, so the roster is known and empty (epic #320, D2).
 		if !rigEntry.SeatsKnown {
 			continue
 		}
@@ -233,10 +253,13 @@ func DecideLifecycle(in LifecycleInput) []LifecycleAction {
 		if !RigManaged(rigEntry) {
 			continue
 		}
-		if rigEntry.Running == 0 {
+		if rigEntry.Running == 0 || rigEntry.RigDown {
 			// A stopped rig is started before anything is written for it, and
 			// only when work exists. An idle stopped rig stays stopped, so a
 			// manual `rig down` stands until work needs the rig (design D2).
+			// A rig whose daemon is down joins this arm with its demand decided
+			// the same way; the stop arm below stays out of reach because the
+			// down guard comes first here and RigQuiet cannot hold while down.
 			if reason, ok := startReason(rigEntry); ok {
 				actions = append(actions, LifecycleAction{
 					Kind: LifecycleStart, Rig: rigEntry.Name, Spec: rigEntry.SpecPath, Reason: reason,
@@ -273,9 +296,12 @@ func RigManaged(rigEntry LifecycleRig) bool {
 
 // RigQuiet reports whether this tick found the rig quiet: no live row on it and
 // every bound project fresh, managed, with no demand. An opted-out project is
-// never quiet, which is what keeps its rig warm.
+// never quiet, which is what keeps its rig warm. A rig whose daemon is down is
+// never quiet either (epic #320, D2): a fleet that does not exist cannot be
+// quiet, and a window opened while down would stop the rig the moment the
+// daemon came back.
 func RigQuiet(rigEntry LifecycleRig) bool {
-	if rigEntry.LiveRows > 0 || len(rigEntry.Projects) == 0 {
+	if rigEntry.RigDown || rigEntry.LiveRows > 0 || len(rigEntry.Projects) == 0 {
 		return false
 	}
 	for _, project := range rigEntry.Projects {
@@ -315,6 +341,9 @@ func startReason(rigEntry LifecycleRig) (string, bool) {
 		ready += project.Ready
 	}
 	if ready > 0 {
+		if rigEntry.RigDown {
+			return fmt.Sprintf("daemon down; %d ready item(s)", ready), true
+		}
 		return fmt.Sprintf("%d ready item(s) and no running seat", ready), true
 	}
 	if rigEntry.LiveRows > 0 {
@@ -358,14 +387,31 @@ type LifecycleExecutor struct {
 	// seen remembers the last failure message per key, so a permanently broken
 	// `rig up` does not fill the journal.
 	seen map[string]string
+	// lastStart remembers each rig's last attempt (success or failure), so a
+	// failing start is not hammered every tick (epic #320, D4). Memory-only: a
+	// restart forgets it, which can only delay a start by one window.
+	lastStart map[string]time.Time
+	// Now pins the clock for tests; the zero value reads time.Now.
+	Now func() time.Time
 }
+
+// StartBackoff is the window one rig's start attempt holds (epic #320, D4): at
+// a 15 s tick cadence a failing `rig up` must not be retried every tick. A
+// constant, not a config key — the timer is not an operator decision.
+const StartBackoff = 5 * time.Minute
 
 // Start applies every start action and returns, per rig, the launch failure, so
 // the dispatch step can skip that rig's work. It is the only writer of `rig up`.
+// An attempt inside StartBackoff of the rig's last attempt is refused with one
+// note-deduplicated line, and the deferral is not a failure: the map stays
+// empty, the dispatch step does not skip the rig's work on it.
 func (e *LifecycleExecutor) Start(ctx context.Context, actions []LifecycleAction) map[string]string {
 	failed := make(map[string]string)
 	for _, action := range actions {
 		if action.Kind != LifecycleStart {
+			continue
+		}
+		if e.deferred(action.Rig) {
 			continue
 		}
 		if err := e.start(ctx, action); err != nil {
@@ -376,6 +422,33 @@ func (e *LifecycleExecutor) Start(ctx context.Context, actions []LifecycleAction
 		return nil
 	}
 	return failed
+}
+
+// deferred reports whether the rig is inside its start backoff window, and
+// logs the wait once per change when it is. Whether deferred or attempted,
+// every tick that reaches the window's edge with demand still standing
+// records the attempt time.
+func (e *LifecycleExecutor) deferred(rig string) bool {
+	now := e.now()
+	if last, ok := e.lastStart[rig]; ok {
+		if elapsed := now.Sub(last); elapsed < StartBackoff {
+			e.note("rig "+rig+" up deferred",
+				fmt.Sprintf("%s up deferred — last attempt %s ago", rig, elapsed.Round(time.Second)))
+			return true
+		}
+	}
+	if e.lastStart == nil {
+		e.lastStart = make(map[string]time.Time)
+	}
+	e.lastStart[rig] = now
+	return false
+}
+
+func (e *LifecycleExecutor) now() time.Time {
+	if e.Now != nil {
+		return e.Now()
+	}
+	return time.Now()
 }
 
 func (e *LifecycleExecutor) start(ctx context.Context, action LifecycleAction) error {

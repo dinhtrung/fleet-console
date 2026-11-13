@@ -2,6 +2,7 @@ package act
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -354,14 +355,167 @@ func TestLifecycleDisabledDecidesNothing(t *testing.T) {
 	}
 }
 
-// TestRigLifecycleExecutorLogsOncePerChange pins D8: a permanently broken `rig
-// up` writes one line, not one per tick.
+// TestDecideLifecycleDaemonDown pins the start-only relaxation (epic #320, D2)
+// at the rule level: a rig the tick marks RigDown is decided like a stopped rig
+// with a known roster — started on demand, never stopped. The four cases are
+// the spec's own sentences.
+func TestDecideLifecycleDaemonDown(t *testing.T) {
+	downRig := func(ready int, fresh bool) LifecycleRig {
+		entry := managedRig("r")
+		entry.Running = 0
+		entry.RigDown = true
+		entry.Projects[0].Ready = ready
+		entry.Projects[0].Fresh = fresh
+		return entry
+	}
+
+	t.Run("down with demand starts once", func(t *testing.T) {
+		actions := DecideLifecycle(lifecycleInput(downRig(3, true)))
+		wantActions(t, actions, LifecycleStart)
+		if actions[0].Reason != "daemon down; 3 ready item(s)" {
+			t.Fatalf("reason = %q, want the daemon-down wording", actions[0].Reason)
+		}
+	})
+	t.Run("down with no demand starts nothing", func(t *testing.T) {
+		actions := DecideLifecycle(lifecycleInput(downRig(0, true)))
+		wantActions(t, actions)
+	})
+	t.Run("down on a stale read starts nothing", func(t *testing.T) {
+		actions := DecideLifecycle(lifecycleInput(downRig(3, false)))
+		wantActions(t, actions)
+	})
+	t.Run("down and quiet plans no stop", func(t *testing.T) {
+		entry := downRig(0, true)
+		entry.QuietSince = lifecycleInput(entry).Now.Add(-20 * time.Minute)
+		actions := DecideLifecycle(lifecycleInput(entry))
+		wantActions(t, actions)
+	})
+}
+
+// TestBuildLifecycleRigsRigDown pins the builder's daemon-down shape (D2): the
+// fact turns into SeatsKnown=true, Running untouched at zero, RigDown=true —
+// and the seats the read could not take are not invented.
+func TestBuildLifecycleRigsRigDown(t *testing.T) {
+	facts := []LifecycleProjectFacts{{Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: true, Ready: 3}}
+	rigs := buildLifecycleRigs(facts, nil, false, true)
+	if len(rigs) != 1 {
+		t.Fatalf("rigs = %d, want 1", len(rigs))
+	}
+	entry := rigs[0]
+	if !entry.SeatsKnown || !entry.RigDown || entry.Running != 0 {
+		t.Fatalf("entry = SeatsKnown %v Running %d RigDown %v, want known/0/true",
+			entry.SeatsKnown, entry.Running, entry.RigDown)
+	}
+}
+
+// TestStartReasonDaemonDown pins the two reason strings side by side: the same
+// demand reads as `daemon down; N ready item(s)` when the rig is down and the
+// existing wording when it is up (tasks §2.2).
+func TestStartReasonDaemonDown(t *testing.T) {
+	up := managedRig("r")
+	up.Running = 0
+	up.Projects[0].Ready = 2
+	down := up
+	down.RigDown = true
+
+	reason, ok := startReason(up)
+	if !ok || reason != "2 ready item(s) and no running seat" {
+		t.Fatalf("up reason = (%q, %v), want the existing wording", reason, ok)
+	}
+	reason, ok = startReason(down)
+	if !ok || reason != "daemon down; 2 ready item(s)" {
+		t.Fatalf("down reason = (%q, %v), want the daemon-down wording", reason, ok)
+	}
+}
+
+// TestStartBackoff pins one attempt per rig per window (epic #320, D4): three
+// ticks inside StartBackoff reach Up once and explain the wait in one
+// note-deduplicated line; a fourth after the window reaches Up again. The
+// deferral is not a failure — the dispatch step's failed map stays empty.
+func TestStartBackoff(t *testing.T) {
+	st := newStore(t)
+	var lines []string
+	rigs := &fakeLifecycleRig{upErr: errString("boom")}
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	executor := &LifecycleExecutor{Store: st, Rigs: rigs, Now: func() time.Time { return now },
+		Logf: func(format string, args ...any) {
+			lines = append(lines, fmt.Sprint(fmt.Sprintf(format, args...)))
+		}}
+	spec := writeSpec(t)
+	action := LifecycleAction{Kind: LifecycleStart, Rig: "r", Spec: spec, Reason: "demand"}
+
+	// Three ticks inside the window: one attempt, two deferrals with one
+	// deduplicated line between them.
+	if failed := executor.Start(context.Background(), []LifecycleAction{action}); failed == nil {
+		t.Fatal("the first attempt did not report its failure")
+	}
+	for i := 0; i < 2; i++ {
+		if failed := executor.Start(context.Background(), []LifecycleAction{action}); failed != nil {
+			t.Fatalf("tick %d reported a deferral as a failure: %v", i+2, failed)
+		}
+	}
+	if rigs.upCalls != 1 {
+		t.Fatalf("up calls = %d, want 1 inside the window", rigs.upCalls)
+	}
+	deferred := 0
+	for _, line := range lines {
+		if strings.Contains(line, "up deferred — last attempt") {
+			deferred++
+		}
+	}
+	if deferred != 1 {
+		t.Fatalf("deferred lines = %d (%v), want one deduplicated line", deferred, lines)
+	}
+	// After the window the rig is tried again — the failing start, that is.
+	now = now.Add(StartBackoff + time.Minute)
+	if failed := executor.Start(context.Background(), []LifecycleAction{action}); failed == nil {
+		t.Fatal("the post-window attempt did not report its failure")
+	}
+	if rigs.upCalls != 2 {
+		t.Fatalf("up calls = %d, want 2 after the window", rigs.upCalls)
+	}
+}
+
+// TestStartBackoffSuccessRecordsTheAttempt pins tasks §2.3's second sentence: a
+// successful start records its attempt time like a failure does, so a rig that
+// just came up is not launched again within the window.
+func TestStartBackoffSuccessRecordsTheAttempt(t *testing.T) {
+	st := newStore(t)
+	var lines []string
+	rigs := &fakeLifecycleRig{}
+	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	executor := &LifecycleExecutor{Store: st, Rigs: rigs, Now: func() time.Time { return now },
+		Logf: func(format string, args ...any) {
+			lines = append(lines, fmt.Sprint(fmt.Sprintf(format, args...)))
+		}}
+	spec := writeSpec(t)
+	action := LifecycleAction{Kind: LifecycleStart, Rig: "r", Spec: spec, Reason: "demand"}
+
+	executor.Start(context.Background(), []LifecycleAction{action})
+	if rigs.upCalls != 1 {
+		t.Fatalf("up calls = %d, want 1", rigs.upCalls)
+	}
+	// A second start inside the window is deferred even though the first
+	// succeeded: a just-started rig must not be launched again.
+	if failed := executor.Start(context.Background(), []LifecycleAction{action}); failed != nil {
+		t.Fatalf("the deferred start was reported as a failure: %v", failed)
+	}
+	if rigs.upCalls != 1 {
+		t.Fatalf("up calls = %d, want 1 (the success is inside the window too)", rigs.upCalls)
+	}
+}
+
+// TestRigLifecycleExecutorLogsOncePerChange pins the dedupe promise over a
+// permanently broken `rig up`: the failure writes one line, and the ticks the
+// backoff then defers write one line, not one per tick (epic #320, D4). The
+// old D8 pin — "the next tick retries" — is the behaviour D4 deliberately
+// replaced: inside StartBackoff there is no second Up call at all.
 func TestRigLifecycleExecutorLogsOncePerChange(t *testing.T) {
 	st := newStore(t)
 	var lines []string
 	rigs := &fakeLifecycleRig{upErr: errString("boom")}
 	executor := &LifecycleExecutor{Store: st, Rigs: rigs, Logf: func(format string, args ...any) {
-		lines = append(lines, format)
+		lines = append(lines, fmt.Sprint(fmt.Sprintf(format, args...)))
 	}}
 	spec := writeSpec(t)
 	action := LifecycleAction{Kind: LifecycleStart, Rig: "r", Spec: spec, Reason: "demand"}
@@ -369,14 +523,19 @@ func TestRigLifecycleExecutorLogsOncePerChange(t *testing.T) {
 	if failed := executor.Start(context.Background(), []LifecycleAction{action}); failed == nil {
 		t.Fatal("a failed Up was reported as a success")
 	}
-	if failed := executor.Start(context.Background(), []LifecycleAction{action}); failed == nil {
-		t.Fatal("the retry reported a success")
+	// Inside the backoff window the attempt is deferred, not retried: the
+	// deferral is not a failure, so the dispatch step does not skip the rig.
+	if failed := executor.Start(context.Background(), []LifecycleAction{action}); failed != nil {
+		t.Fatalf("a deferred start was reported as a failure: %v", failed)
 	}
-	if len(lines) != 1 {
-		t.Fatalf("log lines = %v, want one for the unchanged failure", lines)
+	if rigs.upCalls != 1 {
+		t.Fatalf("up calls = %d, want 1 (the backoff holds inside the window)", rigs.upCalls)
 	}
-	if rigs.upCalls != 2 {
-		t.Fatalf("up calls = %d, want 2 (the next tick retries)", rigs.upCalls)
+	if len(lines) != 2 {
+		t.Fatalf("log lines = %v, want the failure line and one deferred line", lines)
+	}
+	if !strings.Contains(lines[1], "up deferred — last attempt") {
+		t.Fatalf("deferred line = %q, want the deferral wording", lines[1])
 	}
 }
 
