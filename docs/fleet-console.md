@@ -34,6 +34,10 @@ A merge happens only when four facts are true, re-read at the moment of the merg
 3. the head pipeline is green — read from the job list, respecting `allow_failure` — or the diff is docs-only;
 4. the merge request is mergeable and its body says `Closes #<id>`.
 
+That line is the only thing the gate reads: a change request whose body merely references the item (`Refs`,
+`Part of`, a title mention) is never merged, undrafted or recorded, so partial work hands off with what remains
+instead of opening one.
+
 Anything unknown refuses and names the missing fact. The reviewer keeps the judgement; the app keeps the button.
 
 **Adoption: a hand-dispatched item still merges.** The four facts used to key on a `dispatch` row, so an item whose
