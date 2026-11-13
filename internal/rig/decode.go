@@ -39,6 +39,20 @@ type Seat struct {
 	LastActivity string `json:"last_activity"`
 }
 
+// Running reports whether this seat's lifecycle is the running state, which is
+// the only fact about whether its rig is up (openspec rig-lifecycle: "The
+// running seats are the only fact about whether a rig is up"). A stopped rig
+// keeps its node rows, and those rows report a lifecycle that is not `running`
+// — exited, recoverable, attention_required — so counting rows instead of
+// running rows makes a stopped rig read as a live fleet (#403).
+func (s Seat) Running() bool {
+	return s.Lifecycle == LifecycleRunning
+}
+
+// LifecycleRunning is the seat lifecycle the rig adapter reports for a seat
+// that is up and serving.
+const LifecycleRunning = "running"
+
 // FieldError names the command and the field that failed its required check.
 // Field is the domain name; Path is the wire name when they differ.
 type FieldError struct {

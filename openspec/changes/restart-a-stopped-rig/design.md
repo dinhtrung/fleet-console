@@ -1,5 +1,17 @@
 # Design — a stopped rig is not a quiet rig
 
+## D0. Up or down is the running seats, counted as running
+
+The first fact to fix is the one the rule reads, not the one it remembers. `buildLifecycleRigs` counted seat *rows*,
+and a stopped rig keeps its rows, so a quiet-stopped rig was permanently "up": the start arm never ran and the stop arm
+fired every tick. Counting only `lifecycle == "running"` restores the accepted spec's own sentence — *the running seats
+are the only fact about whether a rig is up* — and needs no memory, no new flag, and no new log line.
+
+`Rejected:` remembering the previous tick's running count (`lastRunning`) as the primary repair. It would also have
+masked this error: the memory would hold the wrong number, and it is a remembered flag, which the same spec forbids
+("A remembered flag, a decision made by the previous tick … SHALL NOT be used"). It stays useful only as a fallback
+for an unread roster (D1's subject), and only after the count is right.
+
 ## D1. "Unknown roster" must not mean "decide nothing" for the start half
 
 `SeatsKnown=false` means this tick could not read the rig. For the **stop** half that is the right answer: stopping a fleet you cannot see is destructive. For the **start** half it is the wrong answer, because the read failing is one of the states a start repairs — and a stopped rig will never produce a successful read on its own.
@@ -18,7 +30,7 @@ The one piece of memory the lifecycle already keeps is `quiet` (per-rig streak).
 
 `DecideLifecycle` returns actions; today a rig with no action produces no line at all. The tick will log one line per rig it considered:
 
-```
+```text
 rig-lifecycle: <rig> none — running=0 ready=0 seats_known=true
 rig-lifecycle: <rig> start — roster unknown; 3 ready item(s)
 rig-lifecycle: <rig> stop — quiet 12m3s
@@ -32,7 +44,7 @@ The line is assembled from the same facts the rule used (the `LifecycleRig` entr
 
 `decide.Result.Skips` is not read by `act`. The tick will print one line per (item, reason) per head, reusing the existing notice ledger so a perpetually-skipped item does not print every tick:
 
-```
+```text
 act-skip: fleet-console: #393 no_free_builder — every admitted seat is taken
 ```
 
