@@ -320,13 +320,6 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			continue
 		}
 		report.Merges = append(report.Merges, merged)
-		// If this tick captured a verdict and the item has an unanswered
-		// decision.verdict_question row, close it now that the merge has landed
-		// (or the change request closes). This resolves the "question row stays
-		// pending forever" issue (epic #376).
-		if capturedVerdict := findVerdictForItem(report.Verdicts, item); capturedVerdict != nil {
-			closeVerdictQuestionRow(ctx, actions, item, capturedVerdict, merged, report)
-		}
 		// A post-merge write (the item close) can also be refused for
 		// permission: the merge landed, the result rides the refusal, and the
 		// same note path tells the phone (#260).
@@ -340,16 +333,6 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		// is not a skip: `merged` above is already recorded.
 		for _, why := range merged.AuditGaps {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d merged, audit gap: %s", item, why))
-		}
-	}
-	// Close any pending decision.verdict_question rows for items that had verdicts
-	// captured during this tick, regardless of whether a merge landed.
-	// The closure reason comes from the captured verdict decision: accept → merged,
-	// reject → rejected, otherwise closed. This resolves the "question row stays
-	// pending forever" issue (epic #376).
-	for _, captured := range report.Verdicts {
-		if capturedVerdict := findVerdictForItem(report.Verdicts, captured.Item); capturedVerdict != nil {
-			closeVerdictQuestionRow(ctx, actions, captured.Item, capturedVerdict, nil, report)
 		}
 	}
 	// The epic sweep runs after the merge loop and on every applied tick, merge or
@@ -745,106 +728,4 @@ func liveRowNames(rows []rig.QueueRow, item int) bool {
 		}
 	}
 	return false
-}
-
-// findVerdictForItem searches the captured verdicts for one that matches the
-// given item number. It returns the first matching CapturedVerdict or nil if
-// none found.
-func findVerdictForItem(verdicts []CapturedVerdict, item int) *CapturedVerdict {
-	for i := range verdicts {
-		if verdicts[i].Item == item {
-			return &verdicts[i]
-		}
-	}
-	return nil
-}
-
-// closeVerdictQuestionRow closes the decision.verdict_question queue row for
-// the given item, if one exists. It determines the closure reason from the
-// captured verdict decision (accept → merged, reject → rejected, otherwise
-// closed) and uses QueueResolve (idempotent: checks row state before mutating)
-// so the ledger records the transition without duplicate entries.
-// It names the verdict note and outcome in the closure note for audit.
-func closeVerdictQuestionRow(ctx context.Context, actions *Actions, item int, capturedVerdict *CapturedVerdict, merged *MergeResult, report TickReport) {
-	// Check if there's a pending decision.verdict_question event for this item
-	subject := fmt.Sprintf("#%d", item)
-	hasQuestion, err := actions.Store.HasEvent(ctx, "decision.verdict_question", subject, "note=")
-	if err != nil || !hasQuestion {
-		report.Skipped = append(report.Skipped, fmt.Sprintf("#%d: no pending verdict question row found", item))
-		return
-	}
-
-	// Determine the closure reason based on the captured verdict decision
-	var closureReason string
-	switch capturedVerdict.Decision {
-	case "accept":
-		closureReason = "merged"
-	case "reject":
-		closureReason = "rejected"
-	default:
-		closureReason = "closed"
-	}
-
-	// Extract the note ID from the captured verdict
-	noteID := capturedVerdict.NoteID
-	if noteID == "" {
-		noteID = "unknown"
-	}
-
-	// Extract the queue row ID from the event detail.
-	// RaiseVerdictQuestion embeds "; row <row.ID>" in the event detail.
-	// We look for that pattern first.
-	rowID := extractRowIDFromDetail(capturedVerdict.NoteID)
-	if rowID == "" {
-		// Fallback: search newest verdict-question events for a matching note,
-		// then parse their detail for the row ID.
-		events, err := actions.Store.NewestEventsByKind(ctx, "decision.verdict_question")
-		if err != nil {
-			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d: error querying verdict question events: %v", item, err))
-			return
-		}
-		for _, event := range events {
-			if strings.Contains(event.Detail, fmt.Sprintf("note=%s;", noteID)) {
-				rowID = extractRowIDFromDetail(event.Detail)
-				if rowID != "" {
-					break
-				}
-			}
-		}
-	}
-
-	if rowID == "" {
-		report.Skipped = append(report.Skipped, fmt.Sprintf("#%d: could not locate queue row ID for verdict question", item))
-		return
-	}
-
-	// Use QueueResolve (idempotent: checks row state before mutating) rather
-	// than QueueUpdate(State:done).  The decision we record names the verdict
-	// and how it ended, so the operator and the ledger both know why.
-	_, resolveErr := actions.ResolveRow(ctx, rowID, closureReason)
-	if resolveErr != nil {
-		report.Skipped = append(report.Skipped, fmt.Sprintf("#%d: error resolving verdict question row: %v", item, resolveErr))
-		return
-	}
-
-	report.Skipped = append(report.Skipped, fmt.Sprintf("#%d: verdict question row resolved as %s (note %s)", item, closureReason, noteID))
-}
-
-// extractRowIDFromDetail parses the row ID from an event detail string.
-// RaiseVerdictQuestion embeds "; row <row.ID>" in the event detail, so we
-// look for that pattern and return the idempotent key.
-func extractRowIDFromDetail(detail string) string {
-	// Look for "; row " pattern
-	idx := strings.Index(detail, "; row ")
-	if idx == -1 {
-		return ""
-	}
-	// Extract everything after "; row " until end or next ";"
-	start := idx + 6 // len("; row ")
-	// Find the next ";" or use end of string
-	nextSemi := strings.Index(detail[start:], ";")
-	if nextSemi >= 0 {
-		return strings.TrimSpace(detail[start : start+nextSemi])
-	}
-	return strings.TrimSpace(detail[start:])
 }
