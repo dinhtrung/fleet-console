@@ -193,15 +193,17 @@ func NewLifecycle(settings config.LifecycleSettings, st *store.Store, rigs RigLi
 // Decide builds this tick's actions and advances the quiet windows from the
 // same predicate that decided them, so a failed start cannot look like a busy
 // tick. The caller runs the starts before the dispatch phase and the stops
-// after it.
-func (l *Lifecycle) Decide(projects []LifecycleProjectFacts, seatsKnown bool, now time.Time) []LifecycleAction {
+// after it. rigDown is the tick's daemon fact (epic #320, D2): a daemon that
+// is not running means every rig on it is down, and the start branch decides
+// on demand while the stop half stays dark.
+func (l *Lifecycle) Decide(projects []LifecycleProjectFacts, seatsKnown, rigDown bool, now time.Time) []LifecycleAction {
 	if l == nil || l.Executor == nil || !l.Settings.Enabled {
 		return nil
 	}
 	if l.quiet == nil {
 		l.quiet = make(map[string]time.Time)
 	}
-	rigs := BuildLifecycleRigs(projects, l.quiet, seatsKnown)
+	rigs := buildLifecycleRigs(projects, l.quiet, seatsKnown, rigDown)
 	actions := DecideLifecycle(LifecycleInput{
 		Enabled: l.Settings.Enabled, IdleAfter: l.Settings.IdleAfter, Now: now, Rigs: rigs,
 	})

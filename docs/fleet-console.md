@@ -180,6 +180,17 @@ run never un-merges anything.
 - **No second source of truth for the rig.** The rig stays authoritative; the mirror is stamped on every screen.
 - **No destructive automation.** It never deletes a branch or a worktree; it reports them for an audit script.
 
+## The rig lifecycle
+
+When the tick reads the rig and the daemon answers "not running", that is not a stale roster: a daemon that is
+not running means every rig on it is down, so a project with ready work starts its rig on demand and the launch
+carries the reason — `daemon down; N ready item(s)` — into the journal and the `rig.started` event. A cold
+`rig up` gets five minutes (`rig.StartTimeout`) because it boots a daemon, the kernel and every seat, while
+every other rig call keeps the 20 s read budget; a start is attempted at most once per five-minute backoff
+(`act.StartBackoff`), and the backoff is memory-only — a restart forgets it, which can only delay a start by one
+window. The stop half stays dark while the daemon is down: nothing that does not exist can be judged quiet, and
+no quiet streak opens for a rig the tick could not see.
+
 ## The board
 
 ```

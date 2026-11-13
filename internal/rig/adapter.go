@@ -605,12 +605,16 @@ func (a *Adapter) Plan(ctx context.Context, specPath string) (*RunReport, error)
 	return a.runReport(ctx, "up --plan", "up", specPath, "--plan", "--json")
 }
 
-// Up launches a spec.
+// Up launches a spec. A cold launch boots a daemon, the kernel and every seat,
+// so it runs with StartTimeout, not the read budget every other verb keeps
+// (epic #320, D5). A shorter parent deadline still wins below this one.
 func (a *Adapter) Up(ctx context.Context, specPath string) (*RunReport, error) {
 	if specPath == "" {
 		return nil, fmt.Errorf("up: spec path is required")
 	}
-	return a.runReport(ctx, "up", "up", specPath, "--non-interruptive", "--json")
+	runCtx, cancel := context.WithTimeout(ctx, StartTimeout)
+	defer cancel()
+	return a.runReport(runCtx, "up", "up", specPath, "--non-interruptive", "--json")
 }
 
 // DownReport is the daemon's teardown result.
