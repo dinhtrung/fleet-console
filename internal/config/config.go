@@ -38,16 +38,16 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 
 // Project is one project registry entry from the file.
 type Project struct {
-	Key           string `yaml:"key"`
-	Name          string `yaml:"name"`
-	Forge         string `yaml:"forge"`
-	Repo          string `yaml:"repo"`
-	RepoURL       string `yaml:"repo_url"`
+	Key     string `yaml:"key"`
+	Name    string `yaml:"name"`
+	Forge   string `yaml:"forge"`
+	Repo    string `yaml:"repo"`
+	RepoURL string `yaml:"repo_url"`
 	// ForgeHost names the host the forge API lives on (forge-host, design D1):
 	// host[:port], no scheme, no path. Normalised by ValidateProject; resolved
 	// by the package-level ForgeHost function. Unset keeps today's behaviour.
-	ForgeHost     string `yaml:"forge_host"`
-	DefaultBranch string `yaml:"default_branch"`
+	ForgeHost      string  `yaml:"forge_host"`
+	DefaultBranch  string  `yaml:"default_branch"`
 	Rig            string  `yaml:"rig,omitempty"`
 	Rigs           RigRefs `yaml:"rigs"`
 	RigTemplate    string  `yaml:"rig_template"`
@@ -81,6 +81,10 @@ type Project struct {
 		Worktrees string `yaml:"worktrees"`
 	} `yaml:"paths"`
 }
+
+// DefaultEventsKeepDays is the ledger's retention window when the file names
+// none (#395): 90 days, the design's number. An explicit 0 disables pruning.
+const DefaultEventsKeepDays = 90
 
 // DefaultReviewer is the reviewer member prefix a project uses when its config
 // names none (#384). It is the name every project had before the field existed.
@@ -122,9 +126,13 @@ type File struct {
 	NotifyInterval    Duration `yaml:"notify_interval"`
 	// HousekeepingInterval is the reclaim sweep's cadence. Zero means off, the
 	// default: a box that never opted in must not start deleting worktrees.
-	HousekeepingInterval Duration       `yaml:"housekeeping_interval"`
-	ProjectTimeout       ProjectTimeout `yaml:"project_timeout"`
-	Act                  bool           `yaml:"act"`
+	HousekeepingInterval Duration `yaml:"housekeeping_interval"`
+	// EventsKeepDays is the ledger's retention window in days (#395). Absent is
+	// DefaultEventsKeepDays; an explicit 0 keeps every event. A pointer, so an
+	// operator writing 0 can be told apart from a file that never mentions it.
+	EventsKeepDays *int           `yaml:"events_keep_days"`
+	ProjectTimeout ProjectTimeout `yaml:"project_timeout"`
+	Act            bool           `yaml:"act"`
 	// DecisionNotes turns on writing a decision's question as a comment on its
 	// item. Default false: a note is an external side effect on somebody's item,
 	// and an upgraded binary must not start writing there by itself (design D8).
@@ -158,7 +166,7 @@ var lifecycleFields = []string{"enabled", "idle_after", "idle_poll_max"}
 // File does not declare is never writable.
 func EditableKey(key string) (bool, string) {
 	switch key {
-	case "tick_interval", "notify_interval", "housekeeping_interval", "act", EditableRigLifecycle:
+	case "tick_interval", "notify_interval", "housekeeping_interval", "events_keep_days", "act", EditableRigLifecycle:
 		return true, ""
 	}
 	if field, ok := strings.CutPrefix(key, EditableRigLifecycle+"."); ok {
@@ -287,16 +295,18 @@ type Effective struct {
 	NotifyInterval    time.Duration // digest cadence; 0 means off
 	// HousekeepingInterval is the reclaim sweep's cadence; 0 means off.
 	HousekeepingInterval time.Duration
-	ProjectTimeout       Timeouts
-	Act                  bool
-	DecisionNotes        bool
-	DecisionAnswerers    []string
-	RigLifecycle         LifecycleSettings
-	Lifecycles           []ProjectLifecycle
-	Projects             []Project
-	ConfigPath           string
-	Sources              map[string]string
-	Warnings             []string
+	// EventsKeepDays is how far back the ledger is pruned; 0 keeps it all.
+	EventsKeepDays    int
+	ProjectTimeout    Timeouts
+	Act               bool
+	DecisionNotes     bool
+	DecisionAnswerers []string
+	RigLifecycle      LifecycleSettings
+	Lifecycles        []ProjectLifecycle
+	Projects          []Project
+	ConfigPath        string
+	Sources           map[string]string
+	Warnings          []string
 }
 
 const (
@@ -468,6 +478,19 @@ func Load(opts Options) (*Effective, error) {
 	// the default: an upgraded box keeps its current behaviour and never starts
 	// deleting worktrees because a new key appeared with a non-zero default.
 	eff.HousekeepingInterval, eff.Sources["housekeeping_interval"] = time.Duration(file.HousekeepingInterval), "file"
+
+	// events_keep_days is the ledger's retention window (#395). Absent is 90 —
+	// the design's default — and an explicit 0 keeps every event: the two are
+	// different statements, which is why the file field is a pointer.
+	eff.EventsKeepDays = DefaultEventsKeepDays
+	eff.Sources["events_keep_days"] = "default"
+	if file.EventsKeepDays != nil {
+		if *file.EventsKeepDays < 0 {
+			return nil, fmt.Errorf("config: events_keep_days must be 0 or more, not %d", *file.EventsKeepDays)
+		}
+		eff.EventsKeepDays = *file.EventsKeepDays
+		eff.Sources["events_keep_days"] = "file"
+	}
 
 	base, perItem, ceiling := 30*time.Second, 2*time.Second, 2*time.Minute
 	timeoutSource := "default"

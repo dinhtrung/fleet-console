@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -809,6 +810,40 @@ func TestReviewer(t *testing.T) {
 		_, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
 		if err == nil || !strings.Contains(err.Error(), "reviewer") {
 			t.Fatalf("load = %v, want a reviewer field error", err)
+		}
+	})
+}
+
+// TestEventsKeepDays (#395): absent is 90 days, an explicit 0 keeps every
+// event, a positive number is the window, and a negative one is a load error.
+func TestEventsKeepDays(t *testing.T) {
+	dir := t.TempDir()
+	t.Run("absent is the default", func(t *testing.T) {
+		path := writeConfig(t, dir, "projects: []\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if eff.EventsKeepDays != DefaultEventsKeepDays || eff.Sources["events_keep_days"] != "default" {
+			t.Fatalf("keep days = %d (%s), want %d from default", eff.EventsKeepDays, eff.Sources["events_keep_days"], DefaultEventsKeepDays)
+		}
+	})
+	t.Run("zero disables and a number is the window", func(t *testing.T) {
+		for _, want := range []int{0, 30} {
+			path := writeConfig(t, t.TempDir(), fmt.Sprintf("projects: []\nevents_keep_days: %d\n", want))
+			eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+			if err != nil {
+				t.Fatalf("load %d: %v", want, err)
+			}
+			if eff.EventsKeepDays != want || eff.Sources["events_keep_days"] != "file" {
+				t.Fatalf("keep days = %d (%s), want %d from file", eff.EventsKeepDays, eff.Sources["events_keep_days"], want)
+			}
+		}
+	})
+	t.Run("negative is refused", func(t *testing.T) {
+		path := writeConfig(t, t.TempDir(), "projects: []\nevents_keep_days: -1\n")
+		if _, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir}); err == nil {
+			t.Fatal("load accepted a negative window")
 		}
 	})
 }

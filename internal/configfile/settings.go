@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/dinhtrung/fleet-console/internal/config"
@@ -239,6 +240,13 @@ func encodeValue(key, value string, quoted bool) (string, error) {
 			return "false", nil
 		}
 		return "", fmt.Errorf("configfile: %s must be true or false, got %q", key, value)
+	case "events_keep_days":
+		trimmed := strings.TrimSpace(value)
+		days, err := strconv.Atoi(trimmed)
+		if err != nil || days < 0 {
+			return "", fmt.Errorf("configfile: events_keep_days must be 0 or a positive number of days, got %q", value)
+		}
+		return strconv.Itoa(days), nil
 	case "tick_interval", "notify_interval", "rig_lifecycle.idle_after", "rig_lifecycle.idle_poll_max":
 		trimmed := strings.TrimSpace(value)
 		if quoted {

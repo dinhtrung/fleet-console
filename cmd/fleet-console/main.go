@@ -1194,6 +1194,24 @@ func runHousekeep(ctx context.Context, in housekeepArgs) error {
 	if !in.apply && total > 0 {
 		fmt.Fprintf(in.out, "housekeep: dry run; pass --apply to perform these removals\n")
 	}
+	// The ledger's retention window (#395) is one global pass, not a per-project
+	// one: the event table has no project column. Disabled (0) writes nothing at
+	// all — a box that never opted in keeps every row.
+	if in.eff.EventsKeepDays > 0 {
+		retention, err := act.RetainEvents(ctx, act.RetentionInput{
+			Store: in.db, KeepDays: in.eff.EventsKeepDays, Apply: in.apply,
+		})
+		if err != nil {
+			fmt.Fprintf(in.errOut, "housekeep: retention: %v\n", err)
+		} else {
+			verb := "would delete"
+			if in.apply {
+				verb = "deleted"
+			}
+			fmt.Fprintf(in.out, "housekeep retention: %s %d event(s) older than %d days; kept %d for live work\n",
+				verb, retention.Deleted, in.eff.EventsKeepDays, retention.KeptLive)
+		}
+	}
 	return nil
 }
 
