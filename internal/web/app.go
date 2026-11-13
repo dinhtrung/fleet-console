@@ -50,6 +50,10 @@ type Config struct {
 	// output. Nil means the setup endpoint answers 500: a test supplies a fake,
 	// the binary supplies the real runner.
 	SetupExec func(ctx context.Context, name string, args ...string) (string, error)
+	// Ready is the readiness surface's inputs (#393): its tick interval and the
+	// cached queue read. Nil answers readiness with the store facts alone; a
+	// process that wires it passes /api/ready every fact the design names.
+	Ready *Readiness
 	// PreflightForge is the forge_write check's CLI edge. Nil means the check's
 	// own exec default, which runs the resolved gh/glab binary.
 	PreflightForge func(ctx context.Context, binary string, args ...string) (stdout, stderr string, err error)
@@ -86,9 +90,17 @@ func New(cfg Config) (*fiber.App, error) {
 	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor, Waker: cfg.Waker}
 
 	app.Use(idempotency())
+	// Liveness is a constant on purpose (design D1): this route answers "the
+	// process is up and serving", and a restarter wired to it must never see a
+	// slow forge read as a crash. It reads no dependency — not the store, not the
+	// rig, not the forge. Readiness is /api/ready.
 	app.Get("/api/health", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
+	// Readiness sits outside the bearer group like health: a supervisor or a curl
+	// probe has no board token. It is a read-only view of facts the operator's own
+	// config already names (project keys, ages), on the same listener.
+	app.Get("/api/ready", readyHandler(cfg.Store, cfg.Ready))
 	app.Get("/login", loginPage)
 	app.Post("/login", loginSubmit(cfg.Token))
 	app.Post("/logout", logout)

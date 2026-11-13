@@ -992,6 +992,16 @@ func run(args []string, stdout, stderr io.Writer) error {
 		Compat:     func(context.Context) rig.Report { return compatLive.current() },
 		Store:      db,
 		Rig:        rig.NewAdapter(rigRunner),
+		// Readiness (#393): the same tick interval the mirror judges staleness
+		// by, and the queue read cached inside web so a probe does not shell out
+		// per request.
+		Ready: &web.Readiness{
+			TickInterval: eff.TickInterval,
+			QueueRead: func(ctx context.Context) error {
+				_, err := rig.NewAdapter(rigRunner).QueueList(ctx)
+				return err
+			},
+		},
 		// A board verdict is one comment write, then the act tick merges on the
 		// facts. Budget 50 is a per-call ceiling, not a tick's 1500.
 		ForgeFor: func(_ context.Context, project store.ProjectRow) (forge.Forge, error) {
