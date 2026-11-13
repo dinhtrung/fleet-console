@@ -528,6 +528,23 @@ func parseMalformedDetail(detail string) (MalformedVerdict, bool) {
 	return MalformedVerdict{NoteID: noteID, Head: head, Line: line}, true
 }
 
+// NewestEventsByKind returns, per subject, the newest event of this kind. The
+// once-per-key raises append the row they raised to the newest event's detail,
+// so a reconcile reads one event per subject to find the row a later fact
+// must reconcile with (#340).
+func (s *Store) NewestEventsByKind(ctx context.Context, kind string) ([]EventRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, at, actor, kind, subject, detail, exit_code, COALESCE(stdout_hash, '')
+		FROM event
+		WHERE kind = ? AND id IN (SELECT MAX(id) FROM event WHERE kind = ? GROUP BY subject)
+		ORDER BY id`, kind, kind)
+	if err != nil {
+		return nil, fmt.Errorf("store: events kind %s: %w", kind, err)
+	}
+	defer rows.Close()
+	return scanEvents(rows)
+}
+
 // HasEvent reports whether an event of kind for subject already carries the text.
 // It is the once-per-key ledger for intents that must not repeat every tick.
 func (s *Store) HasEvent(ctx context.Context, kind, subject, contains string) (bool, error) {

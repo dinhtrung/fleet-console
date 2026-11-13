@@ -18,11 +18,14 @@ import (
 )
 
 // Rig is the queue subset the act loop drives. *rig.Adapter implements it.
+// QueueShow reads one row back, which the repair reconcile needs to learn a
+// row's state before resolving it (#340).
 type Rig interface {
 	QueueCreate(ctx context.Context, req rig.CreateRequest) (*rig.QueueItem, error)
 	QueueResolve(ctx context.Context, id, decision string) (*rig.QueueItem, error)
 	QueueHandoff(ctx context.Context, id string, req rig.HandoffRequest) (*rig.QueueItem, error)
 	QueueUpdate(ctx context.Context, id string, req rig.UpdateRequest) (*rig.QueueItem, error)
+	QueueShow(ctx context.Context, id string) (*rig.QueueItem, error)
 	Send(ctx context.Context, session, text string) error
 }
 

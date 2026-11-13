@@ -49,6 +49,22 @@ picking a winner. Adoption records `change_request.adopted` before the merge and
 and it invents no dispatch row. Readiness stays the integrator's job: the watchdog marks a draft ready and merges,
 but a human still decides what is worth merging.
 
+### The repair ask does not outlive its premise
+
+When an accepted change request cannot merge because its head conflicts, the app raises one repair row to the
+human: rework the branch, or defer the item. The row is reconciled with what raised it:
+
+- **One open row per item.** A rebased head is a note on the row the ledger's newest `decision.merge_repair`
+  event names — saying which head the ask now covers — never a second row. The `(item, head)` ledger still
+  prevents a re-raise at a head that has already been asked.
+- **The row dies with its premise.** On every applied tick, an open row is resolved — through the same path a
+  human answer uses — when the item is closed, the change request is closed or merged, or the current head is
+  green with an ACCEPT naming it. The resolution names the fact that ended it.
+- **A failed reconcile is a skip line.** A rig that refuses the note or the resolve does not fail the tick; the
+  next tick retries.
+- **A resolved row does not silence the next conflict.** A later head at the same change request raises exactly
+  one new row.
+
 ### Rows that ask a human
 
 A queue row whose destination is a human seat (`human@kernel`, `human-<suffix>@host`) is judged by the person, so the

@@ -309,6 +309,11 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	// It shares `rolled` with the merge loop, so an epic the rollup just closed is
 	// not closed twice.
 	actions.sweepEpics(ctx, in, &report, rolled)
+	// The repair rows are reconciled after the merge loop (#340, design D4):
+	// the loop above may have just ended a row's premise — the head it
+	// conflicts with merged, the item closed — and a stale ask is the queue
+	// collecting dead rows. Failures are skip lines; the next tick retries.
+	actions.reconcileMergeRepairs(ctx, in, &report)
 
 	// The plan is built before this tick runs, so its "no verdict" judgment is a
 	// prediction about a state the tick itself changes: the merge loop above
