@@ -241,3 +241,110 @@ func TestVerdictQuestionReconcileVisitsEveryQuestionOnAnItem(t *testing.T) {
 	}
 	assertClosedOnce(t, queue, "verdict accept", "n1")
 }
+
+// laterHead is the commit the reviewer moved on to in the #414 cases: the
+// question was asked about questionHead, and this is what the change request
+// carries now.
+const laterHead = "def4567abc1234def4567abc1234def4567abc1"
+
+// supersededFixture is the #414 shape: a standing question about questionHead,
+// and a verdict on laterHead, which is the head the change request carries.
+func supersededFixture(t *testing.T, decision string) (*queueStub, TickInput) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Date(2026, 11, 13, 18, 0, 0, 0, time.UTC)
+	st := newStore(t)
+	pid := newProject(t, st)
+	seedQuestionAt(t, st, "app", 5, 9, "n1", questionHead, questionRow)
+	if _, err := st.AddVerdict(ctx, store.NewVerdict{
+		ProjectID: pid, ItemNumber: 5, SHA: laterHead, Decision: decision, Source: "note n9", At: now,
+	}); err != nil {
+		t.Fatalf("verdict: %v", err)
+	}
+	queue := &queueStub{
+		item: &rig.QueueItem{ID: questionRow, State: "done"}, resolveRefusesPending: true,
+		shows: map[string]*rig.QueueItem{questionRow: {ID: questionRow, State: "pending"}},
+	}
+	return queue, questionTick(st, pid, now, []forge.ChangeRequest{{Number: 9, State: "open", HeadSHA: laterHead}}, queue)
+}
+
+// TestVerdictQuestionClosesWhenALaterHeadCarriesAVerdict (#414): the question
+// asked about a commit the branch no longer carries, and the reviewer posted a
+// verdict on the head it does. Nobody is going to answer the old question, so
+// the row closes superseded — the operator closed six of these by hand on
+// 2026-11-13. The resolution names the verdict and the head, so the row still
+// explains itself a month later.
+func TestVerdictQuestionClosesWhenALaterHeadCarriesAVerdict(t *testing.T) {
+	ctx := context.Background()
+	queue, in := supersededFixture(t, "reject")
+	if _, err := RunTick(ctx, in); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(queue.updates) != 1 {
+		t.Fatalf("updates = %+v, want the superseded question closed once", queue.updates)
+	}
+	if len(queue.resolves) != 0 {
+		t.Fatalf("resolves = %v, want none: a pending row is not resolvable", queue.resolves)
+	}
+	update := queue.updates[0]
+	if update.State != "canceled" || update.ClosureReason != "superseded" {
+		t.Fatalf("update = %+v, want canceled/superseded: the row was overtaken, not answered", update)
+	}
+	if update.ClosureTarget != laterHead {
+		t.Fatalf("closure target = %q, want the head that overtook the question (%s)", update.ClosureTarget, laterHead)
+	}
+	for _, want := range []string{"reject", laterHead, questionHead, "n1"} {
+		if !strings.Contains(update.Resolution, want) {
+			t.Fatalf("resolution = %q, want it to name %q", update.Resolution, want)
+		}
+	}
+}
+
+// TestVerdictQuestionForTheCurrentHeadStaysOpen (#414): a verdict on some older
+// commit is not "the reviewer moved on" for the head the branch carries now.
+// The question is about the current head, so it keeps waiting for its answer.
+func TestVerdictQuestionForTheCurrentHeadStaysOpen(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 13, 18, 0, 0, 0, time.UTC)
+	st := newStore(t)
+	pid := newProject(t, st)
+	seedQuestionAt(t, st, "app", 5, 9, "n1", laterHead, questionRow)
+	// The only verdict in the store is the old head's: it answers a question
+	// nobody asked, and must not be read as the current head's verdict.
+	if _, err := st.AddVerdict(ctx, store.NewVerdict{
+		ProjectID: pid, ItemNumber: 5, SHA: questionHead, Decision: "accept", Source: "note n1", At: now,
+	}); err != nil {
+		t.Fatalf("verdict: %v", err)
+	}
+	queue := &queueStub{
+		item: &rig.QueueItem{ID: questionRow, State: "done"}, resolveRefusesPending: true,
+		shows: map[string]*rig.QueueItem{questionRow: {ID: questionRow, State: "pending"}},
+	}
+	in := questionTick(st, pid, now, []forge.ChangeRequest{{Number: 9, State: "open", HeadSHA: laterHead}}, queue)
+	if _, err := RunTick(ctx, in); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if queue.updateCalls != 0 {
+		t.Fatalf("updates = %+v, want none: the question names the head the branch carries", queue.updates)
+	}
+}
+
+// TestVerdictQuestionSupersededCloseIsIdempotent (#414): the row's own state
+// decides — the first tick closes it, the second finds it canceled and writes
+// nothing more.
+func TestVerdictQuestionSupersededCloseIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	queue, in := supersededFixture(t, "accept")
+	if _, err := RunTick(ctx, in); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	if queue.updateCalls != 1 {
+		t.Fatalf("updates = %+v, want the question closed once", queue.updates)
+	}
+	if _, err := RunTick(ctx, in); err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+	if queue.updateCalls != 1 {
+		t.Fatalf("updates = %+v, want the second tick to write nothing", queue.updates)
+	}
+}

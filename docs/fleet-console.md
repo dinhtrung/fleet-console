@@ -179,6 +179,14 @@ because the ledger's word is the only fact then. A project with nothing waiting 
 line, so a stuck project cannot pass for an idle one. It is read when the board renders, like the
 rest of the board; there is no second poller.
 
+**A question about a head the branch has left behind closes itself.** When the reviewer posts a
+verdict on the head the change request carries now, the reconcile closes every standing question
+about an older head as `superseded`, and the resolution names the verdict and the head it landed
+on. Nobody is going to answer a question about a commit the branch no longer carries — on
+2026-11-13 the operator closed six of them by hand. A question about the current head keeps
+waiting: an older head's verdict says nothing about it, and neither does an older question come
+back to life when the head moves.
+
 ### When a review is not a verdict
 
 A reviewer can finish a review without producing anything the grammar above can read: prose that
