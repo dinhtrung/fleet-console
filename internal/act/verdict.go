@@ -184,47 +184,77 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 	for _, note := range sorted {
 		line := firstLine(note.Body)
 		normal := stripDecoration(line)
-		if !verdictToken.MatchString(normal) {
-			continue
-		}
-		match := verdictNote.FindStringSubmatch(normal)
-		if match == nil {
-			// It claims to be a verdict and does not parse: a truncated or
-			// mistyped sha, or the token with nothing after it. The error
-			// quotes the line the reviewer wrote, not the normalised one.
-			return nil, &UnattributableVerdictError{
-				NoteID: note.ID, Line: line,
-				Reason: "the first line starts with a verdict token but its sha does not parse",
+		if verdictToken.MatchString(normal) {
+			if match := verdictNote.FindStringSubmatch(normal); match != nil {
+				// The first line is a verdict, but the rest of the note may
+				// still argue with it: "ACCEPT <sha>" followed by "REJECT <sha>"
+				// is a note its author has not settled, so it asks rather than
+				// picks the line it read first.
+				if scan := scanVerdictText(note.Body, headSHA); scan.Reason != "" {
+					return nil, &UnresolvedVerdictError{
+						NoteID: note.ID, Head: headSHA, Reason: scan.Reason, Excerpt: scan.Line,
+					}
+				}
+				decision := strings.ToLower(match[1])
+				sha := strings.ToLower(match[2])
+				if headSHA != "" && !forge.SameSHA(sha, headSHA) {
+					return nil, unattributedDecision(note.ID, decision, match[2], headSHA)
+				}
+				return a.storeVerdict(ctx, dispatchID, item, note.ID, storedSHA(headSHA, sha), decision, viaSeat(note.Body))
 			}
 		}
-		decision := strings.ToLower(match[1])
-		sha := strings.ToLower(match[2])
-		if headSHA != "" && !forge.SameSHA(sha, headSHA) {
-			if decision == "accept" {
-				// An accept for another sha says nothing about this head. It
-				// ends the scan with a typed refusal instead of falling through
-				// to an older note that happens to name the head. Deliberately
-				// milder than the rejection below: the tick retries, and the
-				// scan unblocks when a note names the head.
-				return nil, &UnattributedAcceptError{
-					NoteID: note.ID, Written: match[2], Head: headSHA,
+		// The first line is not the exact grammar. Read the note as text
+		// (verdict_text.go): a wrapped verdict — `QA ACCEPT <sha>`, a heading
+		// with the sha on the next line, a table row — is captured; a definite
+		// answer about another commit keeps its typed refusal; and a note the
+		// scan cannot attribute asks a human instead of vanishing.
+		scan := scanVerdictText(note.Body, headSHA)
+		switch {
+		case scan.Decision != "":
+			if scan.SHA == "" {
+				// A verdict word with no commit is exactly the note the gate
+				// cannot attribute: the operator seat reads the request and
+				// names the head itself.
+				return nil, &UnresolvedVerdictError{
+					NoteID: note.ID, Head: headSHA,
+					Reason:  fmt.Sprintf("the note says %s but names no commit sha", strings.ToUpper(scan.Decision)),
+					Excerpt: scan.Line,
 				}
 			}
-			return nil, &UnattributedRejectError{
-				NoteID: note.ID, Written: match[2], Head: headSHA,
+			if !sameHead(scan.SHA, headSHA) {
+				return nil, unattributedDecision(note.ID, scan.Decision, scan.SHA, headSHA)
+			}
+			return a.storeVerdict(ctx, dispatchID, item, note.ID, storedSHA(headSHA, scan.SHA), scan.Decision, viaSeat(note.Body))
+		case scan.Reason != "":
+			excerpt := scan.Line
+			if excerpt == "" {
+				excerpt = line
+			}
+			return nil, &UnresolvedVerdictError{
+				NoteID: note.ID, Head: headSHA, Reason: scan.Reason, Excerpt: excerpt,
 			}
 		}
-		// The row stores the head, never the abbreviation the note wrote: the
-		// merge gate compares stored shas exactly, and the head is the
-		// canonical spelling of what the note names. With no head under review
-		// the note's own sha is all there is to store.
-		stored := headSHA
-		if stored == "" {
-			stored = sha
-		}
-		return a.storeVerdict(ctx, dispatchID, item, note.ID, stored, decision, viaSeat(note.Body))
 	}
 	return nil, nil
+}
+
+// unattributedDecision is the typed refusal for a verdict word that names
+// another commit: an accept is the milder one (the tick retries), a reject
+// stops the merge.
+func unattributedDecision(noteID, decision, written, head string) error {
+	if decision == "accept" {
+		return &UnattributedAcceptError{NoteID: noteID, Written: written, Head: head}
+	}
+	return &UnattributedRejectError{NoteID: noteID, Written: written, Head: head}
+}
+
+// storedSHA is what the row keeps: the head under review when there is one, so
+// the merge gate's exact comparison holds, and the note's own sha otherwise.
+func storedSHA(head, written string) string {
+	if head != "" {
+		return head
+	}
+	return written
 }
 
 // storeVerdict records the decision once. A tick re-reads the same notes, so the

@@ -76,67 +76,64 @@ that proves the daemon agrees: on a throwaway daemon it refuses the create witho
 
 ### Reading a verdict
 
-A verdict is a note whose **first line** starts with the token and a sha: `ACCEPT <sha>`,
-`REJECT <sha>`, and either may carry a reason after the sha — `ACCEPT <sha> (PR #78, #66)`.
-Prose that merely mentions a token is not a verdict, and a note is never scanned beyond its first
-line.
+A verdict is a note that **states** one: a line whose first word, once the wrapping is stripped, is
+`ACCEPT` or `REJECT`, followed by the sha it is about — `ACCEPT <sha>`, `REJECT <sha>`, each free to
+carry a reason after the sha (`ACCEPT <sha> (PR #78, #66)`).
 
-**What names the head.** A sha names the head under review when it is the full 40-hex commit id,
-or an abbreviation of at least 7 hex characters that is a prefix of it: `ACCEPT 7f76634` names
-head `7f766346bebb…` and is attributed to it. Fewer than 7 characters never parses as a verdict
-at all, and whatever the note wrote, the stored verdict carries the full sha.
+The gate reads the note's first **1024 characters**, line by line, and strips what models put in
+front of a verdict before it looks: fenced code and HTML comments, a link (`[ACCEPT](https://…)` →
+`ACCEPT`), emphasis, list and quote decoration, icons, and one short label from a closed list —
+`QA`, `Verdict`, `Review`, `Result`, `Decision`. So `QA ACCEPT <sha>`, `🎯 **ACCEPT <sha>**`,
+`[ACCEPT](…) <sha>`, `## QA Verdict: ACCEPT <sha>`, and a `Verdict:` line with `ACCEPT` and the
+sha on the next lines are all the same verdict. The label list is closed on purpose: a rule that
+accepts any word in front of the token reads `Ready to accept` as a verdict.
 
-Two outcomes are worth knowing because they stall a merge rather than being silently absorbed:
+**Prose stays prose.** The token has to *open* a line. `Not ready to ACCEPT <sha> until CI is
+green` is a sentence about a verdict, not a verdict, and the gate ignores it — no verdict, no
+question, no merge.
 
-- **An accept naming another head is skipped and reported.** An `ACCEPT` whose sha is not a
-  prefix of the head says nothing about the current commit, so the scan ends there instead of
-  falling through to an older note that happens to name the head. The tick reports the refusal
-  twice over: one `act-skip: … verdict: ACCEPT <written> does not name head <head> (note <id>)`
-  line per tick in the log, and one `verdict.unattributed` audit event per note on the ledger.
-- **A rejection naming another sha blocks.** A `REJECT` for a sha that is not the head is
-  treated as a statement that outlives its sha: it refuses the merge and names the note. That is
-  stricter than an accept and it is deliberate: in a multi-attempt thread the reviewer's
-  objection may still stand.
+**What names the head.** A sha of seven or more hex characters names the head when it is a prefix
+of it: `ACCEPT 7f76634` names head `7f766346bebb…` and is attributed to it. A sha of four to six
+characters names the head only when it is a prefix of it, and then the stored verdict carries the
+full head. A shorter sha that is not a prefix of the head names nothing the gate can act on, and the
+note is skipped — a typo is not a question for a human.
 
-Both unblock the same way: post `ACCEPT <the head>`. The board's Approve button and the reviewer
-brief already emit the full head sha, so the abbreviated form is the exception, not the
-documented path. Nothing is written to the store for a refusal, so the next tick retries and the
-note stays until it is answered.
+**What the gate cannot read, it asks.** Three shapes have no fact to act on: a verdict word with no
+sha, both polarities in one note (`ACCEPT` and `REJECT` on separate lines), and a line that negates
+itself (`Verdict: not ACCEPT <sha>`). Each raises **one** row, keyed on the note and the head, to
+the project's operator destination — the seat named by `verdict_relay.seat` when the project sets
+`verdict_relay.mode: operator`, and `human@kernel` otherwise. The row names the note, the head, the
+line the scan read, and the three answers: post `ACCEPT <head>`, post `REJECT <head>`, or send the
+request back for review. The app never writes that verdict and never merges on the question. If the
+row cannot be created for the seat, it is created once for `human@kernel` instead, so a renamed seat
+cannot swallow the question.
 
-### A note that names no commit
+A tick repeating every minute asks once: the ledger dedupes on `note=<id>; head=<head>;`, and a new
+note or a moved head is a new question. Unanswered questions are the rig's stuck sweep to escalate —
+the app keeps no second timer.
 
-The reviewer's line is the note's **first non-empty line**, undecorated: `ACCEPT <sha>` or
-`REJECT <sha>`, with a reason after the sha allowed. What a model wraps around the line is read
-past — heading marks, quote and bullet marks, emphasis, a `Verdict:`-style label closed by a
-separator, the separator after the token itself (`ACCEPT: <sha>` says what `ACCEPT <sha>` says) —
-but the sha itself is never invented: `## QA Verdict: ACCEPT ✅` names no commit, and an emoji
-where the sha belongs is not a verdict. The line is refused, not guessed.
+To send these questions to a seat instead of the human queue, give the project the block — the seat
+must exist in the rig, and the spelling is the one the rig uses for a destination (dots become
+dashes: node `operator.agent` on rig `kernel` is `operator-agent@kernel`):
 
-**What a malformed note produces.** When the first line starts with the token but carries no
-parseable sha, the tick writes one `verdict.malformed` journal line per note — once, not once per
-tick — recording the note id, the head under review, and the line as written. The plan then asks
-the **reviewer**, once per note and head, with the one line that repairs it:
-
+```yaml
+projects:
+  - key: fleet-console
+    # … forge, repo, rig, paths …
+    verdict_relay:
+      mode: operator
+      seat: operator-agent@kernel
 ```
-The merge gate reads one line: ACCEPT <head> or REJECT <head>. Your note <id>'s first line was
-"<line>", which names no commit. Post a new comment whose first line is:
 
-ACCEPT <head>
-```
+`mode: scribe` routes only the relay rows to the seat and keeps questions on `human@kernel`; no
+block keeps today's behaviour. A seat that cannot take the row is answered by one `human@kernel`
+row instead, so the question is never swallowed.
 
-The same text is posted once as a comment on the change request, so the thread carries the
-instruction the row points at. The operator's "has no verdict" question does not fire beside it:
-the reviewer plainly tried, so that question would be false.
-
-**The operator's deadline.** The reviewer row keeps the ordinary nudges — the first at 15
-minutes, then one every 30. If the note is still unanswered after 45 minutes in total, two full
-nudge cycles, the question moves to `human@kernel` once for that note and head: the text names the
-note, the line as written, the head and the same literal, and offers the two lawful moves — cast
-the verdict on the item drawer (`POST /api/items/<n>/verdict`, which writes `ACCEPT <sha>` at the
-head), or instruct the reviewer to post the line. Merging by hand is not one of the moves: a hand
-merge skips the gate's four facts — the verdict, the head it names, the green pipeline, the
-mergeable `Closes #<id>` body — and the gate is the only thing that reads them. The reviewer's row
-stays open the whole time: the human reading and the seat repairing are concurrent, by design.
+**A verdict about another commit also asks.** An `ACCEPT` or `REJECT` whose sha is not the head ends
+the scan without a verdict (it never falls through to an older note about the head) and raises the
+same question, with `accept at the head`, `reject`, and `re-review` as the answers. The old skip
+line and the `verdict.unattributed` audit event survive: the typed error is what tells the tick
+which question to ask.
 
 ### When the app asks a human
 

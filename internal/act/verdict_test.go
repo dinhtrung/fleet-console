@@ -160,7 +160,13 @@ func TestCaptureVerdictDecoration(t *testing.T) {
 		{"list bullet", "- ACCEPT " + head, "accept"},
 		{"colon separator", "ACCEPT: " + head, "accept"},
 		{"em dash separator", "ACCEPT — " + head, "accept"},
-		{"token with no sha", "ACCEPT", "refused"},
+		// A verdict word with no commit names nothing the gate can act on. It
+		// used to refuse; now it asks the operator seat, which reads the request
+		// and names the head itself (design D3).
+		{"token with no sha", "ACCEPT", "question"},
+		{"qa label", "QA ACCEPT " + head, "accept"},
+		{"icon before the token", "✅ ACCEPT " + head, "accept"},
+		{"link before the token", "[ACCEPT](https://example.test/x) " + head, "accept"},
 		{"prose mentions the token", "Not ready to ACCEPT " + head + " until CI is green", "none"},
 		{"past tense is not the token", "ACCEPTED " + head, "none"},
 		// D2 with decoration on: the sha rule is unchanged, so a decorated
@@ -183,6 +189,14 @@ func TestCaptureVerdictDecoration(t *testing.T) {
 				}
 				if verdict.SHA != head {
 					t.Fatalf("sha = %s, want %s — the head under review", verdict.SHA, head)
+				}
+			case "question":
+				var unresolved *UnresolvedVerdictError
+				if !errors.As(err, &unresolved) {
+					t.Fatalf("err = %v, want UnresolvedVerdictError", err)
+				}
+				if verdict != nil {
+					t.Fatalf("verdict = %+v, want none", verdict)
 				}
 			case "refused":
 				if !errors.Is(err, ErrUnattributableVerdict) {
