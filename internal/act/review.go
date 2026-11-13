@@ -108,11 +108,14 @@ func verdictCommand(project store.ProjectRow, changeRequest int, sha string) str
 
 // RaiseOperatorQuestion creates one queue row for the operator: a decision
 // only a human can make, such as a change request with no verdict (#265,
-// design D3). The shape is raiseAdoptionDecision's — a brief under briefs/,
-// then a human@kernel row — and the event ledger dedupes per (item, kind,
+// design D3). The destination is resolved by the caller (verdict-relay,
+// design D4): the project's verdict_relay.seat when its relay mode is
+// operator, human@kernel otherwise — operatorDestination is that one
+// resolution. The shape is raiseAdoptionDecision's — a brief under briefs/,
+// then the operator row — and the event ledger dedupes per (item, kind,
 // head): the key carries a terminator, so head=aaaa111 never matches a longer
 // sha's event, and a moved head is a new fact that asks again.
-func (a *Actions) RaiseOperatorQuestion(ctx context.Context, project store.ProjectRow, item int, question, kind, headSHA, worktreeRoot string) (*RaiseResult, error) {
+func (a *Actions) RaiseOperatorQuestion(ctx context.Context, project store.ProjectRow, item int, question, kind, headSHA, worktreeRoot, destination string) (*RaiseResult, error) {
 	if a.Store == nil || a.Rig == nil {
 		return nil, fmt.Errorf("raise operator question: store and rig are required")
 	}
@@ -148,7 +151,7 @@ func (a *Actions) RaiseOperatorQuestion(ctx context.Context, project store.Proje
 		summary = summary[:120]
 	}
 	row, err := a.Rig.QueueCreate(ctx, rig.CreateRequest{
-		Destination: "human@kernel", Summary: summary, BodyFile: path, Source: "human@kernel", EvidenceRef: path,
+		Destination: destination, Summary: summary, BodyFile: path, Source: "human@kernel", EvidenceRef: path,
 	})
 	if err != nil {
 		_ = noteRefusal(ctx, a.Store, item, err)

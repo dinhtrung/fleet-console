@@ -32,7 +32,7 @@ func TestRaiseOperatorQuestion(t *testing.T) {
 	project := store.ProjectRow{ID: pid, Key: "app", ForgeKind: "github", ForgeProject: "o/r"}
 	actions := &Actions{Store: st, Rig: queue, ProjectID: pid, ProjectKey: "app", WorktreeRoot: t.TempDir()}
 
-	raise, err := actions.RaiseOperatorQuestion(ctx, project, 5, noVerdictQuestion, "decision.no_verdict", "AAAA111", actions.WorktreeRoot)
+	raise, err := actions.RaiseOperatorQuestion(ctx, project, 5, noVerdictQuestion, "decision.no_verdict", "AAAA111", actions.WorktreeRoot, "human@kernel")
 	if err != nil {
 		t.Fatalf("raise: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestRaiseOperatorQuestion(t *testing.T) {
 	}
 
 	// The same question again is the same question: no second row.
-	noop, err := actions.RaiseOperatorQuestion(ctx, project, 5, noVerdictQuestion, "decision.no_verdict", "aaaa111", actions.WorktreeRoot)
+	noop, err := actions.RaiseOperatorQuestion(ctx, project, 5, noVerdictQuestion, "decision.no_verdict", "aaaa111", actions.WorktreeRoot, "human@kernel")
 	if err != nil || !noop.NoOp {
 		t.Fatalf("second raise = %+v, %v; want NoOp", noop, err)
 	}
@@ -86,7 +86,7 @@ func TestRaiseOperatorQuestion(t *testing.T) {
 	}
 
 	// A longer sha is a moved head: a different fact, asked again.
-	moved, err := actions.RaiseOperatorQuestion(ctx, project, 5, noVerdictQuestion, "decision.no_verdict", "aaaa1110", actions.WorktreeRoot)
+	moved, err := actions.RaiseOperatorQuestion(ctx, project, 5, noVerdictQuestion, "decision.no_verdict", "aaaa1110", actions.WorktreeRoot, "human@kernel")
 	if err != nil || moved.NoOp {
 		t.Fatalf("moved-head raise = %+v, %v; want a new question", moved, err)
 	}
