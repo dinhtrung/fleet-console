@@ -398,8 +398,8 @@ type fakeRunner func(args ...string) ([]byte, error)
 func (f fakeRunner) Run(_ context.Context, args ...string) ([]byte, error) { return f(args...) }
 
 type queueStub struct {
-	item        *rig.QueueItem
-	created     *rig.CreateRequest
+	item    *rig.QueueItem
+	created *rig.CreateRequest
 	// creates records every create in order, for the tests that raise more
 	// than one row in one tick (#266). Optional: nil skips the recording.
 	creates     *[]rig.CreateRequest
@@ -407,6 +407,14 @@ type queueStub struct {
 	sendCalls   int
 	rows        []rig.QueueRow
 	shows       map[string]*rig.QueueItem
+	// updates and resolves record the repair reconcile's writes (#340);
+	// updateErr and resolveErr let a test refuse a write the way a daemon
+	// does.
+	updates     []rig.UpdateRequest
+	updateCalls int
+	updateErr   error
+	resolves    []string
+	resolveErr  error
 }
 
 func (q *queueStub) QueueList(context.Context) ([]rig.QueueRow, error) {
@@ -433,13 +441,22 @@ func (q *queueStub) QueueCreate(_ context.Context, req rig.CreateRequest) (*rig.
 	}
 	return q.item, nil
 }
-func (q *queueStub) QueueResolve(context.Context, string, string) (*rig.QueueItem, error) {
+func (q *queueStub) QueueResolve(_ context.Context, _, decision string) (*rig.QueueItem, error) {
+	q.resolves = append(q.resolves, decision)
+	if q.resolveErr != nil {
+		return nil, q.resolveErr
+	}
 	return q.item, nil
 }
 func (q *queueStub) QueueHandoff(context.Context, string, rig.HandoffRequest) (*rig.QueueItem, error) {
 	return q.item, nil
 }
-func (q *queueStub) QueueUpdate(context.Context, string, rig.UpdateRequest) (*rig.QueueItem, error) {
+func (q *queueStub) QueueUpdate(_ context.Context, _ string, req rig.UpdateRequest) (*rig.QueueItem, error) {
+	q.updateCalls++
+	q.updates = append(q.updates, req)
+	if q.updateErr != nil {
+		return nil, q.updateErr
+	}
 	return q.item, nil
 }
 func (q *queueStub) Send(context.Context, string, string) error { q.sendCalls++; return nil }
