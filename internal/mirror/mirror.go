@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -517,6 +519,17 @@ func (m *Mirror) Loop(ctx context.Context, sources func(context.Context) ([]Proj
 	var quiet bool
 	var reason string
 	tick := func() {
+		// A panic anywhere in a tick used to end this goroutine — and with it the
+		// whole process, leaving the control plane dark until a restart (epic
+		// #325, T2). One recover, here and nowhere else in the tree: the journal
+		// gets the value and the stack, the tick counts as busy so the poll
+		// returns to the base interval, and the loop carries on (design D3+D4).
+		defer func() {
+			if r := recover(); r != nil {
+				m.logf("tick: panicked: %v\n%s", r, debug.Stack())
+				quiet, reason = false, "tick: panicked: "+fmt.Sprint(r)
+			}
+		}()
 		quiet, reason = true, ""
 		projects, err := sources(ctx)
 		if err != nil {
