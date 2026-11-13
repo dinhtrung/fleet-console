@@ -123,6 +123,7 @@ type MirrorStatus struct {
 	ForgeStale     bool       `json:"forge_stale"`
 	ForgeForbidden bool       `json:"forge_forbidden"`
 	RigStale       bool       `json:"rig_stale"`
+	RigDown        bool       `json:"rig_down"`
 	ForgeError     string     `json:"forge_error,omitempty"`
 	RigError       string     `json:"rig_error,omitempty"`
 	BranchError    string     `json:"branch_error,omitempty"`
@@ -132,6 +133,7 @@ type statusPayload struct {
 	ForgeStale     bool   `json:"forge_stale"`
 	ForgeForbidden bool   `json:"forge_forbidden"`
 	RigStale       bool   `json:"rig_stale"`
+	RigDown        bool   `json:"rig_down"`
 	ForgeError     string `json:"forge_error,omitempty"`
 	RigError       string `json:"rig_error,omitempty"`
 	BranchError    string `json:"branch_error,omitempty"`
@@ -162,6 +164,7 @@ func (s *Store) MirrorStatus(ctx context.Context, projectID int64) (MirrorStatus
 		var block statusPayload
 		if json.Unmarshal([]byte(payload), &block) == nil {
 			status.ForgeStale, status.RigStale = block.ForgeStale, block.RigStale
+			status.RigDown = block.RigDown
 			status.ForgeForbidden = block.ForgeForbidden
 			status.ForgeError, status.RigError, status.BranchError = block.ForgeError, block.RigError, block.BranchError
 		}
