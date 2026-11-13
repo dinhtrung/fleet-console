@@ -35,10 +35,12 @@ func TestTickReportsBlockedMerge(t *testing.T) {
 	}
 
 	// The change request is accepted but not mergeable, and the forge names why.
+	// The state must be a computed word (epic #341): an empty one now reads as
+	// "the forge has not answered yet" and waits instead of refusing.
 	fake := forge.NewFake(forge.KindGitHub)
 	fake.ItemsValue = []forge.Item{{Number: 5, Kind: forge.KindTask, State: forge.StateOpen, Title: "Five"}}
 	fake.RequestsValue = []forge.ChangeRequest{{
-		Number: 9, HeadSHA: "abc1234", Mergeable: false,
+		Number: 9, HeadSHA: "abc1234", Mergeable: false, MergeState: "dirty",
 		Branch: "feature/5-x", Body: "Closes #5", DocsOnly: true,
 	}}
 	project := store.ProjectRow{

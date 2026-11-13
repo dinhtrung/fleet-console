@@ -213,6 +213,18 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		if captured != nil {
 			report.Verdicts = append(report.Verdicts, *captured)
 		}
+		if !request.Mergeable && request.MergeUnknown() {
+			// A forge that has not computed mergeability is neither a merge nor
+			// a refusal: a refusal must quote a forge word, and a repair row
+			// keyed on "no answer yet" would park a human decision the forge
+			// was about to answer itself (epic #341, design D2). The waiting
+			// line is the report — no event, no row, no blocked merge — and the
+			// next tick reads the forge again. A computed `mergeable: true`
+			// with an empty word is an answer, and merges below.
+			report.Skipped = append(report.Skipped,
+				fmt.Sprintf("#%d merge waiting: the forge has not computed mergeability", item))
+			continue
+		}
 		var merged *MergeResult
 		switch {
 		case hasDispatch && request.Branch != "" && request.Branch != dispatch.Branch:
