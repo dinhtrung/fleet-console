@@ -439,6 +439,7 @@ func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []
 		snapshot.CRs = append(snapshot.CRs, crFields{
 			Number: cr.Number, Item: cr.ClosesItem, State: cr.State,
 			Merged: cr.Merged, HeadSHA: cr.HeadSHA, DocsOnly: cr.DocsOnly,
+			MergeState: cr.MergeState,
 		})
 	}
 	for _, verdict := range verdicts {

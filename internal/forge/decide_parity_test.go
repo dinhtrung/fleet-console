@@ -11,6 +11,21 @@ import (
 // TestSameDecideForBothForgeKinds is the spec scenario "The same rule on two
 // forges": one normalized task graph, encoded with each forge's link form, must
 // produce the same intents from the shared decide loop.
+// TestMergeConflictWordsAgree pins the plan's conflict predicate to the
+// gate's: for every merge state word, decide.CRState.MergeConflict and
+// forge.ChangeRequest.MergeConflict answer the same, so the plan and the
+// merge gate cannot disagree about which heads need a repair (epic #341,
+// design D3).
+func TestMergeConflictWordsAgree(t *testing.T) {
+	for _, word := range []string{"", "dirty", "cannot_be_merged", "DIRTY", "unknown", "checking", "clean", "blocked", "unstable"} {
+		got := decide.CRState{MergeState: word}.MergeConflict()
+		want := forge.ChangeRequest{MergeState: word}.MergeConflict()
+		if got != want {
+			t.Fatalf("MergeConflict(%q): decide = %v, forge = %v, want the word lists to agree", word, got, want)
+		}
+	}
+}
+
 func TestSameDecideForBothForgeKinds(t *testing.T) {
 	parent := 1
 	baseItems := []forge.Item{

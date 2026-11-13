@@ -309,6 +309,43 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		if intent.Kind != decide.IntentRaiseDecision {
 			continue
 		}
+		// The plan routes a conflicting head to the merge-repair ask (epic #341,
+		// design D3): the row is RaiseMergeRepair's — same text, brief and
+		// (item, head) ledger key the merge gate's raise writes — with the
+		// forge's word and branch read from the change requests this tick
+		// already holds. The captured-verdict guard below does not apply: the
+		// conflict is the forge's fact, and a verdict captured this tick does
+		// not un-conflict the head.
+		if intent.Event.Kind == "decision.merge_repair" {
+			var request *forge.ChangeRequest
+			for index := range in.CRs {
+				if in.CRs[index].Number == intent.ChangeRequest {
+					request = &in.CRs[index]
+					break
+				}
+			}
+			if request == nil || !request.MergeConflict() {
+				report.Skipped = append(report.Skipped, fmt.Sprintf(
+					"#%d merge repair skipped: change request #%d carries no conflict word", intent.Item, intent.ChangeRequest))
+				continue
+			}
+			repair, repairErr := actions.RaiseMergeRepair(ctx, in.Project.Key, &NotMergeableError{
+				Number: request.Number, Item: intent.Item, SHA: request.HeadSHA,
+				Branch: request.Branch, Reason: request.MergeState,
+			}, in.WorktreeRoot)
+			if repairErr != nil {
+				report.Skipped = append(report.Skipped, fmt.Sprintf("#%d merge repair: %v", intent.Item, repairErr))
+				continue
+			}
+			if !repair.NoOp {
+				report.Decisions = append(report.Decisions, repair.QItemID)
+				if in.OnDecision != nil {
+					in.OnDecision(DecisionRaised{QItemID: repair.QItemID, Item: intent.Item, Text: fmt.Sprintf(
+						"change request #%d conflicts with its base (%s): rework or defer #%d", request.Number, request.MergeState, intent.Item)})
+				}
+			}
+			continue
+		}
 		if capturedItems[intent.Item] {
 			report.Skipped = append(report.Skipped, fmt.Sprintf(
 				"#%d decision skipped: this tick captured the verdict the plan called missing", intent.Item))
