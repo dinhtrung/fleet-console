@@ -170,6 +170,15 @@ carries, and no other spelling of "names" exists in the code.
 the newest verdict, the plan raises `decision.stale` and asks the *reviewer* to re-review
 the new head even while another row is live, because a re-review is a question, not work.
 
+**The board shows what is waiting.** A question is only useful if the person it is addressed to
+can see it, so each project's board row lists its unanswered `decision.verdict_question` entries:
+the item, the change request, the note, the head, how long it has waited and the seat it went to.
+The list is read from the ledger — it survives a restart — and joined with the project's last
+queue read: a row the queue says is finished drops out, and a row the queue has not seen stays,
+because the ledger's word is the only fact then. A project with nothing waiting says so in one
+line, so a stuck project cannot pass for an idle one. It is read when the board renders, like the
+rest of the board; there is no second poller.
+
 ### When a review is not a verdict
 
 A reviewer can finish a review without producing anything the grammar above can read: prose that

@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { getBoard } from "../lib/fleet";
+import type { BoardQuestion } from "../lib/fleet";
 import { shortTime } from "../lib/fleet";
 import {
   Badge,
@@ -24,6 +25,59 @@ function countLine(project: { counts: { building: number; review: number; waitin
     project.counts.blocked ? `${project.counts.blocked} blocked` : "",
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : "nothing open";
+}
+
+/** The project's unanswered operator questions (#377): a note the merge gate could not read as a
+ *  verdict, waiting on a person. The ledger is the source, so the list survives a restart; the
+ *  queue row decides whether the question is still live, and a finished row never reaches here.
+ *  With none waiting the section is one line, not an empty table — the point is that "nothing is
+ *  waiting" is stated, so a stuck project cannot pass for an idle one. */
+function QuestionsSection({ questions }: { questions: BoardQuestion[] }) {
+  if (questions.length === 0) {
+    return <p className="border-t border-rule px-3 py-2 text-[0.6875rem] text-ink-muted">No question is waiting on a person.</p>;
+  }
+  return (
+    <div className="border-t border-rule">
+      <div className="flex items-baseline gap-2 px-3 pt-2">
+        <h3 className="label font-medium text-ink-muted">Waiting on a person</h3>
+        <span className="num text-[0.6875rem] text-ink-muted">{questions.length}</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-body">
+          <thead>
+            <tr className="border-b border-rule text-left">
+              <th className="label px-3 py-1.5 font-medium text-ink-muted">Item</th>
+              <th className="label px-3 py-1.5 font-medium text-ink-muted">Change request</th>
+              <th className="label px-3 py-1.5 font-medium text-ink-muted">Note</th>
+              <th className="label px-3 py-1.5 font-medium text-ink-muted">Head</th>
+              <th className="label px-3 py-1.5 font-medium text-ink-muted">Waiting</th>
+              <th className="label px-3 py-1.5 font-medium text-ink-muted">Asked</th>
+            </tr>
+          </thead>
+          <tbody>
+            {questions.map((question) => (
+              <tr key={question.qitem ?? `${question.item}-${question.note_id}`} className="border-b border-rule last:border-0">
+                <td className="px-3 py-[var(--density-row-pad-y)]">
+                  <Link
+                    to="/items/$number"
+                    params={{ number: String(question.item) }}
+                    className="num text-ink hover:underline"
+                  >
+                    #{question.item}
+                  </Link>
+                </td>
+                <td className="num px-3 py-[var(--density-row-pad-y)] text-ink-muted">#{question.change_request}</td>
+                <td className="num px-3 py-[var(--density-row-pad-y)] text-ink-muted">{question.note_id}</td>
+                <td className="num px-3 py-[var(--density-row-pad-y)] text-ink-muted">{question.head}</td>
+                <td className="num px-3 py-[var(--density-row-pad-y)] text-ink">{question.waiting}</td>
+                <td className="px-3 py-[var(--density-row-pad-y)] text-ink-muted">{question.destination}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 export function BoardScreen() {
@@ -121,6 +175,7 @@ export function BoardScreen() {
                   </table>
                 </div>
               )}
+              <QuestionsSection questions={project.questions} />
             </Panel>
           ))
         )}
