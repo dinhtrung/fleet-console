@@ -1020,6 +1020,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		// that has not configured one gains no public route on upgrade.
 		WebhookSecret: eff.WebhookSecret,
 		Waker:         waker,
+		// The mirror cadence the board judges mirror-read ages against (#394);
+		// config.Load always resolves it, so this is the effective value.
+		TickInterval: eff.TickInterval,
 	})
 	if err != nil {
 		return err

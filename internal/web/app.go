@@ -25,6 +25,10 @@ type Config struct {
 	Compat     func(ctx context.Context) rig.Report
 	Store      *store.Store
 	Rig        *rig.Adapter
+	// TickInterval is the mirror's poll cadence. The board judges how old a
+	// mirror read is against it: quiet past two ticks, stalled past five
+	// (#394). Zero takes the config default.
+	TickInterval time.Duration
 	// ForgeFor is the write path a board verdict needs. Nil answers 503 on the
 	// verdict route only; every read still serves.
 	ForgeFor func(ctx context.Context, project store.ProjectRow) (forge.Forge, error)
@@ -83,7 +87,7 @@ func New(cfg Config) (*fiber.App, error) {
 		IdleTimeout:  60 * time.Second,
 	})
 	hub := NewHub()
-	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor, Waker: cfg.Waker}
+	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor, Waker: cfg.Waker, Tick: cfg.TickInterval}
 
 	app.Use(idempotency())
 	app.Get("/api/health", func(c fiber.Ctx) error {

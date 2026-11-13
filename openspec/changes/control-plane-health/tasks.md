@@ -11,10 +11,10 @@
 
 ## 2. Staleness on the board
 
-- [ ] 2.1 `mirror_meta` reaches the project surface: `last_forge_at`, `last_rig_at`, their ages, and the two
+- [x] 2.1 `mirror_meta` reaches the project surface: `last_forge_at`, `last_rig_at`, their ages, and the two
       thresholds (`2 ×` quiet, `5 ×` stalled) computed once, server-side.
-- [ ] 2.2 A project that has never read says so in words.
-- [ ] 2.3 Tests: age formatting, both thresholds, and the never-read case.
+- [x] 2.2 A project that has never read says so in words.
+- [x] 2.3 Tests: age formatting, both thresholds, and the never-read case.
 
 ## 3. Retention
 
