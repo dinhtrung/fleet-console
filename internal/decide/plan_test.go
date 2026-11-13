@@ -244,8 +244,10 @@ func TestNoVerdictIsAskedOncePerHead(t *testing.T) {
 }
 
 // TestStaleVerdictAsksTheReviewerOncePerHead: the re-review stays the
-// reviewer's job (D4) and is deduped per (item, head) the same way — quiet
-// while the standing row names this head, asked again when the head moves.
+// reviewer's job (D4). In the epic's vocabulary, a reviewer row is not
+// silence — the arm keeps naming the question and act's ledger turns the
+// repeat into a NoOp — only a human question for this head silences it, and
+// a moved head earns its own question again.
 func TestStaleVerdictAsksTheReviewerOncePerHead(t *testing.T) {
 	s := base(Item{Number: 5, Kind: KindTask, State: StateOpen, Title: "Connection pool"})
 	s.CRs = []CRState{{Number: 20, Item: 5, State: "open", HeadSHA: "bbbb222"}}
@@ -261,13 +263,24 @@ func TestStaleVerdictAsksTheReviewerOncePerHead(t *testing.T) {
 	if asked[0].Event.Kind != "decision.stale" {
 		t.Fatalf("event kind = %q, want decision.stale", asked[0].Event.Kind)
 	}
-	// The re-review row is live and its text names both shas, the old verdict
-	// and the head it asks about.
+	// The reviewer's own standing question does not silence the arm: the plan
+	// keeps naming the same re-review, and act's ledger turns the repeat into
+	// a NoOp. Work in flight is silence for the operator's question, not for
+	// this one.
 	s.Rows = append(s.Rows, Row{QItemID: "qitem-rr-1", State: "pending", Pickup: "unclaimed",
 		Destination: "dev-review@r", Body: asked[0].Text})
 	plan = PlanTick(s, planNow)
+	still := findIntents(plan, IntentRaiseDecision)
+	if len(still) != 1 || still[0].Event.Kind != "decision.stale" || !strings.Contains(still[0].Text, "bbbb222") {
+		t.Fatalf("intents = %+v, want the re-review still named while the reviewer row stands", plan.Intents)
+	}
+	// A human question for this head is the silence: the stall escalation's
+	// operator row names the head, and it stands until answered or moved.
+	s.Rows = append(s.Rows, operatorRow("qitem-op-1",
+		"test #5: review stalled - the re-review of change request #20's head bbbb222 has waited 46m with 2 unanswered nudges."))
+	plan = PlanTick(s, planNow)
 	if len(findIntents(plan, IntentRaiseDecision)) != 0 {
-		t.Fatalf("intents = %+v, want none while the same head's re-review stands", plan.Intents)
+		t.Fatalf("intents = %+v, want none while the same head's human question stands", plan.Intents)
 	}
 	s.CRs[0].HeadSHA = "cccc333"
 	plan = PlanTick(s, planNow)

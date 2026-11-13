@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dinhtrung/fleet-console/internal/forge"
+	"github.com/dinhtrung/fleet-console/internal/rig"
 )
 
 // MarkerLabel is the in-flight marker the app owns on both forges.
@@ -303,10 +306,13 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 	// Incident: a change request is open. Three cases: no verdict at all — the
 	// operator's question (#265, design D3); a verdict whose sha is no longer
 	// the head — the reviewer's re-review (D2); or an accept/reject for the
-	// head — nothing to raise. The dedupe is per (item, head): a live row that
-	// already names this head is the same question standing, a seat's own row
-	// is work in flight, and only a question row for a different head asks
-	// again. Across ticks the act raise's ledger entry is the durable backstop.
+	// head — nothing to raise. The dedupe is per (item, head), in the epic's
+	// own vocabulary: work in flight — a builder or reviewer live on the item —
+	// silences the human question, whatever sha the row's text carries, while
+	// a question for this head standing silences both arms and a question for
+	// another head asks again. A stale re-review is a question, not work: only
+	// a standing question for this head keeps it quiet. Across ticks the act
+	// raise's ledger entry is the durable backstop.
 	seen := map[int]bool{}
 	for _, cr := range s.CRs {
 		item, ok := items[cr.Item]
@@ -321,7 +327,10 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 		var audience Audience
 		switch {
 		case verdict == nil:
-			if askedForHead(s.Rows, item.Number, cr.HeadSHA) {
+			// No human question while work is in flight on the item, and none
+			// twice for the same head: a live seat row is the work itself, and
+			// a standing question for this head is the same question.
+			if workInFlight(s.Rows, item.Number) || questionStanding(s.Rows, item.Number, cr.HeadSHA) {
 				continue
 			}
 			head := cr.HeadSHA
@@ -334,19 +343,23 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 				key, item.Number, item.Title, cr.Number, head, item.Number)
 			detail = fmt.Sprintf("cr=%d head=%s", cr.Number, cr.HeadSHA)
 		case cr.HeadSHA != "" && !strings.EqualFold(verdict.SHA, cr.HeadSHA):
-			if askedForHead(s.Rows, item.Number, cr.HeadSHA) {
-				// The re-review question stands. When that row is the
-				// decision.stale question and it has outlived its nudges, the
-				// seat has stopped answering: ask the human once for this
-				// head (stale-verdict-visibility, design D4). The operator
-				// row this raises is the plan's record — later ticks see it
-				// and stay quiet — and act's event ledger (head=<sha>;) is
-				// the durable backstop, so a repeat lands as NoOp, never a
-				// second question. The reviewer row keeps its own nudges.
-				if stall := stalledReview(s, key, item, cr, now); stall != nil {
-					seen[item.Number] = true
-					add(*stall)
-				}
+			// A re-review of a new head is a question, not work: a live seat
+			// row must not silence it, and neither does the reviewer's own
+			// standing question — the arm keeps naming the question and act's
+			// ledger turns the repeat into a NoOp. The only silence is a
+			// human question for this head. When the reviewer's question has
+			// outlived its nudges, the seat has stopped answering: ask the
+			// human once for this head (stale-verdict-visibility, design D4).
+			// The operator row the stall raises is the plan's record — later
+			// ticks see it and stay quiet — and act's event ledger
+			// (head=<sha>;) is the durable backstop. The reviewer row keeps
+			// its own nudges.
+			if stall := stalledReview(s, key, item, cr, now); stall != nil {
+				seen[item.Number] = true
+				add(*stall)
+				continue
+			}
+			if questionStanding(s.Rows, item.Number, cr.HeadSHA) {
 				continue
 			}
 			// D2: a verdict on a moved head asks for a re-review of the new head.
@@ -474,7 +487,23 @@ func reviewerRowEndedFor(rows []Row, item int, head string) bool {
 		if _, terminal := terminalRowStates[state]; !terminal {
 			continue
 		}
-		if head != "" && strings.Contains(strings.ToLower(rowText(row)), head) {
+		if rowNamesHead(row, head) {
+			return true
+		}
+	}
+	return false
+}
+
+// rowNamesHead reports whether a row's text carries a sha that names head
+// through forge.SameSHA — the repo's one sha matcher, so any spelling of the
+// commit, abbreviated or full, counts and no call site keeps a private
+// contains-match that can drift.
+func rowNamesHead(row Row, head string) bool {
+	if head == "" {
+		return false
+	}
+	for _, token := range shaToken.FindAllString(rowText(row), -1) {
+		if forge.SameSHA(token, head) {
 			return true
 		}
 	}
@@ -535,35 +564,45 @@ func rowNamesItem(row Row, item int) bool {
 	return false
 }
 
-// askedForHead is the per-(item, head) dedupe the plan can honour without
-// state (#265): the question a raise left behind comes back in the snapshot
-// as a live row, and D3 has the question's body name the head sha. A live row
-// already naming this head is the same question standing; a live row naming
-// no sha is a seat at work and keeps the old quiet; only a question row for a
-// different head — some live row names a sha and none names this one — asks
-// again.
-func askedForHead(rows []Row, item int, head string) bool {
-	naming, asked, question := false, false, false
+// workInFlight is the epic's first dedupe predicate: a live row — a builder
+// or reviewer — is working the item, so no human question is raised, whatever
+// sha the row's text carries. A live row addressed to a human seat is a
+// question, not work: treating it as in-flight work would silence the very
+// prompt the operator needs, so it never counts here.
+func workInFlight(rows []Row, item int) bool {
 	for _, row := range rows {
 		if !rowLive(row) || !rowNamesItem(row, item) {
 			continue
 		}
-		naming = true
-		text := rowText(row)
-		if head != "" && strings.Contains(text, head) {
-			asked = true
-		}
-		if shaToken.MatchString(text) {
-			question = true
+		if !rig.IsHumanSeat(row.Destination) {
+			return true
 		}
 	}
-	if !naming {
-		return false // no live row: nothing has been asked
+	return false
+}
+
+// questionStanding is the second predicate, the per-(item, head) half: a live
+// row naming the item, addressed to a human seat, whose text carries a sha
+// that matches head through forge.SameSHA — the repo's one sha matcher, so an
+// abbreviated `head cca2508c` in the question's body matches the full sha the
+// record carries. One question per head, and a question for another head may
+// be asked again.
+func questionStanding(rows []Row, item int, head string) bool {
+	if head == "" {
+		return false
 	}
-	if asked {
-		return true // this head's question stands
+	for _, row := range rows {
+		if !rowLive(row) || !rowNamesItem(row, item) {
+			continue
+		}
+		if !rig.IsHumanSeat(row.Destination) {
+			continue
+		}
+		if rowNamesHead(row, head) {
+			return true
+		}
 	}
-	return !question // a question for another head: ask again; seat work only: stay quiet
+	return false
 }
 
 // stallMarker is the one phrase the stall question carries and no other
@@ -583,7 +622,7 @@ func staleReviewRow(rows []Row, item int, head string) *Row {
 			continue
 		}
 		text := rowText(row)
-		if head != "" && strings.Contains(text, "verdict stale") && strings.Contains(text, head) {
+		if head != "" && strings.Contains(text, "verdict stale") && rowNamesHead(row, head) {
 			return &rows[index]
 		}
 	}
@@ -628,7 +667,7 @@ func stallAskedForHead(rows []Row, item int, head string) bool {
 			continue
 		}
 		text := rowText(row)
-		if strings.Contains(text, stallMarker) && head != "" && strings.Contains(text, head) {
+		if strings.Contains(text, stallMarker) && rowNamesHead(row, head) {
 			return true
 		}
 	}
