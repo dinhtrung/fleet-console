@@ -286,3 +286,21 @@ func TestTwoRigsFillInListedOrderUnderOneCap(t *testing.T) {
 		t.Fatalf("intents with cap 1 = %+v, want one", plan.Intents)
 	}
 }
+
+// TestReadyChildOfAnOpenEpicDispatches (#402): the shape the operator watched
+// sit undispatched — an open task whose parent is an open epic, a free seat and
+// capacity — must produce a dispatch intent, so the silence was in reporting
+// and not in this rule.
+func TestReadyChildOfAnOpenEpicDispatches(t *testing.T) {
+	s := base(epic(1), child(task(5), 1))
+	s.Project.ConcurrencyCap = 1
+	result := Decide(s)
+	if len(result.Dispatches) != 1 || result.Dispatches[0].Number != 5 {
+		t.Fatalf("dispatches = %+v, want item 5 on the free seat", result.Dispatches)
+	}
+	for _, skip := range result.Skips {
+		if skip.Number == 5 {
+			t.Fatalf("skips = %+v, want no skip for a ready child", result.Skips)
+		}
+	}
+}
