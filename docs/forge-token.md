@@ -98,9 +98,11 @@ gh api repos/<owner>/<repo>/commits/<sha>/check-runs >/dev/null   # 4. the merge
 without `Contents: write` still reports `push:true` and still refuses the merge. The only proof that a token can
 merge is a merge, so do not manufacture one — fix the permission, then let the next tick do it.
 
-`./install.sh --verify` proves the *read* path (`gh api user`) and the app's write preflight probes a comment;
-neither sees a missing `Contents: write`. Treat a first merge on a new box as the real test, and read the
-`act-skip` line if it fails.
+`./install.sh --verify` proves the *read* path (`gh api user`). The app's write preflight probes a comment and —
+since #329 — a merge: a squash merge of an already-merged pull request, which cannot merge again, so a token
+without `Contents: write` is refused there before GitHub reaches the merged-head check, and the check names the
+missing permission. A repository with no already-merged pull request to aim at reads as an honest unknown, never
+green. Treat a first merge on a new box as the real test anyway, and read the `act-skip` line if it fails.
 
 ## After the fix
 

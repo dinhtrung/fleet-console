@@ -154,7 +154,9 @@ func githubBodyVerdict(ctx context.Context, deps Deps, check Check, repo string,
 
 // probeNotesGitHub asks the commenting question on the newest open item in the
 // mirror. An empty body is refused before a comment is created, and the
-// refusal says whether the token may comment at all.
+// refusal says whether the token may comment at all. A comment the forge
+// would validate does not end the check: a token may comment and still not
+// merge (#329), so the merge question follows.
 func probeNotesGitHub(ctx context.Context, deps Deps, check Check, repo string, number int) Check {
 	if number <= 0 {
 		// The mirror has no open item to aim at. That is an honest unknown, not
@@ -176,14 +178,12 @@ func probeNotesGitHub(ctx context.Context, deps Deps, check Check, repo string, 
 		if _, ok := classifyWrite(ctx, deps, kindGitHub, repo, "", stdout, stderr, err); ok {
 			check.State = Fail
 			check.Detail = forgeOwnLine(stderr, err)
-			check.Fix = forgeWriteFix(ctx, deps, "The token may open a change request but may not comment")
+			check.Fix = forgeWriteFix(ctx, deps, "The token may open a change request but may not comment", opComment)
 			return check
 		}
 	}
 	if message, blank := githubBlankBody(stdout); blank {
-		check.State = OK
-		check.Detail = "the forge validates the probe write, so the token may comment and open a change request"
-		return check
+		return probeMerge(ctx, deps, check, repo)
 	} else if message != "" {
 		check.State = Unknown
 		check.Detail = fmt.Sprintf("the note probe was refused with %q, not the blank-body validation the probe aims to draw", message)
@@ -199,6 +199,119 @@ func probeNotesGitHub(ctx context.Context, deps Deps, check Check, repo string, 
 	check.State = Unknown
 	check.Detail = fmt.Sprintf("the note probe did not classify: %s", forgeOwnLine(stderr, err))
 	return check
+}
+
+// probeMerge asks the merge question (#329). The trap the comment probe cannot
+// see: GitHub files a merge under Contents, not Pull requests, so a
+// fine-grained token carrying only Pull requests: write comments happily and
+// is refused at the merge — the first sign today being a refused merge on real
+// work. The probe aims a squash merge at an already-merged pull request: such
+// a request cannot merge again, so the mutation is a no-op whatever the answer,
+// while a token without Contents: write is refused before GitHub ever reaches
+// the merged-head check, and the refusal is the same mergePullRequest sentence
+// a real merge would draw. Green, then, means "may comment and may merge";
+// a merge the forge would not classify is an unknown, never a green lie — the
+// missing-merged-PR exit in particular admits the check cannot tell.
+func probeMerge(ctx context.Context, deps Deps, check Check, repo string) Check {
+	runCtx, cancel := context.WithTimeout(ctx, deps.Timeout)
+	defer cancel()
+	stdout, stderr, err := deps.Forge(runCtx, "gh", "pr", "list", "--state", "merged", "--limit", "1",
+		"--json", "number,headRefOid", "-R", repo)
+	if err != nil {
+		if runCtx.Err() != nil {
+			check.State = Unknown
+			check.Detail = fmt.Sprintf("gh did not answer within %s", deps.Timeout)
+			return check
+		}
+		check.State = Unknown
+		check.Detail = fmt.Sprintf("the merge probe could not find an already-merged change request to aim at: %s", firstNonEmpty(lastLine(stderr), lastLine(err.Error())))
+		return check
+	}
+	number, sha, found := mergedPR(stdout)
+	if !found {
+		check.State = Unknown
+		check.Detail = "no already-merged change request to aim the merge probe at; the check cannot vouch for merge, only for comment and open a change request"
+		return check
+	}
+	stdout, stderr, err = deps.Forge(runCtx, "gh", "pr", "merge", fmt.Sprint(number),
+		"--squash", "--match-head-commit", sha, "-R", repo)
+	if err != nil {
+		if runCtx.Err() != nil {
+			check.State = Unknown
+			check.Detail = fmt.Sprintf("gh did not answer within %s", deps.Timeout)
+			return check
+		}
+		if _, ok := classifyMerge(ctx, deps, repo, number, sha, stdout, stderr, err); ok {
+			check.State = Fail
+			check.Detail = forgeOwnLine(stderr, err)
+			check.Fix = forgeWriteFix(ctx, deps, "The token may comment and open a change request but may not merge", opMerge)
+			return check
+		}
+	}
+	if message, merged := githubAlreadyMerged(stdout, stderr); merged {
+		check.State = OK
+		check.Detail = "the forge validates the probe writes, so the token may comment, open a change request and merge"
+		return check
+	} else if message != "" {
+		check.State = Unknown
+		check.Detail = fmt.Sprintf("the merge probe was refused with %q, not the merged-head refusal the probe aims to draw", message)
+		return check
+	}
+	if err == nil {
+		// The merge of an already-merged pull request cannot succeed; a 2xx here
+		// means the probe did not aim at what it thought it did.
+		check.State = Unknown
+		check.Detail = "the merge probe unexpectedly succeeded; inspect the repository by hand"
+		return check
+	}
+	check.State = Unknown
+	check.Detail = fmt.Sprintf("the merge probe did not classify: %s", forgeOwnLine(stderr, err))
+	return check
+}
+
+// mergedPR reads `gh pr list --json number,headRefOid` output for the newest
+// merged pull request: its number and head sha name the no-op merge target.
+func mergedPR(stdout string) (number int, sha string, found bool) {
+	trimmed := strings.TrimSpace(stdout)
+	if trimmed == "" {
+		return 0, "", false
+	}
+	var list []struct {
+		Number     int    `json:"number"`
+		HeadRefOid string `json:"headRefOid"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &list); err != nil || len(list) == 0 {
+		return 0, "", false
+	}
+	return list[0].Number, list[0].HeadRefOid, true
+}
+
+// githubAlreadyMerged reads the merge probe's answer for the forge's own
+// merged-head refusal — the sentence a merge of an already-merged pull request
+// draws when the token cleared authorization. message is a different refusal's
+// own words, when the body carries one.
+func githubAlreadyMerged(stdout, stderr string) (message string, merged bool) {
+	combined := strings.ToLower(stdout + "\n" + stderr)
+	for _, phrase := range []string{
+		"already merged",
+		"pull request is already merged",
+		"cannot be merged",
+	} {
+		if strings.Contains(combined, phrase) {
+			return "", true
+		}
+	}
+	trimmed := strings.TrimSpace(stdout)
+	if trimmed == "" {
+		return "", false
+	}
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &body); err != nil {
+		return "", false
+	}
+	return body.Message, false
 }
 
 // probeGitLab asks the merge-request question with a source branch that cannot
@@ -332,6 +445,18 @@ func classifyWrite(ctx context.Context, deps Deps, kind, repo, host, stdout, std
 	return classified, forge.IsPermission(classified)
 }
 
+// classifyMerge routes the merge probe's raw result through the forge adapter's
+// own merge classifier (#329) — the same matchers a refused merge on real work
+// would meet, so the probe and the tick cannot disagree about what a permission
+// refusal looks like. number and sha name the already-merged pull request the
+// probe aims at; the adapter passes them to `gh pr merge` the way a real merge
+// would.
+func classifyMerge(ctx context.Context, deps Deps, repo string, number int, sha, stdout, stderr string, err error) (error, bool) {
+	runner := recordedRunner{stdout: stdout, stderr: stderr, err: err}
+	classified := forge.NewGitHub(repo, runner, nil).Merge(ctx, number, sha)
+	return classified, forge.IsPermission(classified)
+}
+
 // recordedRunner replays one CLI answer into the forge adapter.
 type recordedRunner struct {
 	stdout, stderr string
@@ -344,25 +469,47 @@ func (r recordedRunner) Run(ctx context.Context, argv ...string) (string, string
 
 // forgeWriteVerdict turns a classified refusal into the check's failure: the
 // forge's own line is the detail, and the fix is picked by the scopes the
-// token actually carries.
+// token actually carries. operation names the write the probe aimed at, so the
+// fix names the permission that operation needs (#329) instead of a generic
+// pair that leaves a merge refused.
 func forgeWriteVerdict(ctx context.Context, deps Deps, check Check, _, stderr string, err error, operation string) Check {
 	check.State = Fail
 	check.Detail = forgeOwnLine(stderr, err)
-	check.Fix = forgeWriteFix(ctx, deps, "The token may read the repository but may not open a "+operation)
+	check.Fix = forgeWriteFix(ctx, deps, "The token may read the repository but may not "+forgeWriteVerb(operation), operation)
 	return check
+}
+
+// forgeWriteVerb words the operation as the refusal sentence's verb.
+func forgeWriteVerb(operation string) string {
+	switch operation {
+	case opComment:
+		return "comment"
+	case opMerge:
+		return "merge"
+	case "change request":
+		return "open a change request"
+	}
+	return "perform the write"
 }
 
 // forgeWriteFix names the repair. A classic PAT carries its scopes in
 // x-oauth-scopes; a fine-grained token leaves the header empty, and the two
-// are repaired differently. A scope read that will not answer gets a sentence
-// that covers both, never a guess.
-func forgeWriteFix(ctx context.Context, deps Deps, prefix string) Fix {
+// are repaired differently. The fine-grained sentence names the one permission
+// the refused operation needs (forge.FixPermission, #329) — "Issues: write and
+// Pull requests: write" on a refused merge sent the operator to grant, wait,
+// and hit the same 403. A scope read that will not answer gets a sentence that
+// covers both, never a guess.
+func forgeWriteFix(ctx context.Context, deps Deps, prefix string, operation string) Fix {
 	runCtx, cancel := context.WithTimeout(ctx, deps.Timeout)
 	defer cancel()
 	stdout, _, err := deps.Forge(runCtx, "gh", "api", "-i", "user")
+	grant := "grant the fine-grained token the permissions the operation needs"
+	if fix := forge.FixPermission(operation); fix != "" {
+		grant = "grant it " + fix + " on this repository"
+	}
 	if err != nil {
 		return Fix{
-			Why: prefix + ": refresh the classic token with `gh auth refresh -s repo`, or grant Issues: write and Pull requests: write to a fine-grained token.",
+			Why: prefix + ": refresh the classic token with `gh auth refresh -s repo`, or " + grant + ".",
 		}
 	}
 	if classicToken(stdout) {
@@ -372,7 +519,7 @@ func forgeWriteFix(ctx context.Context, deps Deps, prefix string) Fix {
 		}
 	}
 	return Fix{
-		Why: prefix + "; grant Issues: write and Pull requests: write to the fine-grained token.",
+		Why: prefix + "; " + grant + ".",
 	}
 }
 
@@ -451,6 +598,14 @@ func forgeOwnLine(stderr string, err error) string {
 const (
 	kindGitHub = "github"
 	kindGitLab = "gitlab"
+)
+
+// probe operations, matching the forge adapter's operation names — the same
+// words a permission raise carries, so a refusal names the same operation
+// everywhere it is reported (#329).
+const (
+	opComment = "comment"
+	opMerge   = "merge"
 )
 
 // firstNonEmpty keeps the detail one line even when one stream is empty.

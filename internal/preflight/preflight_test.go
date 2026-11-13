@@ -276,7 +276,7 @@ func TestForgeWriteChecks(t *testing.T) {
 			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main", ProbeItemNumber: 42},
 			forge:   forgeProbeOK,
 			want:    OK,
-			detail:  "may comment and open a change request",
+			detail:  "may comment, open a change request and merge",
 		},
 		{
 			name:    "ok: 422 without a default branch probes base=main",
@@ -302,9 +302,72 @@ func TestForgeWriteChecks(t *testing.T) {
 				}
 				return forgeProbeOK(ctx, binary, args...)
 			},
-			want:    Fail,
-			detail:  "Resource not accessible",
-			why:     "may not comment",
+			want:   Fail,
+			detail: "Resource not accessible",
+			why:    "may not comment",
+		},
+		{
+			// The issue's own case (#329): a fine-grained token (empty
+			// x-oauth-scopes) that comments happily and stops one permission
+			// short of merge. Today's check read green here; the merge probe
+			// must turn it red and name Contents: write, not the generic pair.
+			name:    "fail: comments fine, 403 on the merge probe",
+			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main", ProbeItemNumber: 42},
+			forge: func(ctx context.Context, binary string, args ...string) (string, string, error) {
+				joined := strings.Join(args, " ")
+				if strings.Contains(joined, "-i user") {
+					return "HTTP/2 200\n\n", "", nil // fine-grained: no scope header
+				}
+				if strings.Contains(joined, "pr merge") {
+					return `{"message":"Resource not accessible by personal access token","status":"403"}`,
+						"gh: HTTP 403: Resource not accessible by personal access token", errors.New("exit status 1")
+				}
+				return forgeProbeOK(ctx, binary, args...)
+			},
+			want:   Fail,
+			detail: "Resource not accessible by personal access token",
+			why:    "grant it Contents: write",
+		},
+		{
+			// The already-merged refusal on its merits is the merge probe's
+			// pass: the token cleared the merge permission, GitHub only then
+			// reached the merged head.
+			name:    "ok: comments and merges; the no-op merge is refused as already merged",
+			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main", ProbeItemNumber: 42},
+			forge:   forgeProbeOK,
+			want:    OK,
+			detail:  "may comment, open a change request and merge",
+		},
+		{
+			// The honest exit: no merged pull request to aim the no-op at. The
+			// check admits it cannot vouch for merge rather than reading green.
+			name:    "unknown: no merged change request to aim the merge probe at",
+			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main", ProbeItemNumber: 42},
+			forge: func(ctx context.Context, binary string, args ...string) (string, string, error) {
+				joined := strings.Join(args, " ")
+				if strings.Contains(joined, "pr list") {
+					return `[]`, "", nil
+				}
+				return forgeProbeOK(ctx, binary, args...)
+			},
+			want:   Unknown,
+			detail: "cannot vouch for merge",
+		},
+		{
+			// A merge refusal the classifier does not claim and that does not
+			// read as the merged-head sentence is not a permission fact; the
+			// check names its own ignorance instead of guessing.
+			name:    "unknown: the merge probe is refused on something else",
+			project: Project{Forge: "github", Repo: "o/r", DefaultBranch: "main", ProbeItemNumber: 42},
+			forge: func(ctx context.Context, binary string, args ...string) (string, string, error) {
+				joined := strings.Join(args, " ")
+				if strings.Contains(joined, "pr merge") {
+					return "", "gh: HTTP 422: Pull request is not mergeable", errors.New("exit status 1")
+				}
+				return forgeProbeOK(ctx, binary, args...)
+			},
+			want:   Unknown,
+			detail: "the merge probe did not classify",
 		},
 		{
 			name:    "unknown: no open item to probe a note on",
@@ -855,9 +918,11 @@ func reportStrings(report Report) []string {
 	return out
 }
 
-// forgeProbeOK answers both GitHub probes the way a forge answers a
+// forgeProbeOK answers every GitHub probe the way a forge answers a
 // deliberately invalid write from a token that cleared authorization: a 422 on
-// the probe's own invalid field, never a 403.
+// the probe's own invalid field, never a 403. The merge probe meets an
+// already-merged pull request, and the merge of it is refused on its merits —
+// "already merged", not 403 — which is the pass.
 func forgeProbeOK(ctx context.Context, binary string, args ...string) (string, string, error) {
 	joined := strings.Join(args, " ")
 	switch {
@@ -869,20 +934,31 @@ func forgeProbeOK(ctx context.Context, binary string, args ...string) (string, s
 	case strings.Contains(joined, "/pulls"):
 		return `{"message":"Validation Failed","errors":[{"resource":"PullRequest","field":"head","code":"invalid"}],"status":"422"}`,
 			"gh: HTTP 422: Validation Failed", errors.New("exit status 1")
+	case strings.Contains(joined, "pr list"):
+		return `[{"number":300,"headRefOid":"3c6f8a92e1d4b7a5c0f9e8d7c6b5a4938271605f"}]`, "", nil
+	case strings.Contains(joined, "pr merge"):
+		// A merge of an already-merged pull request cannot succeed; the forge
+		// refuses on its merits, which is what the probe reads as the pass.
+		return "", "GraphQL: Pull request is already merged (mergePullRequest)", errors.New("exit status 1")
 	}
 	return "", "", errors.New("unexpected forge call " + joined)
 }
 
-// forgeProbeForbidden answers both probes the way a forge answers a write from
-// a token that may read but may not write.
+// forgeProbeForbidden answers every probe the way a forge answers a write from
+// a token that may read but may not write — including the merge probe (#329):
+// the mergePullRequest merge is refused before GitHub reaches the merged-head
+// check, with the same 403 a real merge would draw.
 func forgeProbeForbidden(ctx context.Context, binary string, args ...string) (string, string, error) {
 	joined := strings.Join(args, " ")
 	switch {
 	case strings.Contains(joined, "-i user"):
 		return "HTTP/2 200\nx-oauth-scopes: repo:read\n\n", "", nil
-	case strings.Contains(joined, "/comments"), strings.Contains(joined, "/pulls"):
+	case strings.Contains(joined, "/comments"), strings.Contains(joined, "/pulls"),
+		strings.Contains(joined, "pr merge"):
 		return `{"message":"Resource not accessible by personal access token","status":"403"}`,
 			"gh: HTTP 403: Resource not accessible by personal access token", errors.New("exit status 1")
+	case strings.Contains(joined, "pr list"):
+		return `[{"number":300,"headRefOid":"3c6f8a92e1d4b7a5c0f9e8d7c6b5a4938271605f"}]`, "", nil
 	}
 	return "", "", errors.New("unexpected forge call " + joined)
 }
