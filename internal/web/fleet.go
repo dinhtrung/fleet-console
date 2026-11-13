@@ -44,6 +44,11 @@ type boardItem struct {
 	Reason string   `json:"reason"`
 	URL    string   `json:"url,omitempty"`
 	Labels []string `json:"labels"`
+	// VerdictSHA and HeadSHA are the two commits a stale verdict names
+	// (console-ui: "A stale verdict shows both shas"). They ride the row so the
+	// board draws them where the state is, not only in the drawer's detail.
+	VerdictSHA string `json:"verdict_sha,omitempty"`
+	HeadSHA    string `json:"head_sha,omitempty"`
 }
 
 type boardCounts struct {
@@ -52,6 +57,7 @@ type boardCounts struct {
 	Waiting  int `json:"waiting"`
 	Parked   int `json:"parked"`
 	Blocked  int `json:"blocked"`
+	Stale    int `json:"stale"`
 }
 
 // projectPaused treats a disabled project as paused: removing its config block
@@ -381,9 +387,13 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 						row.State, row.Reason = "parked", "parked: change request open, no verdict"
 					case head != "" && !strings.EqualFold(verdict.SHA, head):
 						// D2: the verdict names a sha that is no longer the head.
-						row.State = "parked"
-						row.Reason = fmt.Sprintf("verdict stale: %s %s is on %s, head is %s",
-							strings.ToUpper(verdict.Decision), verdict.SHA, verdict.SHA, head)
+						// A stale row is not parked: someone is needed — the
+						// reviewer must look at the new head — and the spec forbids
+						// the parked draw. The row carries both shas so the board
+						// draws them beside the state.
+						row.State = "stale"
+						row.Reason = staleVerdictReason(verdict.Decision, verdict.SHA, head)
+						row.VerdictSHA, row.HeadSHA = verdict.SHA, head
 					default:
 						row.State, row.Reason = "review", "verdict "+verdict.Decision+", waits for merge"
 					}
@@ -414,6 +424,11 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 				bp.Counts.Review++
 			case "parked":
 				bp.Counts.Parked++
+			case "stale":
+				// A stale verdict is a review waiting for the reviewer, not a
+				// row nobody needs: it gets its own count so the header cannot
+				// report it as parked (console-ui).
+				bp.Counts.Stale++
 			case "waiting":
 				bp.Counts.Waiting++
 			case "blocked", "paused":
@@ -433,6 +448,14 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 		"compat_blocked": compatBlocked, "compat_reason": compat.Error,
 		"forge_forbidden": forbidden,
 	})
+}
+
+// staleVerdictReason is the one text a stale verdict reads as (console-ui:
+// "A stale verdict shows both shas"). The board row and the drawer both write
+// it, so the two surfaces cannot name the commits differently.
+func staleVerdictReason(decision, sha, head string) string {
+	return fmt.Sprintf("verdict stale: %s %s is on %s, head is %s",
+		strings.ToUpper(decision), sha, sha, head)
 }
 
 type checkOut struct {
@@ -537,6 +560,11 @@ func (f *Fleet) Item(c fiber.Ctx) error {
 					detail.VerdictStale = true
 					detail.VerdictSHA = verdicts[0].SHA
 					detail.HeadSHA = head
+					// The drawer's row carries the same state and shas the
+					// board's row does: the spec names both surfaces.
+					detail.Item.State = "stale"
+					detail.Item.Reason = staleVerdictReason(verdicts[0].Decision, verdicts[0].SHA, head)
+					detail.Item.VerdictSHA, detail.Item.HeadSHA = verdicts[0].SHA, head
 				}
 			}
 		}

@@ -83,10 +83,16 @@ func TestBoardShowsStaleVerdict(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	var board struct {
 		Projects []struct {
+			Counts struct {
+				Parked int `json:"parked"`
+				Stale  int `json:"stale"`
+			} `json:"counts"`
 			Items []struct {
-				Number int    `json:"number"`
-				State  string `json:"state"`
-				Reason string `json:"reason"`
+				Number     int    `json:"number"`
+				State      string `json:"state"`
+				Reason     string `json:"reason"`
+				VerdictSHA string `json:"verdict_sha"`
+				HeadSHA    string `json:"head_sha"`
 			} `json:"items"`
 		} `json:"projects"`
 	}
@@ -97,11 +103,23 @@ func TestBoardShowsStaleVerdict(t *testing.T) {
 		t.Fatalf("board = %s, want one item", body)
 	}
 	item := board.Projects[0].Items[0]
-	if item.State != "parked" || !strings.Contains(item.Reason, "verdict stale") {
-		t.Fatalf("item = %+v, want parked/verdict stale", item)
+	// console-ui: a stale verdict is not parked. Parked means nobody is
+	// needed; a stale verdict is a review waiting for the reviewer, so the row
+	// names its own state and both commits.
+	if item.State != "stale" {
+		t.Fatalf("item.state = %q, want stale: a stale verdict must not be drawn as parked", item.State)
+	}
+	if item.VerdictSHA != "oldsha1" || item.HeadSHA != "newsha1" {
+		t.Fatalf("item = %+v, want both shas on the row", item)
+	}
+	if !strings.Contains(item.Reason, "verdict stale") {
+		t.Fatalf("reason = %q, want verdict stale", item.Reason)
 	}
 	if !strings.Contains(item.Reason, "oldsha1") || !strings.Contains(item.Reason, "newsha1") {
 		t.Fatalf("reason = %q, want both shas", item.Reason)
+	}
+	if counts := board.Projects[0].Counts; counts.Parked != 0 || counts.Stale != 1 {
+		t.Fatalf("counts = %+v, want the stale row counted as stale, not parked", counts)
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/items/7?project=app", nil)
@@ -115,11 +133,28 @@ func TestBoardShowsStaleVerdict(t *testing.T) {
 		VerdictStale bool   `json:"verdict_stale"`
 		VerdictSHA   string `json:"verdict_sha"`
 		HeadSHA      string `json:"head_sha"`
+		// The drawer draws item.state and item.reason, so both must name the
+		// stale verdict rather than the raw forge state.
+		Item struct {
+			State      string `json:"state"`
+			Reason     string `json:"reason"`
+			VerdictSHA string `json:"verdict_sha"`
+			HeadSHA    string `json:"head_sha"`
+		} `json:"item"`
 	}
 	if err := json.Unmarshal(body, &detail); err != nil {
 		t.Fatalf("decode item %s: %v", body, err)
 	}
 	if !detail.VerdictStale || detail.VerdictSHA != "oldsha1" || detail.HeadSHA != "newsha1" {
 		t.Fatalf("detail = %+v, want stale oldsha1 -> newsha1", detail)
+	}
+	if detail.Item.State != "stale" {
+		t.Fatalf("detail.item.state = %q, want stale", detail.Item.State)
+	}
+	if detail.Item.VerdictSHA != "oldsha1" || detail.Item.HeadSHA != "newsha1" {
+		t.Fatalf("detail.item = %+v, want both shas", detail.Item)
+	}
+	if !strings.Contains(detail.Item.Reason, "oldsha1") || !strings.Contains(detail.Item.Reason, "newsha1") {
+		t.Fatalf("detail.item.reason = %q, want both shas", detail.Item.Reason)
 	}
 }

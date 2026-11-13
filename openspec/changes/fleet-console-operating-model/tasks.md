@@ -12,7 +12,7 @@ Ordered so each task leaves the tree green. `#n` is the GitHub issue that carrie
 
 - [ ] 2.1 `decide` compares the newest verdict sha with the head and emits `verdict stale` with both shas
 - [ ] 2.2 The act loop raises one report row per (item, head) to the reviewer of the building rig
-- [ ] 2.3 Board and drawer render `verdict stale`; `parked` keeps its meaning
+- [x] 2.3 Board and drawer render `verdict stale`; `parked` keeps its meaning
 - [ ] 2.4 Tests: moved head raises once; a second tick raises nothing; an accept on the new head clears it
 
 ## 3. Disabled projects (D3, #46)

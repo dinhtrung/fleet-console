@@ -173,7 +173,18 @@ export function TaskDrawerScreen() {
     );
   }
 
-  const { item, project, dispatch, brief, change_request: change, verdicts, events } = data;
+  const {
+    item,
+    project,
+    dispatch,
+    brief,
+    change_request: change,
+    verdicts,
+    events,
+    verdict_stale: stale,
+    verdict_sha: staleSHA,
+    head_sha: headSHA,
+  } = data;
   const latest = verdicts && verdicts.length > 0 ? verdicts[0] : null;
 
   return (
@@ -232,6 +243,20 @@ export function TaskDrawerScreen() {
         <Panel className="lg:col-span-2">
           <PanelHead title="Verdict" description="The newest verdict is the one that gates a merge." />
           <div className="px-3 py-2">
+            {stale ? (
+              // console-ui: the drawer names the stale verdict, both commits and the fact that
+              // the review is pending — a stale verdict is not a parked item.
+              <div className="mb-2 border border-rule-strong px-2 py-1.5">
+                <p className="flex flex-wrap items-center gap-2 text-[0.6875rem]">
+                  <StatusMagnet status="stale" />
+                  <span className="font-semibold text-ink">Review pending</span>
+                </p>
+                <p className="mt-1 text-[0.6875rem] text-ink">
+                  the verdict names <span className="font-mono">{staleSHA}</span> but the head is{" "}
+                  <span className="font-mono">{headSHA}</span>; the reviewer must look again.
+                </p>
+              </div>
+            ) : null}
             {latest ? (
               <div className="grid grid-cols-[8rem_1fr] gap-y-1 text-[0.6875rem]">
                 <span className="label text-ink-muted">Decision</span>

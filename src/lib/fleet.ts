@@ -9,6 +9,10 @@ export interface BoardItem {
   reason: string;
   url?: string;
   labels: string[];
+  /** Both commits a stale verdict names (console-ui): the judged sha and the head the review
+   *  must look at. Absent on every other row. */
+  verdict_sha?: string;
+  head_sha?: string;
 }
 
 export interface BoardCounts {
@@ -17,6 +21,9 @@ export interface BoardCounts {
   waiting: number;
   parked: number;
   blocked: number;
+  /** Stale verdicts are their own count: parked means nobody is needed, and a stale verdict is
+   *  a review waiting for the reviewer. */
+  stale: number;
 }
 
 /** One unanswered operator question (#377): a note the merge gate could not read as a verdict. The
@@ -155,6 +162,11 @@ export interface ItemDetail {
   change_request?: { number: number; checks: Check[] };
   verdicts: Verdict[] | null;
   events: EventRow[] | null;
+  /** A stale verdict (console-ui): the newest verdict names a sha other than the head. The
+   *  drawer names both commits and says the review is pending. */
+  verdict_stale?: boolean;
+  verdict_sha?: string;
+  head_sha?: string;
 }
 
 /** Project registry. The shapes are the config file's tags (`design.md` §5), so the dialog and the

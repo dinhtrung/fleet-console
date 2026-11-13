@@ -24,6 +24,9 @@ const STATUS: Record<string, { code: string; word: string; className: string }> 
   gradual: { code: "GRD", word: "Gradual", className: "bg-selected text-ink-muted" },
   building: { code: "BLD", word: "Building", className: "bg-plum text-on-plum" },
   review: { code: "REV", word: "Review", className: "bg-selected text-ink" },
+  // A stale verdict needs the reviewer, so it wears attention rather than the review tint;
+  // the word stays its own so the row never reads as parked (console-ui).
+  stale: { code: "STL", word: "Stale", className: "bg-attention text-on-attention" },
   waiting: { code: "WAI", word: "Waiting", className: "border border-rule-strong text-ink-muted" },
   parked: { code: "PRK", word: "Parked", className: "bg-attention text-on-attention" },
   paused: { code: "PSE", word: "Paused", className: "bg-attention text-on-attention" },
