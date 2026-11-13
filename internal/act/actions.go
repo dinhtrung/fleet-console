@@ -108,6 +108,12 @@ Base sha: %s
 
 ## Publish
 
+The merge gate finds the item only through "Closes #<item>" in the pull request's body: a body that only references
+the item (Refs, Part of, a title mention) is invisible to it, and that change request is never merged, undrafted or
+recorded. If this attempt cannot finish the item, do not open a change request that only references it — hand off
+with the candidate sha, the commands and exactly what remains, so the item can be split and each part gets its own
+item and its own "Closes #<sub>".
+
 Commit on this branch with explicit paths. Push the branch and open one DRAFT pull request whose body carries
 "Closes #%d". Do not merge. Hand off with the candidate sha, the commands you ran and what you could not check.
 
