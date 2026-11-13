@@ -28,6 +28,13 @@ const (
 	RenudgeAfter = 15 * time.Minute
 	// RenudgeCooldown is the shortest gap between two nudges of one row.
 	RenudgeCooldown = 30 * time.Minute
+	// StaleEscalateAfter is how long a live re-review question waits before the
+	// stalled review asks a human once (stale-verdict-visibility, design D4).
+	// A 15-minute first nudge and a 30-minute cooldown mean the second nudge
+	// is the honest "still nothing" moment. It is a constant, not a
+	// per-project knob — one box, one team size, and a knob here would be
+	// tuned by whoever is paged.
+	StaleEscalateAfter = 45 * time.Minute
 	// MaxAttempts is the point at which a stalled item stops being retried.
 	MaxAttempts = 3
 )
@@ -328,6 +335,18 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 			detail = fmt.Sprintf("cr=%d head=%s", cr.Number, cr.HeadSHA)
 		case cr.HeadSHA != "" && !strings.EqualFold(verdict.SHA, cr.HeadSHA):
 			if askedForHead(s.Rows, item.Number, cr.HeadSHA) {
+				// The re-review question stands. When that row is the
+				// decision.stale question and it has outlived its nudges, the
+				// seat has stopped answering: ask the human once for this
+				// head (stale-verdict-visibility, design D4). The operator
+				// row this raises is the plan's record — later ticks see it
+				// and stay quiet — and act's event ledger (head=<sha>;) is
+				// the durable backstop, so a repeat lands as NoOp, never a
+				// second question. The reviewer row keeps its own nudges.
+				if stall := stalledReview(s, key, item, cr, now); stall != nil {
+					seen[item.Number] = true
+					add(*stall)
+				}
 				continue
 			}
 			// D2: a verdict on a moved head asks for a re-review of the new head.
@@ -545,6 +564,87 @@ func askedForHead(rows []Row, item int, head string) bool {
 		return true // this head's question stands
 	}
 	return !question // a question for another head: ask again; seat work only: stay quiet
+}
+
+// stallMarker is the one phrase the stall question carries and no other
+// raised question does: the plan reads it back to know this (item, head) has
+// already been escalated. The question a raise leaves behind is a live row in
+// the snapshot, so the phrase is both the operator's read and the dedupe.
+const stallMarker = "review stalled"
+
+// staleReviewRow finds the live re-review question for (item, head): the
+// decision.stale row RaiseDecision posts, whose text names the stale verdict
+// and the head it asks about. It is the row a stall escalates; a row for the
+// old head does not match a moved one, so a new head earns its own question.
+func staleReviewRow(rows []Row, item int, head string) *Row {
+	for index := range rows {
+		row := rows[index]
+		if !rowLive(row) || !rowNamesItem(row, item) {
+			continue
+		}
+		text := rowText(row)
+		if head != "" && strings.Contains(text, "verdict stale") && strings.Contains(text, head) {
+			return &rows[index]
+		}
+	}
+	return nil
+}
+
+// stalledReview is the stall intent for a re-review that outlived its nudges,
+// or nil when there is nothing to escalate: the row is not the stale
+// question, has never been nudged, is younger than the threshold, or the
+// same head was already escalated (the standing operator row is the record).
+func stalledReview(s Snapshot, key string, item Item, cr CRState, now time.Time) *Intent {
+	row := staleReviewRow(s.Rows, item.Number, cr.HeadSHA)
+	if row == nil || row.CreatedAt.IsZero() || row.LastNudgeAt.IsZero() {
+		return nil
+	}
+	if now.Sub(row.CreatedAt) <= StaleEscalateAfter {
+		return nil
+	}
+	if stallAskedForHead(s.Rows, item.Number, cr.HeadSHA) {
+		return nil
+	}
+	age := int(now.Sub(row.CreatedAt).Minutes())
+	nudges := nudgeCount(*row, now)
+	text := fmt.Sprintf("%s #%d: %s - the re-review of change request #%d's head %s has waited %dm with %d unanswered nudges.",
+		key, item.Number, stallMarker, cr.Number, cr.HeadSHA, age, nudges)
+	return &Intent{
+		Kind: IntentRaiseDecision, Project: key, Item: item.Number, Text: text,
+		Audience: AudienceOperator, ChangeRequest: cr.Number, HeadSHA: cr.HeadSHA,
+		Event: Event{Actor: "decide", Kind: "decision.stall", Subject: fmt.Sprintf("#%d", item.Number),
+			Detail: fmt.Sprintf("head=%s; row %s; age=%dm; nudges=%d", cr.HeadSHA, row.QItemID, age, nudges)},
+	}
+}
+
+// stallAskedForHead reports whether the operator question for this stalled
+// (item, head) is already standing: the row the last escalation posted, whose
+// brief names the stall and the head. One question per head; a new head is a
+// new question, and the same head after the operator answered is not re-asked
+// at this level — the reviewer row keeps its own nudges.
+func stallAskedForHead(rows []Row, item int, head string) bool {
+	for _, row := range rows {
+		if !rowLive(row) || !rowNamesItem(row, item) {
+			continue
+		}
+		text := rowText(row)
+		if strings.Contains(text, stallMarker) && head != "" && strings.Contains(text, head) {
+			return true
+		}
+	}
+	return false
+}
+
+// nudgeCount is how many nudges the re-nudge schedule has sent by now: the
+// first at RenudgeAfter, then one per RenudgeCooldown. The snapshot carries
+// only the last nudge time, not a tally, so the count is the schedule's
+// promise for the row's age — at the 45-minute threshold that is two.
+func nudgeCount(row Row, now time.Time) int {
+	age := now.Sub(row.CreatedAt)
+	if age <= RenudgeAfter {
+		return 1
+	}
+	return 1 + int((age-RenudgeAfter)/RenudgeCooldown)
 }
 
 func endedDispatchFor(dispatches []DispatchState, item int) bool {
