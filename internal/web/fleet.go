@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dinhtrung/fleet-console/internal/forge"
+	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/gofiber/fiber/v3"
@@ -28,6 +29,10 @@ type Fleet struct {
 	// owns: a human approve/reject posts a note on the change request. Every
 	// other write stays in the act loop.
 	ForgeFor func(ctx context.Context, project store.ProjectRow) (forge.Forge, error)
+	// Waker is the mirror loop's wake channel. A board verdict changes what the
+	// next tick would read, so it asks for that tick now instead of waiting out
+	// the quiet backoff. Nil means no loop runs in this process.
+	Waker *mirror.Waker
 }
 
 type boardItem struct {

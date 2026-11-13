@@ -18,6 +18,7 @@ import (
 	"github.com/dinhtrung/fleet-console/internal/config"
 	"github.com/dinhtrung/fleet-console/internal/configfile"
 	"github.com/dinhtrung/fleet-console/internal/forge"
+	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/registry"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/gofiber/fiber/v3"
@@ -44,11 +45,12 @@ projects:
 `
 
 type projectsHarness struct {
-	app  *fiber.App
-	path string
-	st   *store.Store
-	orig []byte
-	seq  int
+	app   *fiber.App
+	path  string
+	st    *store.Store
+	orig  []byte
+	seq   int
+	waker *mirror.Waker
 }
 
 func newProjectsHarness(t *testing.T, write func(string, configfile.Project, *[32]byte) (configfile.Outcome, error)) *projectsHarness {
@@ -67,7 +69,8 @@ func newProjectsHarnessWithRemove(t *testing.T, write func(string, configfile.Pr
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	app, err := New(Config{Token: testToken, Store: st, ConfigPath: path, WriteProject: write, UpdateProject: write, RemoveProject: remove})
+	waker := mirror.NewWaker()
+	app, err := New(Config{Token: testToken, Store: st, ConfigPath: path, WriteProject: write, UpdateProject: write, RemoveProject: remove, Waker: waker})
 	if err != nil {
 		t.Fatalf("new app: %v", err)
 	}
@@ -75,7 +78,7 @@ func newProjectsHarnessWithRemove(t *testing.T, write func(string, configfile.Pr
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
-	return &projectsHarness{app: app, path: path, st: st, orig: original}
+	return &projectsHarness{app: app, path: path, st: st, orig: original, waker: waker}
 }
 
 func (h *projectsHarness) bytes(t *testing.T) []byte {
@@ -1373,4 +1376,39 @@ func TestProjectEditRefusesForgeHostChangeUnderLiveDispatch(t *testing.T) {
 	if row, _ := h.st.ProjectByKey(context.Background(), "hosted"); row == nil {
 		t.Fatalf("store row = %+v, want it untouched", row)
 	}
+}
+
+// TestProjectWritesWakeTheLoop: every board write that changes what the next
+// tick would see asks the mirror loop for a tick now. The loop's quiet backoff
+// reaches idle_poll_max (ten minutes by default), so without the wake a project
+// created on the board stays invisible until the next scheduled poll, and the
+// operator reads the silence as a dead daemon.
+func TestProjectWritesWakeTheLoop(t *testing.T) {
+	h := newProjectsHarness(t, nil)
+	expectWake := func(step string) {
+		t.Helper()
+		select {
+		case <-h.waker.Channel():
+		default:
+			t.Fatalf("%s did not wake the mirror loop: the change would wait out idle_poll_max", step)
+		}
+	}
+
+	resp, body := h.post(t, validProject)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201 (%s)", resp.StatusCode, body)
+	}
+	expectWake("create")
+
+	resp, body = h.do(t, http.MethodPut, "/api/projects/existing-1", editBody("existing-1", func(r *ProjectRequest) { r.Name = "Renamed one" }))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit status = %d, want 200 (%s)", resp.StatusCode, body)
+	}
+	expectWake("edit")
+
+	resp, body = h.do(t, http.MethodDelete, "/api/projects/existing-2?confirm=existing-2", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200 (%s)", resp.StatusCode, body)
+	}
+	expectWake("delete")
 }
