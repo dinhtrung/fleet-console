@@ -24,6 +24,10 @@ type ProjectRow struct {
 	OnHold         bool
 	GateCmd        string
 	LabelsJSON     string
+	// RelayMode and RelaySeat are the row's half of the verdict relay (#375).
+	// Empty is off; the config block is the resolver's fallback.
+	RelayMode string
+	RelaySeat string
 }
 
 // ItemRow is one mirrored forge item.
@@ -87,7 +91,7 @@ type EventRow struct {
 func (s *Store) Projects(ctx context.Context) ([]ProjectRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, key, name, forge_kind, forge_project, default_branch, rig, rigs_json, rig_template,
-		       concurrency_cap, enabled, onhold, COALESCE(gate_cmd, ''), labels_json
+		       concurrency_cap, enabled, onhold, COALESCE(gate_cmd, ''), labels_json, relay_mode, relay_seat
 		FROM project ORDER BY key`)
 	if err != nil {
 		return nil, fmt.Errorf("store: projects: %w", err)
@@ -99,7 +103,8 @@ func (s *Store) Projects(ctx context.Context) ([]ProjectRow, error) {
 		var enabled, onhold int
 		var rigsJSON string
 		if err := rows.Scan(&p.ID, &p.Key, &p.Name, &p.ForgeKind, &p.ForgeProject, &p.DefaultBranch, &p.Rig,
-			&rigsJSON, &p.RigTemplate, &p.ConcurrencyCap, &enabled, &onhold, &p.GateCmd, &p.LabelsJSON); err != nil {
+			&rigsJSON, &p.RigTemplate, &p.ConcurrencyCap, &enabled, &onhold, &p.GateCmd, &p.LabelsJSON,
+			&p.RelayMode, &p.RelaySeat); err != nil {
 			return nil, fmt.Errorf("store: projects: %w", err)
 		}
 		p.Rigs = decodeRigs(rigsJSON, p.Rig)

@@ -23,6 +23,10 @@ type UpsertInput struct {
 	RepoPath     string
 	WorktreeRoot string
 	SyncOnHold   bool
+	// SyncRelay writes the config block's verdict relay into the row. The relay
+	// is DB-owned like onhold (#375): a project whose config block is absent
+	// keeps whatever the board set, so a boot apply never erases it.
+	SyncRelay bool
 }
 
 // UpsertProject creates or refreshes a project and its repo. onhold is DB-owned:
@@ -61,6 +65,11 @@ func (s *Store) UpsertProject(ctx context.Context, in UpsertInput) (UpsertResult
 		onhold = in.Project.OnHold
 		changed = changed || onhold != existing.OnHold
 	}
+	relayMode, relaySeat := existing.RelayMode, existing.RelaySeat
+	if in.SyncRelay {
+		relayMode, relaySeat = in.Project.RelayMode, in.Project.RelaySeat
+		changed = changed || relayMode != existing.RelayMode || relaySeat != existing.RelaySeat
+	}
 	if existing.Name != in.Project.Name ||
 		existing.ForgeKind != in.Project.ForgeKind ||
 		existing.ForgeProject != in.Project.ForgeProject ||
@@ -91,11 +100,12 @@ func (s *Store) UpsertProject(ctx context.Context, in UpsertInput) (UpsertResult
 	}
 	_, err = s.db.ExecContext(ctx, `
 		UPDATE project SET name = ?, forge_kind = ?, forge_project = ?, default_branch = ?,
-		       rig = ?, rigs_json = ?, rig_template = ?, concurrency_cap = ?, enabled = 1, onhold = ?, gate_cmd = ?, labels_json = ?
+		       rig = ?, rigs_json = ?, rig_template = ?, concurrency_cap = ?, enabled = 1, onhold = ?, gate_cmd = ?, labels_json = ?,
+		       relay_mode = ?, relay_seat = ?
 		WHERE id = ?`,
 		in.Project.Name, in.Project.ForgeKind, in.Project.ForgeProject, in.Project.DefaultBranch,
 		firstRig, rigsJSON, in.Project.RigTemplate, in.Project.ConcurrencyCap, boolInt(onhold),
-		nullString(in.Project.GateCmd), in.LabelsJSON, existing.ID)
+		nullString(in.Project.GateCmd), in.LabelsJSON, relayMode, relaySeat, existing.ID)
 	if err != nil {
 		return "", 0, fmt.Errorf("store: upsert project: %w", err)
 	}
@@ -108,10 +118,11 @@ func (s *Store) projectByKey(ctx context.Context, key string) (*ProjectRow, erro
 	var rigsJSON string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, key, name, forge_kind, forge_project, default_branch, rig, rigs_json, rig_template,
-		       concurrency_cap, enabled, onhold, COALESCE(gate_cmd, ''), labels_json
+		       concurrency_cap, enabled, onhold, COALESCE(gate_cmd, ''), labels_json, relay_mode, relay_seat
 		FROM project WHERE key = ?`, key).
 		Scan(&row.ID, &row.Key, &row.Name, &row.ForgeKind, &row.ForgeProject, &row.DefaultBranch,
-			&row.Rig, &rigsJSON, &row.RigTemplate, &row.ConcurrencyCap, &enabled, &onhold, &row.GateCmd, &row.LabelsJSON)
+			&row.Rig, &rigsJSON, &row.RigTemplate, &row.ConcurrencyCap, &enabled, &onhold, &row.GateCmd, &row.LabelsJSON,
+			&row.RelayMode, &row.RelaySeat)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -144,10 +155,11 @@ func (s *Store) createProjectWithLabels(ctx context.Context, in ProjectInput, la
 	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO project (key, name, forge_kind, forge_project, default_branch, rig, rigs_json, rig_template,
-		                     concurrency_cap, enabled, onhold, gate_cmd, labels_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                     concurrency_cap, enabled, onhold, gate_cmd, labels_json, relay_mode, relay_seat)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		in.Key, in.Name, in.ForgeKind, in.ForgeProject, in.DefaultBranch, firstRig, rigsJSON, in.RigTemplate,
-		in.ConcurrencyCap, boolInt(true), boolInt(in.OnHold), nullString(in.GateCmd), labelsJSON)
+		in.ConcurrencyCap, boolInt(true), boolInt(in.OnHold), nullString(in.GateCmd), labelsJSON,
+		in.RelayMode, in.RelaySeat)
 	if err != nil {
 		return 0, fmt.Errorf("store: create project: %w", err)
 	}

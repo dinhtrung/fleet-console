@@ -73,15 +73,23 @@ func ApplyOne(ctx context.Context, db *store.Store, project config.Project, sync
 		labels = encoded
 	}
 	onhold := project.OnHold != nil && *project.OnHold
+	// The verdict relay is DB-owned the way onhold is (#375): the row is the
+	// resolver's first answer, so a boot apply must not erase what the board
+	// set. Only a config block writes it — absent means "leave the row alone".
+	relayMode, relaySeat, syncRelay := "", "", false
+	if project.VerdictRelay != nil {
+		relayMode, relaySeat, syncRelay = project.VerdictRelay.Mode, project.VerdictRelay.Seat, true
+	}
 	result, _, err := db.UpsertProject(ctx, store.UpsertInput{
 		Project: store.ProjectInput{
 			Key: project.Key, Name: name, ForgeKind: project.Forge, ForgeProject: project.Repo,
 			DefaultBranch: project.DefaultBranch, Rig: project.Rig, Rigs: project.Rigs.Names(), RigTiers: rigTiers(project.Rigs), RigTemplate: project.RigTemplate,
 			ConcurrencyCap: project.ConcurrencyCap, Enabled: true, OnHold: onhold, GateCmd: project.GateCmd,
+			RelayMode: relayMode, RelaySeat: relaySeat,
 		},
 		LabelsJSON: string(labels), RepoKey: "main",
 		RepoPath: project.Paths.Main, WorktreeRoot: project.Paths.Worktrees,
-		SyncOnHold: syncOnHold,
+		SyncOnHold: syncOnHold, SyncRelay: syncRelay,
 	})
 	return result, err
 }

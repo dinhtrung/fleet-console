@@ -715,12 +715,26 @@ func (e *Effective) Print() ([]byte, error) {
 	return yaml.Marshal(out)
 }
 
-// RelayFor resolves a project's verdict_relay block (verdict-relay, design D8)
-// into the (mode, seat) pair. A project with no block, or a block that names
-// no mode, is ("", "") — off. This is the one lookup path: the decide arm
-// (T2) and the act raise (T3) both call it, so the running process answers
-// this pair and no other.
-func (e *Effective) RelayFor(projectKey string) (mode, seat string) {
+// RelayRow is the store's half of a project's verdict relay (#375). The zero
+// value is "the row names nothing", which is what a project without a database
+// row (or before the migration backfilled it) resolves with.
+type RelayRow struct {
+	Mode string
+	Seat string
+}
+
+// RelayFor resolves a project's verdict relay (verdict-relay, design D8;
+// #375) into the (mode, seat) pair. The row answers first — the board writes
+// there, and the tick reads rows — and the config block is the fallback, so a
+// project that only lives in the file keeps working. A project that names no
+// mode in either place is ("", "") — off. This is the one lookup path: the
+// decide arm (T2) and the act raise (T3) both call it, so the running process
+// answers this pair and no other.
+func (e *Effective) RelayFor(projectKey string, row RelayRow) (mode, seat string) {
+	row.Mode = strings.TrimSpace(row.Mode)
+	if row.Mode != "" {
+		return row.Mode, strings.TrimSpace(row.Seat)
+	}
 	project := findProjectByKey(e.Projects, projectKey)
 	if project == nil || project.VerdictRelay == nil || project.VerdictRelay.Mode == "" {
 		return "", ""

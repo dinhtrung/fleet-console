@@ -270,6 +270,10 @@ type ProjectInput struct {
 	Enabled        bool
 	OnHold         bool
 	GateCmd        string
+	// RelayMode and RelaySeat are the verdict relay (#375). Only UpsertProject's
+	// SyncRelay path writes them; CreateProject writes whatever the input names.
+	RelayMode string
+	RelaySeat string
 }
 
 // CreateProject inserts a project row and returns its id.
@@ -291,10 +295,11 @@ func (s *Store) CreateProject(ctx context.Context, in ProjectInput) (int64, erro
 	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO project (key, name, forge_kind, forge_project, default_branch, rig, rigs_json, rig_template,
-		                     concurrency_cap, enabled, onhold, gate_cmd)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                     concurrency_cap, enabled, onhold, gate_cmd, relay_mode, relay_seat)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		in.Key, in.Name, in.ForgeKind, in.ForgeProject, in.DefaultBranch, firstRig, rigsJSON, in.RigTemplate,
-		in.ConcurrencyCap, boolInt(in.Enabled), boolInt(in.OnHold), nullString(in.GateCmd))
+		in.ConcurrencyCap, boolInt(in.Enabled), boolInt(in.OnHold), nullString(in.GateCmd),
+		in.RelayMode, in.RelaySeat)
 	if err != nil {
 		return 0, fmt.Errorf("store: create project: %w", err)
 	}

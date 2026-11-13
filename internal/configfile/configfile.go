@@ -623,8 +623,21 @@ type Project struct {
 	// config.Load derives it from the first rig, and a written `culture_file: ""`
 	// would be a different (invalid) statement than "unset".
 	CultureFile string `yaml:"culture_file,omitempty"`
-	Paths       struct {
+	// VerdictRelay is the verdict relay block (#375). A whole-definition write
+	// must carry it, or a board edit would silently drop a block the operator
+	// set — the API writes the same pair it reads.
+	VerdictRelay *VerdictRelay `yaml:"verdict_relay,omitempty"`
+	Paths        struct {
 		Main      string `yaml:"main"`
 		Worktrees string `yaml:"worktrees"`
 	} `yaml:"paths"`
+}
+
+// VerdictRelay is the file's verdict_relay block shape. The rules (two modes,
+// seat required with a mode) are config.ValidateProject's, applied before any
+// write. Both keys omit when empty, so an explicit off is the empty block
+// `verdict_relay: {}` — distinct from no block, which leaves the row alone.
+type VerdictRelay struct {
+	Mode string `yaml:"mode,omitempty"`
+	Seat string `yaml:"seat,omitempty"`
 }

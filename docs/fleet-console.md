@@ -198,6 +198,13 @@ The two modes differ in what each one may do:
   a decision each project makes for itself, never a default. The relay row's destination is the
   configured seat in both modes; only the questions switch.
 
+The pair lives on the project row as well as in the file. The board's create and edit carry
+`relay_mode` and `relay_seat` and write both layers, so a project that exists only as a row can
+still set its relay. The resolver answers from the row first and the file block second, which is
+what lets the two layers meet: an *absent* block leaves the row alone — a boot apply from a
+hand-edited file never erases what the board set — while an *empty* block (`verdict_relay: {}`)
+is an explicit off and clears it.
+
 The note the relay posts carries a **`via:` marker**: `ACCEPT <sha>` on the first line,
 `via: <seat>` on the second. When the gate captures a verdict whose second non-empty line is
 exactly `via: <seat>`, the `verdict.capture` audit event's detail gains `; via=<seat>` — the
