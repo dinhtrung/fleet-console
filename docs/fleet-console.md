@@ -87,6 +87,32 @@ brief already emit the full head sha, so the abbreviated form is the exception, 
 documented path. Nothing is written to the store for a refusal, so the next tick retries and the
 note stays until it is answered.
 
+### When the app asks a human
+
+The operator question — *this change request has no verdict; approve or reject it* — is not
+raised on every quiet tick of an unreviewed head. The plan asks only when no row is working
+the item, and two facts keep it quiet:
+
+- **Work in flight.** A live builder or reviewer row for the item suppresses the question,
+  whatever sha the row's text carries: the seat holding the row is the work itself, so
+  asking a human to judge a head mid-review would only page someone for the same thing
+  twice. A row addressed to a human seat never counts as work — it is a question standing,
+  not a seat at work, so the operator's own pending question cannot silence the next one.
+- **A question already standing for that head.** A live question row naming the item and
+  the head is the same question still unanswered; the plan stays quiet while it stands. A
+  question that names a different head is not standing in the way — a moved head asks again,
+  once.
+
+**What "names the head" means in row text.** The same rule the note parser applies to
+verdicts applies to row bodies: an abbreviation of at least 7 hex characters that is a
+prefix of the head counts as naming it. Both sides call the one matcher, `forge.SameSHA`,
+so a question body saying `head cca2508c` stands for the full 40-hex sha the record
+carries, and no other spelling of "names" exists in the code.
+
+**A stale verdict breaks the silence — to the reviewer.** When the head has moved on from
+the newest verdict, the plan raises `decision.stale` and asks the *reviewer* to re-review
+the new head even while another row is live, because a re-review is a question, not work.
+
 ### When a review is not a verdict
 
 A reviewer can finish a review without producing anything the grammar above can read: prose that
