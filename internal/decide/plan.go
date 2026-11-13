@@ -33,6 +33,8 @@ const (
 	RenudgeCooldown = 30 * time.Minute
 	// StaleEscalateAfter is how long a live re-review question waits before the
 	// stalled review asks a human once (stale-verdict-visibility, design D4).
+	// The malformed-verdict ask shares the same deadline (epic #345, design
+	// D5): past it the operator is asked the same once, for the same reason.
 	// A 15-minute first nudge and a 30-minute cooldown mean the second nudge
 	// is the honest "still nothing" moment. It is a constant, not a
 	// per-project knob — one box, one team size, and a knob here would be
@@ -385,8 +387,17 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 			// head makes this ask the only one the new head would ever get.
 			// Work in flight does not silence the reviewer's ask — the stale
 			// re-review already made that choice, for the same reason.
+			// When the ask has outlived its nudges, the escalation runs
+			// first: the operator's stall row is itself a standing question
+			// for this head, so a check behind questionStanding would never
+			// be reached (epic #345 T3, design D5).
 			malformed, hasMalformed := s.MalformedVerdicts[item.Number]
 			if hasMalformed && cr.HeadSHA != "" && sameSHA(malformed.Head, cr.HeadSHA) {
+				if stall := stalledMalformed(s, key, item, cr, now); stall != nil {
+					seen[item.Number] = true
+					add(*stall)
+					continue
+				}
 				if questionStanding(s.Rows, item.Number, cr.HeadSHA) {
 					continue
 				}
@@ -689,6 +700,13 @@ func questionStanding(rows []Row, item int, head string) bool {
 // the snapshot, so the phrase is both the operator's read and the dedupe.
 const stallMarker = "review stalled"
 
+// malformedStallMarker is the one phrase the malformed escalation carries and
+// no other raised question does. It is deliberately distinct from
+// stallMarker: both human asks share a destination and both quote the
+// reviewer literal, so each must read back only its own kind (epic #345,
+// design D5).
+const malformedStallMarker = "malformed verdict stalled"
+
 // staleReviewRow finds the live re-review question for (item, head): the
 // decision.stale row RaiseDecision posts, whose text names the stale verdict
 // and the head it asks about. It is the row a stall escalates; a row for the
@@ -746,6 +764,85 @@ func stallAskedForHead(rows []Row, item int, head string) bool {
 		}
 		text := rowText(row)
 		if strings.Contains(text, stallMarker) && rowNamesHead(row, head) {
+			return true
+		}
+	}
+	return false
+}
+
+// malformedReviewRow finds the live reviewer row the malformed ask raised.
+// Unlike staleReviewRow it does not require the row to name the item: the
+// ask's text is the §0 literal, which carries the note id and the head but
+// no item token — and the row's summary is that same text truncated — so the
+// head is what ties the row to this change request (one head, one change
+// request, one reviewer question). Human seats are excluded: the operator's
+// own escalation quotes the same literal.
+func malformedReviewRow(rows []Row, head string) *Row {
+	if head == "" {
+		return nil
+	}
+	for index := range rows {
+		row := rows[index]
+		if !rowLive(row) || rig.IsHumanSeat(row.Destination) {
+			continue
+		}
+		text := rowText(row)
+		if strings.Contains(text, "The merge gate reads one line") && rowNamesHead(row, head) {
+			return &rows[index]
+		}
+	}
+	return nil
+}
+
+// stalledMalformed is the malformed ask's escalation (epic #345 T3, design
+// D5): the reviewer's literal has stood past StaleEscalateAfter with its
+// nudges unanswered, so the operator is asked once for this (item, head) —
+// naming the note, the line as written, the head, the literal repair, and
+// both lawful moves. The reviewer row is not re-targeted: it stays open, and
+// the reviewer can still fix it while the human reads. The guards mirror
+// stalledReview: no row, no nudge ever sent, inside the threshold, or the
+// same head already escalated — all quiet.
+func stalledMalformed(s Snapshot, key string, item Item, cr CRState, now time.Time) *Intent {
+	malformed, ok := s.MalformedVerdicts[item.Number]
+	if !ok {
+		return nil
+	}
+	row := malformedReviewRow(s.Rows, cr.HeadSHA)
+	if row == nil || row.CreatedAt.IsZero() || row.LastNudgeAt.IsZero() {
+		return nil
+	}
+	if now.Sub(row.CreatedAt) <= StaleEscalateAfter {
+		return nil
+	}
+	if malformedStallAskedForHead(s.Rows, item.Number, cr.HeadSHA) {
+		return nil
+	}
+	age := int(now.Sub(row.CreatedAt).Minutes())
+	nudges := nudgeCount(*row, now)
+	literal := fmt.Sprintf("The merge gate reads one line: ACCEPT %s or REJECT %s. Your note %s's first line was %q, which names no commit. Post a new comment whose first line is:\n\nACCEPT %s",
+		cr.HeadSHA, cr.HeadSHA, malformed.NoteID, malformed.Line, cr.HeadSHA)
+	text := fmt.Sprintf("%s #%d: %s - the repair of note %s at change request #%d's head %s has waited %dm with %d unanswered nudges.\n\n%s\n\nYour two lawful moves: cast the verdict on the item drawer (POST /api/items/%d/verdict, which writes ACCEPT %s at the head), or instruct the reviewer to post the line. A hand merge is not one of the moves.",
+		key, item.Number, malformedStallMarker, malformed.NoteID, cr.Number, cr.HeadSHA, age, nudges,
+		literal, item.Number, cr.HeadSHA)
+	return &Intent{
+		Kind: IntentRaiseDecision, Project: key, Item: item.Number, Text: text,
+		Audience: AudienceOperator, ChangeRequest: cr.Number, HeadSHA: cr.HeadSHA,
+		Event: Event{Actor: "decide", Kind: "decision.stall", Subject: fmt.Sprintf("#%d", item.Number),
+			Detail: fmt.Sprintf("head=%s; note=%s; row %s; age=%dm; nudges=%d", cr.HeadSHA, malformed.NoteID, row.QItemID, age, nudges)},
+	}
+}
+
+// malformedStallAskedForHead reports whether the operator question for this
+// stalled malformed (item, head) is already standing — the row the last
+// escalation posted. One question per head; after the operator answers, the
+// ask is not repeated at this level, and act's ledger is the durable backstop.
+func malformedStallAskedForHead(rows []Row, item int, head string) bool {
+	for _, row := range rows {
+		if !rowLive(row) || !rowNamesItem(row, item) {
+			continue
+		}
+		text := rowText(row)
+		if strings.Contains(text, malformedStallMarker) && rowNamesHead(row, head) {
 			return true
 		}
 	}
