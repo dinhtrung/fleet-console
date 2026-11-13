@@ -547,6 +547,23 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		}
 	}
 
+	// A plan that refuses to dispatch an item already knows why, and until #402
+	// that reason reached nobody: plan.Skips was read by no production code, so
+	// three ready items could sit undispatched while the tick reported nothing.
+	// Name every refusal the operator can act on, and put it on the ledger once
+	// per (item, reason) so a persistent one does not flood the audit.
+	for _, skip := range in.Plan.Skips {
+		if routineSkip(skip.Reason) {
+			continue
+		}
+		line := fmt.Sprintf("#%d dispatch not taken: %s", skip.Number, skip.Reason)
+		if skip.Detail != "" {
+			line += " (" + skip.Detail + ")"
+		}
+		report.Skipped = append(report.Skipped, line)
+		noteDispatchSkip(ctx, actions, skip)
+	}
+
 	// A rig whose launch failed this tick has nothing to claim its work: name the
 	// failure once, before the dispatch loop, whatever the plan carried. The skip
 	// is the one line the operator sees, and the issue is retried next tick.
@@ -764,4 +781,32 @@ func liveRowNames(rows []rig.QueueRow, item int) bool {
 		}
 	}
 	return false
+}
+
+// routineSkip reports whether a plan skip is ordinary in-flight state rather
+// than a refusal an operator must see. An item already dispatched or holding a
+// live row is moving; naming it every tick would bury the real refusals.
+func routineSkip(reason decide.Reason) bool {
+	switch reason {
+	case decide.ReasonAlreadyDispatched, decide.ReasonLiveRow:
+		return true
+	}
+	return false
+}
+
+// noteDispatchSkip records one refusal per (item, reason) on the ledger. The
+// key terminates with `;` like the other dedupe keys, so a later, different
+// reason for the same item is a new fact and asks again.
+func noteDispatchSkip(ctx context.Context, actions *Actions, skip decide.Skip) {
+	key := fmt.Sprintf("reason=%s;", skip.Reason)
+	subject := fmt.Sprintf("#%d", skip.Number)
+	exists, err := actions.Store.HasEvent(ctx, "dispatch.skip", subject, key)
+	if err != nil || exists {
+		return
+	}
+	detail := key
+	if skip.Detail != "" {
+		detail += " detail=" + skip.Detail + ";"
+	}
+	_, _ = actions.event(ctx, "act", "dispatch.skip", subject, detail)
 }
