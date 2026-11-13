@@ -1,0 +1,17 @@
+[
+  {
+    "number": 14,
+    "state": "open",
+    "title": "docs: recorded words",
+    "draft": false,
+    "body": "Closes #3",
+    "html_url": "https://github.com/dinhtrung/fleet-console/pull/14",
+    "mergeable": null,
+    "mergeable_state": "unknown",
+    "merged_at": null,
+    "head": {
+      "sha": "a21e0626300f54f2c062bbb8026fe67bbdf47c3d",
+      "ref": "feature/docs"
+    }
+  }
+]

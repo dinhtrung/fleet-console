@@ -165,6 +165,20 @@ func (cr ChangeRequest) MergeConflict() bool {
 	return false
 }
 
+// MergeUnknown reports whether the forge has not answered the mergeability
+// question yet: an empty word, GitHub's `unknown`, or GitLab's `checking`.
+// Empty is unknown on purpose — a read taken while the forge was still
+// computing, or a payload that named no reason, is not evidence of a refusal,
+// and treating it as one parks a repair decision the forge was about to
+// answer itself (epic #341, design D1). A refusal must quote a computed word.
+func (cr ChangeRequest) MergeUnknown() bool {
+	switch strings.ToLower(cr.MergeState) {
+	case "", "unknown", "checking":
+		return true
+	}
+	return false
+}
+
 // HeadGreen answers the merge gate's head question and says why. A docs-only change
 // request with no checks is green because there is nothing to run, and the reason names
 // that. A failing check marked allow-failure is not red.

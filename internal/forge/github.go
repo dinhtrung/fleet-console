@@ -322,6 +322,10 @@ func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 			return nil, err
 		}
 		mergeable := pull.Mergeable != nil && *pull.Mergeable
+		// The list page's mergeable_state rides along with the same snapshot
+		// mergeable came from; it is only trustworthy when that snapshot
+		// answered, so it is the default and the refetch replaces it.
+		state := pull.MergeState
 		if pull.Mergeable == nil {
 			// The list endpoint leaves mergeable null while GitHub computes it; one
 			// single-PR read is the only place the merged gate may trust.
@@ -330,17 +334,22 @@ func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 				return nil, err
 			}
 			var detail struct {
-				Mergeable *bool `json:"mergeable"`
+				Mergeable  *bool  `json:"mergeable"`
+				MergeState string `json:"mergeable_state"`
 			}
 			if err := json.Unmarshal(raw, &detail); err != nil {
 				return nil, fmt.Errorf("forge: decode GitHub pull: %w", err)
 			}
 			mergeable = detail.Mergeable != nil && *detail.Mergeable
+			// The refetch is the read that computed mergeability, so its word
+			// is the one the gate may quote (epic #341, design D1) — the list
+			// page's `unknown` would otherwise outlive the computation.
+			state = detail.MergeState
 		}
 		requests = append(requests, ChangeRequest{
 			Number: pull.Number, State: pull.State, Merged: pull.MergedAt != nil,
 			HeadSHA: pull.Head.SHA, Branch: pull.Head.Ref, Draft: pull.Draft,
-			Mergeable: mergeable, MergeState: pull.MergeState, Title: pull.Title,
+			Mergeable: mergeable, MergeState: state, Title: pull.Title,
 			Body: pull.Body, ClosesItem: ParseCloses(pull.Body),
 			Checks: checks, DocsOnly: DocsOnly(paths), URL: pull.HTMLURL,
 		})
