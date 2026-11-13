@@ -210,10 +210,10 @@ func TestVerdictCapture(t *testing.T) {
 		// A rejection that names no commit cannot be attributed: it does not
 		// fall through to the older accept (the merge stays stopped) and it does
 		// not refuse with a sha the note never wrote — it asks the operator (D3).
-		{"rejection with no sha asks the operator", "abc1234", []forge.Comment{
+		{"rejection with no sha refuses, the tick asks", "abc1234", []forge.Comment{
 			{ID: "2", Body: "REJECT", CreatedAt: "2026-10-29T11:00:00Z"},
 			{ID: "1", Body: "ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},
-		}, "question", false},
+		}, "", true},
 		// The shapes a model actually wraps a verdict in (#368/#369).
 		{"qa label", "abc1234", []forge.Comment{
 			{ID: "1", Body: "QA ACCEPT abc1234", CreatedAt: "2026-10-29T10:00:00Z"},

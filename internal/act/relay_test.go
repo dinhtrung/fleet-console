@@ -197,9 +197,11 @@ func TestCaptureRecordsRelayMarker(t *testing.T) {
 		{"reviewer's own note", "ACCEPT " + head + "\nThe pool sizing is right.", "", false},
 		{"mangled marker", "ACCEPT " + head + "\nvia verdict-scribe@rig", "", false},
 		{"marker with tail", "ACCEPT " + head + "\nvia: verdict-scribe@rig (relayed)", "", false},
-		// A marker before the verdict is not a verdict note at all: line 1's
-		// grammar is untouched, so capture stores nothing and reads no marker.
-		{"marker as first line", "via: verdict-scribe@rig\nACCEPT " + head, "", true},
+		// A marker before the verdict is a misordered relay note. The text scan
+		// reads the verdict (a line that opens with the token is a verdict,
+		// wherever it sits), and the marker is not read because line 2 is the
+		// verdict, not the marker: the verdict is stored as the reviewer's own.
+		{"marker as first line", "via: verdict-scribe@rig\nACCEPT " + head, "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

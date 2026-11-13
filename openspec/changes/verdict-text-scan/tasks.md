@@ -16,8 +16,11 @@
       Proof: `go test ./internal/act -run 'TestVerdictCapture|TestCaptureVerdictDecoration'` — pass, including
       `prose accept is not a verdict` (the #264 guard) and the new `qa label`, `icon and bold`, `link text`,
       `label on its own line, sha below`, `both polarities`, `a negated verdict` cases.
-- [x] 2.2 A verdict with a verdict word and no sha returns `UnresolvedVerdictError`, not a refusal.
-      Proof: `TestVerdictCapture/rejection_with_no_sha_asks_the_operator`, pass.
+- [x] 2.2 A first line that opens with a verdict word and names no parsable sha keeps the
+      `UnattributableVerdictError` refusal (the audit keeps the typo) and the tick raises the question for it; a
+      *wrapped* verdict with no sha returns `UnresolvedVerdictError` directly.
+      Proof: `TestVerdictCapture/rejection_with_no_sha_refuses`,
+      `TestRunTickAsksOperatorForUnresolvedVerdict`, `TestMalformedVerdictRecordedOncePrintsOnce` — pass.
 
 ## 3. The question
 

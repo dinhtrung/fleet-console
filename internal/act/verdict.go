@@ -212,9 +212,18 @@ func (a *Actions) CaptureVerdict(ctx context.Context, dispatchID int64, item int
 		switch {
 		case scan.Decision != "":
 			if scan.SHA == "" {
-				// A verdict word with no commit is exactly the note the gate
-				// cannot attribute: the operator seat reads the request and
-				// names the head itself.
+				// A verdict word with no commit anywhere in the window. When the
+				// note's own first line opens with the token, this is the
+				// malformed verdict the audit has always recorded (a truncated or
+				// mistyped sha); the tick still asks the operator, but the ledger
+				// keeps the typo. A wrapped verdict with no sha — `QA ACCEPT` — is
+				// only a question.
+				if verdictToken.MatchString(normal) {
+					return nil, &UnattributableVerdictError{
+						NoteID: note.ID, Line: line,
+						Reason: "the first line starts with a verdict token but its sha does not parse",
+					}
+				}
 				return nil, &UnresolvedVerdictError{
 					NoteID: note.ID, Head: headSHA,
 					Reason:  fmt.Sprintf("the note says %s but names no commit sha", strings.ToUpper(scan.Decision)),

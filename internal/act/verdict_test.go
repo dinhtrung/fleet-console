@@ -55,7 +55,9 @@ func TestRunTickRefusesToMergeOnUnattributableVerdict(t *testing.T) {
 			Body: "Closes #5", DocsOnly: true,
 		}},
 		NotesValue: []forge.Comment{
-			{ID: "2", CreatedAt: "2026-10-30T11:30:00Z", Body: "REJECT abc12"},
+			// A sha that does not parse: seven characters are needed to name a
+			// commit, and "abc12" would now name the head as its prefix.
+			{ID: "2", CreatedAt: "2026-10-30T11:30:00Z", Body: "REJECT abc12x"},
 			{ID: "1", CreatedAt: "2026-10-30T10:00:00Z", Body: "ACCEPT " + head},
 		},
 	}
@@ -160,10 +162,10 @@ func TestCaptureVerdictDecoration(t *testing.T) {
 		{"list bullet", "- ACCEPT " + head, "accept"},
 		{"colon separator", "ACCEPT: " + head, "accept"},
 		{"em dash separator", "ACCEPT — " + head, "accept"},
-		// A verdict word with no commit names nothing the gate can act on. It
-		// used to refuse; now it asks the operator seat, which reads the request
-		// and names the head itself (design D3).
-		{"token with no sha", "ACCEPT", "question"},
+		// A verdict word with no commit names nothing the gate can act on: the
+		// malformed-verdict refusal is kept for the audit, and the tick raises a
+		// question for it (design D3).
+		{"token with no sha", "ACCEPT", "refused"},
 		{"qa label", "QA ACCEPT " + head, "accept"},
 		{"icon before the token", "✅ ACCEPT " + head, "accept"},
 		{"link before the token", "[ACCEPT](https://example.test/x) " + head, "accept"},
