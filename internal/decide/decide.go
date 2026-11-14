@@ -303,6 +303,15 @@ func Decide(s Snapshot) Result {
 		// Unknown capacity is stale, not empty (#438). The one line the caller
 		// reports names the rig read, so the operator learns the project was not
 		// planned rather than that it had nowhere to dispatch.
+		//
+		// Stale is the deliberate answer for a live project, and it is not
+		// StatusNothing: Nothing would claim the project was planned and needed
+		// nothing, which is the very thing an unread roster cannot establish.
+		// Anything reading plan status therefore sees stale while a rig is blind,
+		// and that is the intended reading — not an oversight to be "fixed" into
+		// Nothing. The arm sits after enabled/onhold on purpose: a paused project
+		// is not planned at all, so there is nothing for a blind rig to withhold
+		// from it.
 		detail := s.RigError
 		if detail == "" {
 			detail = "rig read failed"
