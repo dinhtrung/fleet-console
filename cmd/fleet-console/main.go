@@ -865,11 +865,19 @@ func run(args []string, stdout, stderr io.Writer) error {
 				busy, _ := mirror.Busy(read)
 				return busy
 			}
+			// Which stopped rigs are ours to start: only the ones this app's
+			// quiet rule stopped (design D6, #403). An unread ledger means no rig
+			// qualifies this tick — starting an operator's manual `rig down` is a
+			// worse mistake than one tick of delay, and the next tick asks again.
+			quietStops, err := db.QuietStoppedRigs(ctx)
+			if err != nil {
+				fmt.Fprintf(stderr, "lifecycle: quiet-stop ledger: %v\n", err)
+			}
 			// Start before any dispatch write, so a rig is up before its worktree
 			// and its row exist (design D5). The facts come from the reads above:
 			// a project's fresh flag, its plan's Ready, and the rows and seats the
 			// tick already has, with no extra forge or rig call.
-			lifecycleActions := lifecycle.Decide(lifecycleFacts(rows, reads, plans, eff), !read.RigStale, read.RigDown, read.At)
+			lifecycleActions := lifecycle.Decide(lifecycleFacts(rows, reads, plans, eff), !read.RigStale, read.RigDown, quietStops, read.At)
 			lifecycleFailed := lifecycle.Start(ctx, lifecycleActions)
 			// The rig's roster and queue were read before the launch, so a rig that
 			// just came up would plan against a stale fleet and reach the next tick

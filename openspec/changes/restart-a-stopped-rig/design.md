@@ -53,3 +53,30 @@ This is the half of #402 that this change owns; the operator-facing reason surfa
 ## D5. A start still costs one attempt per backoff window
 
 The executor already records the attempt (`lifecycle.go:403,428-448`) and `daemon-down-start` proved the backoff. The new arm reuses it unchanged: one start, then backoff, then one more. A failed start is a `rig.started` event with the error, not a crash loop.
+## D6. Who stopped the rig decides whether it may be started again
+
+Once up-or-down is the running seats (D0), a stopped rig with demand is visible — but not every stopped rig is ours to
+start. `rig down` and `rig seat stop` are the same daemon verbs the quiet rule uses, so the rig's own state cannot name
+the author: a quiet-stopped rig and an operator-stopped rig are identical (`lifecycleState: stopped`, every row
+`exited` with `intentionallyStopped: true`).
+
+The app's own ledger can name it. The executor is the only writer of `rig.stopped` (detail `quiet <dur>`) and
+`rig.started` (detail: the reason), so `store.QuietStoppedRigs` answers one question per rig: *is the newest lifecycle
+event we wrote for it a stop?* Only a rig that answer names is started again on demand. A stopped rig with no such
+record was stopped by a person, and starting it would overrule a decision they made on purpose.
+
+`Rejected:` reading `intentionallyStopped` from the node rows. Both stop paths set it, so it cannot separate them.
+`Rejected:` treating an unknown provenance as demand. The failure it would create — a rig the operator deliberately
+drove down coming back minutes later — is the one this acceptance protects; the cost of being wrong the other way is a
+rig that stays down until the next `rig start`, which is bounded and visible in the journal.
+
+The daemon-down arm is exempt: nothing a person did takes a daemon down, and the accepted spec already starts the rig
+on demand in that case. An unread ledger (`QuietStoppedRigs` errors) decides nothing this tick — the next tick asks
+again — because failing toward a start is failing toward overriding the operator.
+
+The **unread-roster arm** (D1) runs the same gate, and that is a deliberate narrowing of D1 as first written. A failed
+read cannot tell a quiet-stopped rig from one the operator drove down, and "the last known count was zero" is exactly
+the shape both share — so on an unread roster the app asks the ledger before it starts anything. The cost is that a rig
+whose stop the app never recorded stays down through a failed read too, which is the same answer it gets on a good
+read. `Rejected:` exempting the unread arm, which would have made a broken rig read the one path that overrides the
+operator.

@@ -303,6 +303,51 @@ every other rig call keeps the 20 s read budget; a start is attempted at most on
 window. The stop half stays dark while the daemon is down: nothing that does not exist can be judged quiet, and
 no quiet streak opens for a rig the tick could not see.
 
+A healthy daemon with a **stopped** rig is the second shape. The quiet rule stops a rig with `rig down`, and a
+stopped rig keeps its node rows, so up-or-down is read from the seats that are actually `running` — never from
+whether rows exist. When a tick sees no running seat and a managed project with a fresh read and ready items, it
+starts the rig once with `stopped_with_demand: N ready item(s), no running seat` in the journal and the
+`rig.started` event, under the same five-minute backoff, so a failing launch is not hammered. A stale read is not
+demand and never starts anything.
+
+Only a rig **this app** stopped for being quiet is started again. `rig down` and `rig seat stop` use the same
+daemon verb the quiet rule uses, so the rig itself cannot say who stopped it; the app's own `rig.stopped` event is
+the one record that can, and a stopped rig with no such event was stopped by a person — it stays down until they
+say otherwise, because restarting it would overrule them. A rig that starts and stops by itself therefore comes
+back on demand; one you stopped by hand does not.
+
+### Reading the `rig-lifecycle:` lines
+
+Every rig the rule considered gets one line per tick, so "nothing happened" is never a silent outcome:
+
+```text
+rig-lifecycle: app none — running=1 ready=0 seats_known=true
+rig-lifecycle: docs start — stopped_with_demand: 3 ready item(s), no running seat — running=0 ready=3 seats_known=true
+rig-lifecycle: infra stop — quiet 12m3s — running=1 ready=0 seats_known=true
+rig-lifecycle: docs none — running=0 ready=3 seats_known=false roster=unknown
+```
+
+`running` is the seats that are actually `running`, `ready` is the dispatchable count from the fresh forge
+reads, and `seats_known` says whether the rig read worked. `roster unknown` means the rig read failed while the
+process still remembered the rig; a start on that line is decided from the last known count and the forge read,
+and its reason reads `roster unknown; N ready item(s)`. The stop half never acts on an unread roster — a fleet the
+tick cannot see cannot be judged quiet — and a rig this process has never read is left alone rather than started
+blind (a restart forgets the last count, which costs one tick, never a second fleet).
+
+A rig the rule does not manage (`rig_lifecycle` off, or every bound project opted out) gets no line at all: it is
+not the app's fleet.
+
+An item the plan did not dispatch also says why, once per (item, reason, head): `act-skip: app: #393
+no_free_builder — every admitted seat is taken`. The line is written once while the fact is unchanged, and once
+more when the reason or the head moves.
+
+### When to run `rig start` yourself
+
+Run `rig start --rigs <name>` when the rig is stopped and you stopped it (the journal shows no `rig.stopped` event
+from the app for it), or when a `rig-lifecycle:` line reads `roster=unknown` and you know the fleet should be up.
+Do not run it because a line reads `stopped_with_demand`: the tick is already starting that rig under its
+five-minute backoff.
+
 ## The board
 
 ```

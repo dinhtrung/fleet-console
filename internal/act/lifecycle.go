@@ -35,6 +35,11 @@ type LifecycleAction struct {
 	Reason string
 	// Quiet is how long the rig had been quiet when a stop was decided.
 	Quiet time.Duration
+	// Facts is the `running=… ready=… seats_known=…` tail of the journal line,
+	// copied from the LifecycleRig the rule decided on (design D3): the
+	// executor's outcome line and the `none` line therefore read the same
+	// numbers, and neither recomputes them.
+	Facts string
 }
 
 // LifecycleProject is one project bound to a rig, as the decision reads it.
@@ -77,6 +82,24 @@ type LifecycleRig struct {
 	// not running can hold no fleet. The start branch treats it as a stopped
 	// rig with a known roster; the stop branch refuses it.
 	RigDown bool
+	// QuietStopped is true when this app's own quiet rule stopped the rig and
+	// has not started it since (design D2, #403). The daemon cannot answer this:
+	// `rig down` and `rig seat stop` are the same verbs the quiet rule uses, so
+	// a stopped rig looks identical whoever stopped it. The app's ledger can —
+	// only the executor writes `rig.stopped` — and only a rig it stopped is one
+	// it may revive. A rig stopped by hand is the operator's decision: it stays
+	// down until they say otherwise, because starting it would overrule them.
+	QuietStopped bool
+	// RosterUnknown is true when this tick's rig read failed but this process
+	// has read the rig before (design D1): a failed read is one of the states a
+	// start repairs, so the start half is still decided — from LastRunning and
+	// the demand the forge read carried. The stop half refuses it.
+	RosterUnknown bool
+	// LastRunning is the running-seat count from this process's last successful
+	// read of the rig. It is meaningful only with RosterUnknown: zero means the
+	// fleet was stopped when we last looked, above zero means a live fleet we
+	// must not duplicate on unknown data.
+	LastRunning int
 	// Projects are the projects bound to this rig.
 	Projects []LifecycleProject
 }
@@ -106,9 +129,11 @@ type LifecycleProjectFacts struct {
 // and live rows on each. A rig two projects share gets one entry carrying both
 // projects, so one busy project and one quiet project cannot produce a stop
 // (design D3). It is pure; the queue is counted once per row, not once per
-// project, so a shared rig's row is not counted twice.
-func BuildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]time.Time, seatsKnown bool) []LifecycleRig {
-	return buildLifecycleRigs(projects, prevQuiet, seatsKnown, false)
+// project, so a shared rig's row is not counted twice. quietStops is the app's
+// own stop ledger (`store.QuietStoppedRigs`), the only fact that says whether a
+// stopped rig is ours to start again or the operator's to keep down (#403).
+func BuildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]time.Time, seatsKnown bool, quietStops map[string]bool) []LifecycleRig {
+	return buildLifecycleRigs(projects, prevQuiet, seatsKnown, false, quietStops)
 }
 
 // buildLifecycleRigs is the builder with the daemon-down fact. A down daemon is
@@ -116,13 +141,16 @@ func BuildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]t
 // does not exist, so the tick reports the roster as known, zero seats running,
 // and marks the rig down. The start branch reads that as "stopped rig, decide
 // on demand"; the stop branch keeps its own guard so it stays dark while down.
-func buildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]time.Time, seatsKnown, rigDown bool) []LifecycleRig {
+func buildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]time.Time, seatsKnown, rigDown bool, quietStops map[string]bool) []LifecycleRig {
 	order := make([]string, 0, len(projects))
 	byRig := make(map[string]*LifecycleRig, len(projects))
 	link := func(rigName string) *LifecycleRig {
 		entry, ok := byRig[rigName]
 		if !ok {
-			entry = &LifecycleRig{Name: rigName, SeatsKnown: seatsKnown, QuietSince: prevQuiet[rigName]}
+			entry = &LifecycleRig{
+				Name: rigName, SeatsKnown: seatsKnown, QuietSince: prevQuiet[rigName],
+				QuietStopped: quietStops[rigName],
+			}
 			if rigDown {
 				entry.SeatsKnown = true
 				entry.RigDown = true
@@ -187,6 +215,11 @@ type Lifecycle struct {
 	// quiet is memory-only: a restart forgets the streak, which can only delay a
 	// stop, never hasten one (design D6).
 	quiet map[string]time.Time
+	// lastRunning remembers each rig's running-seat count from the last tick
+	// whose read succeeded (design D2, #403). It is read only on a tick whose
+	// read failed, and only to tell a stopped rig from an unknown one: a rig we
+	// never read has no entry, and is left alone rather than started blind.
+	lastRunning map[string]int
 }
 
 // NewLifecycle builds the coordinator from the resolved settings. The executor
@@ -204,18 +237,55 @@ func NewLifecycle(settings config.LifecycleSettings, st *store.Store, rigs RigLi
 // tick. The caller runs the starts before the dispatch phase and the stops
 // after it. rigDown is the tick's daemon fact (epic #320, D2): a daemon that
 // is not running means every rig on it is down, and the start branch decides
-// on demand while the stop half stays dark.
-func (l *Lifecycle) Decide(projects []LifecycleProjectFacts, seatsKnown, rigDown bool, now time.Time) []LifecycleAction {
+// on demand while the stop half stays dark. quietStops is the app's own stop
+// ledger from `store.QuietStoppedRigs`: it is the fact that tells a rig this
+// rule stopped from one the operator stopped (#403).
+//
+// Every rig the rule considered gets one journal line (design D3): the
+// executor's own outcome line when it acted, and LifecycleLine's `none` line
+// when it did not. Silence is not an outcome any more.
+func (l *Lifecycle) Decide(projects []LifecycleProjectFacts, seatsKnown, rigDown bool, quietStops map[string]bool, now time.Time) []LifecycleAction {
 	if l == nil || l.Executor == nil || !l.Settings.Enabled {
 		return nil
 	}
 	if l.quiet == nil {
 		l.quiet = make(map[string]time.Time)
 	}
-	rigs := buildLifecycleRigs(projects, l.quiet, seatsKnown, rigDown)
+	rigs := buildLifecycleRigs(projects, l.quiet, seatsKnown, rigDown, quietStops)
+	// The read failed: fall back to the last count this process saw, per rig. A
+	// rig with no entry stays undecided (design D2's "a restart forgets it, and
+	// the worst case is one tick that decides unknown instead of stopped").
+	if !seatsKnown && !rigDown {
+		for index := range rigs {
+			if last, ok := l.lastRunning[rigs[index].Name]; ok {
+				rigs[index].RosterUnknown = true
+				rigs[index].LastRunning = last
+			}
+		}
+	}
 	actions := DecideLifecycle(LifecycleInput{
 		Enabled: l.Settings.Enabled, IdleAfter: l.Settings.IdleAfter, Now: now, Rigs: rigs,
 	})
+	// The count is remembered only when the read succeeded: a failed tick must
+	// not overwrite a good count with a zero it did not observe.
+	if seatsKnown {
+		if l.lastRunning == nil {
+			l.lastRunning = make(map[string]int, len(rigs))
+		}
+		for _, entry := range rigs {
+			l.lastRunning[entry.Name] = entry.Running
+		}
+	}
+	acted := make(map[string]bool, len(actions))
+	for _, action := range actions {
+		acted[action.Rig] = true
+	}
+	for _, entry := range rigs {
+		if acted[entry.Name] {
+			continue
+		}
+		l.Executor.logf("%s", LifecycleLine(entry, nil))
+	}
 	for _, entry := range rigs {
 		if entry.SeatsKnown && RigQuiet(entry) {
 			l.quiet[entry.Name] = NextQuietSince(l.quiet[entry.Name], now, true)
@@ -224,6 +294,48 @@ func (l *Lifecycle) Decide(projects []LifecycleProjectFacts, seatsKnown, rigDown
 		delete(l.quiet, entry.Name)
 	}
 	return actions
+}
+
+// LifecycleLine renders the one journal line a rig gets from the decision, and
+// is the whole of how the rule explains itself (design D3). A rig the rule did
+// nothing about reads `none` and carries the three numbers that decided it; a
+// start or stop carries the reason the decision used. The action form is what
+// the executor's own outcome lines restate (accepted spec: `rig-lifecycle:
+// <rig> started — <reason>`), so a start tick logs exactly one line per rig
+// and an outcome is never claimed before it happens.
+func LifecycleLine(entry LifecycleRig, action *LifecycleAction) string {
+	facts := rigFacts(entry)
+	if action == nil {
+		return fmt.Sprintf("rig-lifecycle: %s none — %s", entry.Name, facts)
+	}
+	if action.Facts != "" {
+		facts = action.Facts
+	}
+	switch action.Kind {
+	case LifecycleStart:
+		return fmt.Sprintf("rig-lifecycle: %s start — %s — %s", entry.Name, action.Reason, facts)
+	case LifecycleStop:
+		return fmt.Sprintf("rig-lifecycle: %s stop — quiet %s — %s",
+			entry.Name, action.Quiet.Round(time.Second), facts)
+	default:
+		return fmt.Sprintf("rig-lifecycle: %s none — %s", entry.Name, facts)
+	}
+}
+
+// rigFacts is the numbers half of the journal line, computed once from the
+// entry the rule decided on (design D3).
+func rigFacts(entry LifecycleRig) string {
+	ready := 0
+	for _, project := range entry.Projects {
+		if project.Managed && project.Fresh {
+			ready += project.Ready
+		}
+	}
+	facts := fmt.Sprintf("running=%d ready=%d seats_known=%t", entry.Running, ready, entry.SeatsKnown)
+	if entry.RosterUnknown {
+		facts += " roster=unknown"
+	}
+	return facts
 }
 
 // Start executes the start actions and returns the rigs whose launch failed,
@@ -253,11 +365,14 @@ func DecideLifecycle(in LifecycleInput) []LifecycleAction {
 	}
 	var actions []LifecycleAction
 	for _, rigEntry := range in.Rigs {
-		// No roster: the tick can neither launch (which could duplicate a fleet
-		// that is already up) nor stop (which could stop a live one). A daemon
-		// that is not running is the exception on the start half only: nothing
-		// can be running on it, so the roster is known and empty (epic #320, D2).
-		if !rigEntry.SeatsKnown {
+		// An unknown roster (SeatsKnown=false) is decided on its start half only
+		// (design D1): a failed read is one of the states a start repairs, and a
+		// stopped rig never makes its own read succeed. The stop half still
+		// refuses it below, because stopping a fleet you cannot see is destructive.
+		// `RosterUnknown` means this process's last successful read saw zero
+		// running seats; a rig this process never read has no entry and is left
+		// alone (design D2: a forgotten map costs a tick, never a wrong start).
+		if !rigEntry.SeatsKnown && !rigEntry.RosterUnknown {
 			continue
 		}
 		// An opted-out project keeps its rig warm: no start, no stop.
@@ -265,17 +380,42 @@ func DecideLifecycle(in LifecycleInput) []LifecycleAction {
 			continue
 		}
 		if rigEntry.Running == 0 || rigEntry.RigDown {
+			// A last known count above zero is a fleet we must not duplicate on
+			// unknown data (design D1): the read failed, the seats were there
+			// when we last looked, and a start could put a second fleet on the
+			// same rig.
+			if rigEntry.RosterUnknown && rigEntry.LastRunning > 0 {
+				continue
+			}
 			// A stopped rig is started before anything is written for it, and
-			// only when work exists. An idle stopped rig stays stopped, so a
-			// manual `rig down` stands until work needs the rig (design D2).
+			// only when work exists. An idle stopped rig stays stopped.
+			//
+			// Who stopped it decides whether we may start it at all (#403):
+			// only a rig this app stopped for being quiet is ours to revive.
+			// `rig down` and `rig seat stop` use the same daemon verb, so the
+			// daemon cannot name the author — the app's own `rig.stopped` event
+			// is the one record that can, and a rig with no such stop was
+			// stopped by a person. Starting that would overrule a decision the
+			// human made on purpose. A down daemon is exempt: nothing a person
+			// did takes a daemon down, and the accepted spec starts the rig
+			// when demand exists.
+			if !rigEntry.RigDown && !rigEntry.QuietStopped {
+				continue
+			}
 			// A rig whose daemon is down joins this arm with its demand decided
 			// the same way; the stop arm below stays out of reach because the
 			// down guard comes first here and RigQuiet cannot hold while down.
 			if reason, ok := startReason(rigEntry); ok {
 				actions = append(actions, LifecycleAction{
 					Kind: LifecycleStart, Rig: rigEntry.Name, Spec: rigEntry.SpecPath, Reason: reason,
+					Facts: rigFacts(rigEntry),
 				})
 			}
+			continue
+		}
+		// The stop half never acts on an unread roster: a fleet the tick cannot
+		// see cannot be judged quiet (design D1).
+		if !rigEntry.SeatsKnown {
 			continue
 		}
 		// A seat may be working: the rig stays up whatever the window says.
@@ -289,6 +429,7 @@ func DecideLifecycle(in LifecycleInput) []LifecycleAction {
 		}
 		actions = append(actions, LifecycleAction{
 			Kind: LifecycleStop, Rig: rigEntry.Name, Quiet: in.Now.Sub(rigEntry.QuietSince),
+			Facts: rigFacts(rigEntry),
 		})
 	}
 	return actions
@@ -350,6 +491,17 @@ func startReason(rigEntry LifecycleRig) (string, bool) {
 			continue
 		}
 		ready += project.Ready
+	}
+	if rigEntry.RosterUnknown {
+		// The reason names the state it was read from, and the unknown roster is
+		// the fact: `running=0` here is a last known count, not a live read.
+		if ready > 0 {
+			return fmt.Sprintf("roster unknown; %d ready item(s)", ready), true
+		}
+		if rigEntry.LiveRows > 0 {
+			return "roster unknown; a claimable row names a seat", true
+		}
+		return "", false
 	}
 	if ready > 0 {
 		if rigEntry.RigDown {
@@ -425,7 +577,7 @@ func (e *LifecycleExecutor) Start(ctx context.Context, actions []LifecycleAction
 		if action.Kind != LifecycleStart {
 			continue
 		}
-		if e.deferred(action.Rig) {
+		if e.deferred(action) {
 			continue
 		}
 		if err := e.start(ctx, action); err != nil {
@@ -442,12 +594,14 @@ func (e *LifecycleExecutor) Start(ctx context.Context, actions []LifecycleAction
 // logs the wait once per change when it is. Whether deferred or attempted,
 // every tick that reaches the window's edge with demand still standing
 // records the attempt time.
-func (e *LifecycleExecutor) deferred(rig string) bool {
+func (e *LifecycleExecutor) deferred(action LifecycleAction) bool {
+	rig := action.Rig
 	now := e.now()
 	if last, ok := e.lastStart[rig]; ok {
 		if elapsed := now.Sub(last); elapsed < StartBackoff {
 			e.note("rig "+rig+" up deferred",
-				fmt.Sprintf("%s up deferred — last attempt %s ago", rig, elapsed.Round(time.Second)))
+				fmt.Sprintf("%s up deferred — last attempt %s ago — %s",
+					rig, elapsed.Round(time.Second), action.Facts))
 			return true
 		}
 	}
@@ -476,7 +630,7 @@ func (e *LifecycleExecutor) start(ctx context.Context, action LifecycleAction) e
 	}
 	if _, err := os.Stat(spec); err != nil {
 		if !os.IsNotExist(err) {
-			e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v", action.Rig, err))
+			e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v — %s", action.Rig, err, action.Facts))
 			return err
 		}
 		// A rig imported from a bundle (#389) has a database row and no spec
@@ -492,16 +646,16 @@ func (e *LifecycleExecutor) start(ctx context.Context, action LifecycleAction) e
 			resolveErr = fmt.Errorf("no rig spec at %s (export wrote nothing)", spec)
 		}
 		if resolveErr != nil {
-			e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v", action.Rig, resolveErr))
+			e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v — %s", action.Rig, resolveErr, action.Facts))
 			return resolveErr
 		}
 	}
 	if _, err := e.Rigs.Up(ctx, spec); err != nil {
-		e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v", action.Rig, err))
+		e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v — %s", action.Rig, err, action.Facts))
 		return err
 	}
 	e.clearNote("rig " + action.Rig + " up")
-	e.logf("rig-lifecycle: %s started — %s", action.Rig, action.Reason)
+	e.logf("rig-lifecycle: %s started — %s — %s", action.Rig, action.Reason, action.Facts)
 	if _, err := e.Store.AppendEvent(ctx, store.Event{
 		Actor: "act", Kind: "rig.started", Subject: action.Rig, Detail: action.Reason,
 	}); err != nil {
@@ -523,7 +677,7 @@ func (e *LifecycleExecutor) Stop(ctx context.Context, actions []LifecycleAction)
 		}
 		e.clearNote("rig " + action.Rig + " down")
 		quiet := action.Quiet.Round(time.Second)
-		e.logf("rig-lifecycle: %s stopped — quiet %s", action.Rig, quiet)
+		e.logf("rig-lifecycle: %s stopped — quiet %s — %s", action.Rig, quiet, action.Facts)
 		if _, err := e.Store.AppendEvent(ctx, store.Event{
 			Actor: "act", Kind: "rig.stopped", Subject: action.Rig, Detail: "quiet " + quiet.String(),
 		}); err != nil {

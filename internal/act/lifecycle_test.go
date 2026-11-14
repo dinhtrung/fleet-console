@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/dinhtrung/fleet-console/internal/config"
+	"github.com/dinhtrung/fleet-console/internal/preflight"
 	"github.com/dinhtrung/fleet-console/internal/rig"
+	"github.com/dinhtrung/fleet-console/internal/store"
 )
 
 // managedRig is a rig every case starts from: one managed, fresh project with no
@@ -57,10 +59,31 @@ func TestDecideLifecycleCases(t *testing.T) {
 		expect []LifecycleActionKind
 	}{
 		{
-			name: "start on Ready>0 and no running seat",
+			name: "start on Ready>0 and no running seat after our own quiet stop",
 			input: func() LifecycleInput {
 				entry := managedRig("r")
 				entry.Running = 0
+				entry.QuietStopped = true
+				entry.Projects[0].Ready = 2
+				return lifecycleInput(entry)
+			}(),
+			expect: []LifecycleActionKind{LifecycleStart},
+		},
+		{
+			name: "no start for a rig the operator stopped by hand",
+			input: func() LifecycleInput {
+				entry := managedRig("r")
+				entry.Running = 0
+				entry.Projects[0].Ready = 3
+				return lifecycleInput(entry)
+			}(),
+		},
+		{
+			name: "a down daemon starts on demand without our own stop record",
+			input: func() LifecycleInput {
+				entry := managedRig("r")
+				entry.Running = 0
+				entry.RigDown = true
 				entry.Projects[0].Ready = 2
 				return lifecycleInput(entry)
 			}(),
@@ -99,6 +122,7 @@ func TestDecideLifecycleCases(t *testing.T) {
 			input: func() LifecycleInput {
 				entry := managedRig("r")
 				entry.Running = 0
+				entry.QuietStopped = true
 				entry.LiveRows = 1
 				return lifecycleInput(entry)
 			}(),
@@ -109,6 +133,7 @@ func TestDecideLifecycleCases(t *testing.T) {
 			input: func() LifecycleInput {
 				entry := managedRig("fleet")
 				entry.Running = 0
+				entry.QuietStopped = true
 				entry.Projects[0].Ready = 1
 				return lifecycleInput(entry)
 			}(),
@@ -216,6 +241,7 @@ func TestDecideLifecycleCases(t *testing.T) {
 			input: func() LifecycleInput {
 				stopped := managedRig("cold")
 				stopped.Running = 0
+				stopped.QuietStopped = true
 				stopped.Projects[0].Ready = 1
 				quiet := managedRig("warm")
 				quiet.QuietSince = longQuiet
@@ -257,7 +283,7 @@ func TestBuildLifecycleRigsCountsSharedRigOnce(t *testing.T) {
 		{Key: "b", Rigs: []string{"shared"}, Managed: true, Fresh: true, Seats: seats, Rows: rows},
 	}
 
-	rigs := BuildLifecycleRigs(projects, nil, true)
+	rigs := BuildLifecycleRigs(projects, nil, true, nil)
 
 	if len(rigs) != 1 {
 		t.Fatalf("rigs = %+v, want one shared entry", rigs)
@@ -302,7 +328,7 @@ func TestBuildLifecycleRigsCountsOnlyRunningSeats(t *testing.T) {
 				{Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: true, Seats: seats},
 			}
 
-			rigs := BuildLifecycleRigs(projects, nil, true)
+			rigs := BuildLifecycleRigs(projects, nil, true, nil)
 
 			if len(rigs) != 1 {
 				t.Fatalf("rigs = %+v, want one entry", rigs)
@@ -327,7 +353,7 @@ func TestStoppedRigStartsOnDemand(t *testing.T) {
 
 	withDemand := BuildLifecycleRigs([]LifecycleProjectFacts{
 		{Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: true, Ready: 3, Seats: exited},
-	}, nil, true)
+	}, nil, true, map[string]bool{"r": true})
 	actions := DecideLifecycle(LifecycleInput{
 		Enabled: true, IdleAfter: 10 * time.Minute, Now: now, Rigs: withDemand,
 	})
@@ -340,7 +366,7 @@ func TestStoppedRigStartsOnDemand(t *testing.T) {
 
 	noDemand := BuildLifecycleRigs([]LifecycleProjectFacts{
 		{Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: true, Seats: exited},
-	}, nil, true)
+	}, nil, true, map[string]bool{"r": true})
 	if actions := DecideLifecycle(LifecycleInput{
 		Enabled: true, IdleAfter: 10 * time.Minute, Now: now, Rigs: noDemand,
 	}); len(actions) != 0 {
@@ -350,7 +376,7 @@ func TestStoppedRigStartsOnDemand(t *testing.T) {
 	// A stale read is not demand, even with every seat exited.
 	stale := BuildLifecycleRigs([]LifecycleProjectFacts{
 		{Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: false, Ready: 3, Seats: exited},
-	}, nil, true)
+	}, nil, true, map[string]bool{"r": true})
 	if actions := DecideLifecycle(LifecycleInput{
 		Enabled: true, IdleAfter: 10 * time.Minute, Now: now, Rigs: stale,
 	}); len(actions) != 0 {
@@ -413,19 +439,19 @@ func TestLifecycleDecideAdvancesTheWindowOnce(t *testing.T) {
 		Seats: []rig.Seat{{Rig: "r", Session: "dev-build-1@r", Lifecycle: "running"}},
 	}}
 
-	if actions := lifecycle.Decide(facts, true, false, t0); len(actions) != 0 {
+	if actions := lifecycle.Decide(facts, true, false, nil, t0); len(actions) != 0 {
 		t.Fatalf("first quiet tick actions = %+v, want none", actions)
 	}
 	if got := lifecycle.quiet["r"]; !got.Equal(t0) {
 		t.Fatalf("window = %s, want it opened at %s", got, t0)
 	}
-	if actions := lifecycle.Decide(facts, true, false, t0.Add(time.Minute)); len(actions) != 0 {
+	if actions := lifecycle.Decide(facts, true, false, nil, t0.Add(time.Minute)); len(actions) != 0 {
 		t.Fatalf("second quiet tick actions = %+v, want none yet", actions)
 	}
 	if got := lifecycle.quiet["r"]; !got.Equal(t0) {
 		t.Fatalf("window moved to %s, want it held at %s", got, t0)
 	}
-	if actions := lifecycle.Decide(facts, true, false, t0.Add(11*time.Minute)); len(actions) != 1 || actions[0].Kind != LifecycleStop {
+	if actions := lifecycle.Decide(facts, true, false, nil, t0.Add(11*time.Minute)); len(actions) != 1 || actions[0].Kind != LifecycleStop {
 		t.Fatalf("actions after the window = %+v, want one stop", actions)
 	}
 }
@@ -435,7 +461,7 @@ func TestLifecycleDecideAdvancesTheWindowOnce(t *testing.T) {
 func TestLifecycleDisabledDecidesNothing(t *testing.T) {
 	lifecycle := &Lifecycle{Settings: config.LifecycleSettings{}, Executor: &LifecycleExecutor{}}
 	facts := []LifecycleProjectFacts{{Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: true, Ready: 5}}
-	if actions := lifecycle.Decide(facts, true, false, time.Now()); actions != nil {
+	if actions := lifecycle.Decide(facts, true, false, nil, time.Now()); actions != nil {
 		t.Fatalf("actions = %+v, want none while disabled", actions)
 	}
 }
@@ -482,7 +508,7 @@ func TestDecideLifecycleDaemonDown(t *testing.T) {
 // and the seats the read could not take are not invented.
 func TestBuildLifecycleRigsRigDown(t *testing.T) {
 	facts := []LifecycleProjectFacts{{Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: true, Ready: 3}}
-	rigs := buildLifecycleRigs(facts, nil, false, true)
+	rigs := buildLifecycleRigs(facts, nil, false, true, nil)
 	if len(rigs) != 1 {
 		t.Fatalf("rigs = %d, want 1", len(rigs))
 	}
@@ -653,8 +679,8 @@ func TestRigLifecycleExecutorAuditsSuccess(t *testing.T) {
 	if len(events) != 2 || events[0].Kind != "rig.stopped" {
 		t.Fatalf("events = %+v, want rig.stopped newest", events)
 	}
-	if lines[len(lines)-1] != "rig-lifecycle: %s stopped — quiet %s" {
-		t.Fatalf("stop line = %q", lines[len(lines)-1])
+	if !strings.HasPrefix(lines[len(lines)-1], "rig-lifecycle: %s stopped — quiet %s") {
+		t.Fatalf("stop line = %q, want the stopped-with-quiet wording", lines[len(lines)-1])
 	}
 }
 
@@ -781,5 +807,112 @@ func TestStartNamesTheMissingSpecWhenExportFails(t *testing.T) {
 	}
 	if rigs.upCalls != 0 {
 		t.Fatalf("up calls = %d, want none without a spec", rigs.upCalls)
+	}
+}
+
+// TestBuildLifecycleRigsCarriesQuietStops pins the provenance the start rule
+// reads (#403): the builder copies the ledger's answer onto the rig entry, and a
+// rig the ledger does not name stays false — "somebody else stopped it".
+func TestBuildLifecycleRigsCarriesQuietStops(t *testing.T) {
+	facts := []LifecycleProjectFacts{
+		{Key: "app", Rigs: []string{"ours", "theirs"}, Managed: true, Fresh: true},
+	}
+	rigs := BuildLifecycleRigs(facts, nil, true, map[string]bool{"ours": true})
+	if len(rigs) != 2 {
+		t.Fatalf("rigs = %+v, want both", rigs)
+	}
+	byName := make(map[string]LifecycleRig, len(rigs))
+	for _, entry := range rigs {
+		byName[entry.Name] = entry
+	}
+	if !byName["ours"].QuietStopped {
+		t.Fatalf("ours = %+v, want QuietStopped from the ledger", byName["ours"])
+	}
+	if byName["theirs"].QuietStopped {
+		t.Fatalf("theirs = %+v, want false: the ledger never stopped it", byName["theirs"])
+	}
+}
+
+// TestStoppedRigStartNeedsOurOwnStopRecord is #403's third acceptance sentence,
+// end to end through the real ledger: `rig down` and `rig seat stop` use the
+// same verb the quiet rule uses, so the daemon cannot name the author. The app's
+// own `rig.stopped` event can, and only that event makes a stopped rig ours to
+// start again — once, inside StartBackoff.
+func TestStoppedRigStartNeedsOurOwnStopRecord(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	home := t.TempDir()
+	spec := preflight.SpecPath(home, "r")
+	if err := os.MkdirAll(filepath.Dir(spec), 0o755); err != nil {
+		t.Fatalf("spec dir: %v", err)
+	}
+	if err := os.WriteFile(spec, []byte("name: r\n"), 0o600); err != nil {
+		t.Fatalf("spec: %v", err)
+	}
+	rigs := &fakeLifecycleRig{}
+	now := time.Date(2026, 11, 13, 18, 0, 0, 0, time.UTC)
+	lifecycle := &Lifecycle{
+		Settings: config.LifecycleSettings{Enabled: true, IdleAfter: 10 * time.Minute},
+		Executor: &LifecycleExecutor{Store: st, Rigs: rigs, Home: home, Now: func() time.Time { return now }},
+	}
+	// A stopped rig with ready work: every seat row is exited, exactly the
+	// shape the incident left behind.
+	facts := []LifecycleProjectFacts{{
+		Key: "app", Rigs: []string{"r"}, Managed: true, Fresh: true, Ready: 3,
+		Seats: []rig.Seat{{Rig: "r", Session: "dev-build-1@r", Lifecycle: "exited"}},
+	}}
+
+	// Somebody else stopped it: no rig.stopped event exists, so the tick leaves
+	// the operator's decision alone.
+	quietStops, err := st.QuietStoppedRigs(ctx)
+	if err != nil {
+		t.Fatalf("quiet stops: %v", err)
+	}
+	if actions := lifecycle.Decide(facts, true, false, quietStops, now); len(actions) != 0 {
+		t.Fatalf("actions = %+v, want none for a rig the operator stopped", actions)
+	}
+	lifecycle.Start(ctx, nil)
+	if rigs.upCalls != 0 {
+		t.Fatalf("up calls = %d, want 0 while the stop is not ours", rigs.upCalls)
+	}
+
+	// Our own quiet stop is on the ledger: the rig is ours to revive.
+	if _, err := st.AppendEvent(ctx, store.Event{
+		Actor: "act", Kind: "rig.stopped", Subject: "r", Detail: "quiet 11m0s",
+	}); err != nil {
+		t.Fatalf("seed stop: %v", err)
+	}
+	quietStops, err = st.QuietStoppedRigs(ctx)
+	if err != nil {
+		t.Fatalf("quiet stops: %v", err)
+	}
+	actions := lifecycle.Decide(facts, true, false, quietStops, now)
+	if len(actions) != 1 || actions[0].Kind != LifecycleStart {
+		t.Fatalf("actions = %+v, want one start once the stop is ours", actions)
+	}
+	if !strings.HasPrefix(actions[0].Reason, "stopped_with_demand:") {
+		t.Fatalf("reason = %q, want stopped_with_demand", actions[0].Reason)
+	}
+	lifecycle.Start(ctx, actions)
+	if rigs.upCalls != 1 {
+		t.Fatalf("up calls = %d, want 1", rigs.upCalls)
+	}
+
+	// The next tick a moment later still sees the demand; the backoff is what
+	// keeps it to one launch, and the start it just recorded flips the ledger.
+	now = now.Add(30 * time.Second)
+	if actions := lifecycle.Decide(facts, true, false, quietStops, now); len(actions) != 1 {
+		t.Fatalf("second tick actions = %+v, want the plan to still see demand", actions)
+	}
+	lifecycle.Start(ctx, actions)
+	if rigs.upCalls != 1 {
+		t.Fatalf("up calls = %d, want 1: the second tick is inside StartBackoff", rigs.upCalls)
+	}
+	quietStops, err = st.QuietStoppedRigs(ctx)
+	if err != nil {
+		t.Fatalf("quiet stops: %v", err)
+	}
+	if quietStops["r"] {
+		t.Fatalf("quietStops = %+v, want the app's own start to clear the stop record", quietStops)
 	}
 }
