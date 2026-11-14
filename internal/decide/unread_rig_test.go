@@ -103,3 +103,26 @@ func TestNoFreeBuilderDetailAddsTheUnreadRigOnlyWhenItExplainsTheZero(t *testing
 		t.Fatalf("detail = %q, want both named", plural)
 	}
 }
+
+// TestPausedProjectWithUnreadRigsPlansNothing pins the arm order: an unread rig
+// makes capacity unknown, but a paused or disabled project is not planned at
+// all, so the unknown must not surface as a stale plan. Planning and merging are
+// separate questions — a paused project still merges its in-flight change
+// requests (act.RunTick holds no OnHold guard), and this arm governs the plan
+// only.
+func TestPausedProjectWithUnreadRigsPlansNothing(t *testing.T) {
+	cases := map[string]Project{
+		"disabled": {Key: "app", Forge: ForgeGitHub, ConcurrencyCap: 2},
+		"onhold":   {Key: "app", Forge: ForgeGitHub, Enabled: true, OnHold: true, ConcurrencyCap: 2},
+	}
+	for name, project := range cases {
+		snapshot := Snapshot{
+			Project: project, ForgeOK: true, Items: readyItems(1),
+			RigUnread: []string{"rig-a"}, RigUnknown: true, RigError: "rig rig-a: no daemon",
+		}
+		result := Decide(snapshot)
+		if result.Status != StatusNothing || len(result.Dispatches) != 0 {
+			t.Fatalf("%s: status = %q dispatches = %d, want nothing planned", name, result.Status, len(result.Dispatches))
+		}
+	}
+}
