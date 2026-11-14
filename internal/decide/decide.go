@@ -160,14 +160,25 @@ type Branch struct {
 // Snapshot is everything a tick decides from. ForgeOK is false when the forge read
 // failed: a failed read is `stale`, never "no tasks".
 type Snapshot struct {
-	Project    Project  `json:"project"`
-	Items      []Item   `json:"items"`
-	Rows       []Row    `json:"rows"`
-	Branches   []Branch `json:"branches"`
-	Builders   []string `json:"builders"`
-	Dispatched []int    `json:"dispatched,omitempty"` // item numbers an earlier tick dispatched
-	ForgeOK    bool     `json:"forge_ok"`
-	ForgeError string   `json:"forge_error,omitempty"`
+	Project  Project  `json:"project"`
+	Items    []Item   `json:"items"`
+	Rows     []Row    `json:"rows"`
+	Branches []Branch `json:"branches"`
+	Builders []string `json:"builders"`
+	// WaitingOnHuman names the seats the rig reports as waiting on a human
+	// (lifecycle attention_required, or a node with a pending input), folded in
+	// by the caller from the same read Builders comes from (#426, design D3).
+	// It carries the population Builders does — this project's builder seats —
+	// minus the running requirement: a waiting seat is not a running seat, so it
+	// is never in Builders, and without this list the plan cannot tell a busy
+	// fleet from one blocked on a person. A non-builder seat waiting on a human
+	// takes no dispatch capacity and does not belong here; the waiting panel
+	// lists those separately. Empty also means the read did not carry the fact,
+	// so a detail built here never claims a count nobody read.
+	WaitingOnHuman []string `json:"waiting_on_human,omitempty"`
+	Dispatched     []int    `json:"dispatched,omitempty"` // item numbers an earlier tick dispatched
+	ForgeOK        bool     `json:"forge_ok"`
+	ForgeError     string   `json:"forge_error,omitempty"`
 
 	Dispatches []DispatchState `json:"dispatches,omitempty"`
 	CRs        []CRState       `json:"change_requests,omitempty"`
@@ -371,14 +382,16 @@ func Decide(s Snapshot) Result {
 		return result
 	}
 
+	// One refusal detail for the whole plan: every ready item over the limit is
+	// refused for the same reason, and the count must not depend on which item
+	// happened to ask (#426). exhausted gates the human count: while a free seat
+	// remains, the refusal is the cap's doing, not the fleet's.
+	refusalDetail := noFreeBuilderDetail(tierRefusal, s.Project.Rigs, s.WaitingOnHuman, len(free) == 0)
+
 	for index, item := range ready {
 		if index >= limit {
-			detail := tierRefusal.String()
-			if detail == "" {
-				detail = "every admitted seat is taken"
-			}
 			result.Skips = append(result.Skips, Skip{
-				Number: item.Number, Reason: ReasonNoFreeBuilder, Detail: detail,
+				Number: item.Number, Reason: ReasonNoFreeBuilder, Detail: refusalDetail,
 			})
 			continue
 		}
@@ -482,13 +495,84 @@ func rigHasRunningSeat(builders []string, rigName string) bool {
 	return false
 }
 
+// refusalKind separates the two ways a walk can end with no seat: a later tier's spill trigger said
+// no, or every tier that was reached had no free seat. They read the same to the operator — nothing
+// can be dispatched — but only the second is the all-seats-taken statement the capacity line
+// qualifies with a human count (#426).
+type refusalKind string
+
+const (
+	// refusalSpill: a spill trigger refused the walk. The trigger is the fact.
+	refusalSpill refusalKind = "spill"
+	// refusalTaken: no trigger refused, a reached tier simply had no free seat — the same statement
+	// as `every admitted seat is taken`, one tier down.
+	refusalTaken refusalKind = "taken"
+)
+
 // tierRefusal is why a later tier was not reached. The skip detail quotes it as
 // `tier N (spill=<trigger>: <fact>)`, so the three parts are kept apart until the string is built.
 type tierRefusal struct {
+	Kind  refusalKind
 	Tier  int
 	Name  string
 	Spill string
 	Fact  string
+}
+
+// noFreeBuilderDetail is the detail every no_free_builder skip in one plan carries. Both forms that
+// say the seats are taken — the bare line and a reached tier with no free seat — gain the human count
+// when a seat waits on one and no free seat remained, because "busy fleet" and "fleet blocked on a
+// person" are different problems with different repairs (#426, design D3). A spill trigger refusal
+// names its own reason and is left alone: two facts on one line read as one. exhausted is whether the
+// plan had no free seat at all; a cap-bound refusal is the cap's doing, so a count there would answer
+// a question nobody asked.
+func noFreeBuilderDetail(refusal tierRefusal, rigs []RigRef, waiting []string, exhausted bool) string {
+	count := 0
+	if exhausted {
+		count = waitingOnHuman(rigs, waiting)
+	}
+	if detail := refusal.String(); detail != "" {
+		if refusal.Kind == refusalTaken {
+			return withHumanCount(detail, count)
+		}
+		return detail
+	}
+	return withHumanCount("every admitted seat is taken", count)
+}
+
+// withHumanCount appends the count to a detail line, and leaves the line byte for byte alone when
+// nobody is waiting: no detail ever grows a `(0 waiting on a human)`.
+func withHumanCount(detail string, count int) string {
+	if count <= 0 {
+		return detail
+	}
+	return fmt.Sprintf("%s (%d waiting on a human)", detail, count)
+}
+
+// waitingOnHuman counts the admitted seats the rig reports as waiting on a human. A seat on a rig
+// the project does not declare is ignored, exactly as fillSeats ignores it; a flat list (no tier
+// declaration) admits every seat, so every waiting seat counts there.
+func waitingOnHuman(rigs []RigRef, waiting []string) int {
+	if len(rigs) == 0 {
+		count := 0
+		for _, seat := range waiting {
+			if seat != "" {
+				count++
+			}
+		}
+		return count
+	}
+	declared := make(map[string]bool, len(rigs))
+	for _, ref := range rigs {
+		declared[ref.Name] = true
+	}
+	count := 0
+	for rigName, seats := range seatsByRig(waiting) {
+		if declared[rigName] {
+			count += len(seats)
+		}
+	}
+	return count
 }
 
 // String renders the spec's refusal form, `tier N (spill=<trigger>: <fact>)`, or "" when no tier
@@ -535,7 +619,7 @@ func fillSeats(rigs []RigRef, free, builders []string, cap int) ([]string, tierR
 		}
 		if !first {
 			if fact := spillFact(rigs[:index], free, builders, cap, ref.Spill); fact != "" {
-				refusal = tierRefusal{Tier: ref.Tier, Name: ref.Name, Spill: ref.Spill, Fact: fact}
+				refusal = tierRefusal{Kind: refusalSpill, Tier: ref.Tier, Name: ref.Name, Spill: ref.Spill, Fact: fact}
 				break
 			}
 		}
@@ -550,6 +634,7 @@ func fillSeats(rigs []RigRef, free, builders []string, cap int) ([]string, tierR
 		// while a later tier still supplies a seat.
 		if empty.Fact == "" {
 			empty = tierRefusal{
+				Kind: refusalTaken,
 				Tier: ref.Tier, Name: ref.Name, Spill: ref.Spill,
 				Fact: "no free seat on this rig",
 			}

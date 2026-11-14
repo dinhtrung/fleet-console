@@ -17,9 +17,17 @@
 
 ## 3. The capacity line names the human
 
-- [ ] 3.1 `decide.fillSeats` (or the refusal detail): when a taken seat is `attention_required`, append
+- [x] 3.1 `decide.fillSeats` (or the refusal detail): when a taken seat is `attention_required`, append
       `(N waiting on a human)` to the `no_free_builder` detail.
-- [ ] 3.2 Test: two admitted seats, one waiting → the detail carries the count; none waiting → unchanged string.
+      Shipped as `noFreeBuilderDetail` beside `fillSeats`, reading a new `Snapshot.WaitingOnHuman` seat
+      list: a waiting seat is not a running seat, so it is never in `Builders` and the fact needs its own
+      field. It applies to both forms that say the seats are taken — the bare line and a reached tier with
+      no free seat — and not to a spill-trigger refusal, which names its own reason. Folding the list in
+      from the rig read is 1.1's job — until it lands the detail is unchanged.
+- [x] 3.2 Test: two admitted seats, one waiting → the detail carries the count; none waiting → unchanged string.
+      `internal/decide/waiting_on_human_test.go`: the spec's exact string, the golden bare string, the
+      tiered all-seats-taken repro (declared / undeclared rig), the cap-bound gate, and a spill refusal
+      keeping its own wording.
 
 ## 4. The last reason survives the tick
 
