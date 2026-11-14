@@ -55,6 +55,13 @@ func TestDeleteProjectRemovesAppRows(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("verdict: %v", err)
 	}
+	// Adoption's verdict has no dispatch to point at (schemaV4): the delete must
+	// reach it through project_id, or a recreated project inherits it.
+	if _, err := st.AddVerdict(ctx, NewVerdict{
+		ProjectID: id, ItemNumber: 7, SHA: "adopted", Decision: "accept", Source: "adoption",
+	}); err != nil {
+		t.Fatalf("adopted verdict: %v", err)
+	}
 	if err := st.PutSnapshot(ctx, id, "forge", map[string]string{"items": "1"}, time.Now().UTC()); err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
@@ -89,10 +96,14 @@ func TestDeleteProjectRemovesAppRows(t *testing.T) {
 	if reasons, err := st.PlanReasons(ctx, id); err != nil || len(reasons) != 0 {
 		t.Fatalf("plan reasons = %+v, %v; want deleted with the project", reasons, err)
 	}
+	if verdicts, err := st.VerdictsForProject(ctx, id); err != nil || len(verdicts) != 0 {
+		t.Fatalf("verdicts = %+v, %v", verdicts, err)
+	}
 
 	// project.id has no AUTOINCREMENT, so SQLite hands the freed rowid to the
-	// next project. A family left behind would be inherited by a project that
-	// never wrote it — the reasons of a deleted project showing on a new one.
+	// next project. A family left behind is not a leak of disk but of meaning:
+	// the new project reads someone else's reasons and someone else's verdicts
+	// as its own.
 	_, again, err := st.UpsertProject(ctx, baseUpsert())
 	if err != nil {
 		t.Fatalf("second project: %v", err)
@@ -102,5 +113,8 @@ func TestDeleteProjectRemovesAppRows(t *testing.T) {
 	}
 	if reasons, err := st.PlanReasons(ctx, again); err != nil || len(reasons) != 0 {
 		t.Fatalf("recreated project %d inherited plan reasons = %+v, %v", again, reasons, err)
+	}
+	if inherited, err := st.VerdictsForProject(ctx, again); err != nil || len(inherited) != 0 {
+		t.Fatalf("recreated project %d inherited verdicts = %+v, %v", again, inherited, err)
 	}
 }
