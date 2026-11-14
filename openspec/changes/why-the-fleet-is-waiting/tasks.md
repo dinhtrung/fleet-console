@@ -53,15 +53,37 @@
 
 ## 5. Surfaces
 
-- [ ] 5.1 Project page: a "waiting on a human" panel from the seat list, with seat, rig, question, age, and a link to
+- [x] 5.1 Project page: a "waiting on a human" panel from the seat list, with seat, rig, question, age, and a link to
       the rig UI URL. No approve control.
-- [ ] 5.2 Project page: the item why-column reads the recorded reason; "no tick has run" when the table is empty.
-- [ ] 5.3 Tests: panel renders with one waiting seat; unknown rig read renders "unknown", not "clear"; why-column with
+      Shipped as `internal/web/waiting.go` (`waitingPanel`) on `GET /api/projects`'s project shape, rendered by the
+      Projects page. The seats come from the mirror's `rig_seats` snapshot (no per-request rig call) and one seat is one
+      row per (seat, question) — #427's obligation fingerprint; a seat whose lifecycle is `attention_required` with no
+      attention blocks at all is still listed (older rigs send only the lifecycle) saying the rig gave no question. The
+      read's health is the status block's `rig_stale` plus the snapshot's presence (unread is `unknown`, never clear);
+      the age is the ledger's newest standing `attention.raised` (#427), with the snapshot stamp as the fallback, exact
+      subject match; the link is `rig.Status().UIURL()`, the daemon's own port, read once per `/api/projects` request
+      and only when something waits.
+- [x] 5.2 Project page: the item why-column reads the recorded reason; "no tick has run" when the table is empty.
+      Shipped on the board's item table — the surface that has an item why-column: `boardItem.plan_reason`/`plan_age`
+      from `store.PlanReasons` (#428) and `boardProject.planned` (the forge stamp — written only when both forge reads
+      succeeded, which is the tick the plan ran on — or any recorded reason) so an empty table after a real plan reads
+      as "the last plan skipped nothing" and only a never-planned project says "no plan has run since start". The
+      sentence is checked before the row's own state reason, so a queued row's `queued` cannot keep it unreachable.
+- [x] 5.3 Tests: panel renders with one waiting seat; unknown rig read renders "unknown", not "clear"; why-column with
       and without a row.
+      `internal/web/waiting_test.go` (one seat with question+age+UI link; a failed read is unknown with the read's own
+      words; a never-read project is unknown; a seat with no question text is listed as Asking; a lifecycle-only
+      `attention_required` seat is listed; two kinds with one text render one row; two waiting projects cost one
+      `rig status`; the age comes from the ledger's raise, not the read) and `internal/web/why_column_test.go`
+      (recorded reason+detail+age; a planned project with no record; a never-planned project; the reason-row fallback
+      witness; a paused project that keeps the stamp and loses its rows; a stale tick is not a plan).
+      `internal/rig/status_test.go` pins the UI URL read.
 
 ## 6. Docs and gate
 
-- [ ] 6.1 `docs/fleet-console.md`: what `attention_required` means, why the board does not approve, how to read the
+- [x] 6.1 `docs/fleet-console.md`: what `attention_required` means, why the board does not approve, how to read the
       why-column.
+      Shipped as "Why the fleet is waiting" with its three subsections. #428's half of 6.2/6.3 was verified against
+      #440's base; the block's own gate is run at the rebase onto main.
 - [ ] 6.2 `go build ./... && go vet ./... && go test ./...` with output pasted in the PR.
 - [ ] 6.3 `openspec validate --all --strict`.

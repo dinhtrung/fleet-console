@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { getBoard } from "../lib/fleet";
-import type { BoardQuestion, MirrorRead } from "../lib/fleet";
+import type { BoardItem, BoardQuestion, MirrorRead } from "../lib/fleet";
 import { shortTime } from "../lib/fleet";
 import { dateTime } from "../lib/format";
 import {
@@ -94,6 +94,36 @@ function QuestionsSection({ questions }: { questions: BoardQuestion[] }) {
       </div>
     </div>
   );
+}
+
+
+/** The why-column (#429). Three facts, in this order, and never a blank cell:
+ *
+ *  1. the last plan's recorded reason and detail (`plan_reason`, #428) — the durable answer, which
+ *     survives the restart that erases a tick's log;
+ *  2. "no plan has run since start" when the project has never been planned — this must come before
+ *     the row's own reason, because a queued row always carries `queued` and that would otherwise
+ *     keep the honest answer unreachable;
+ *  3. the state-derived reason the row already carries (a stale verdict, a refused merge).
+ *
+ *  A project that has been planned but carries no reason for this item says "moving": the last
+ *  plan had nothing to say about it. */
+function WhyCell({ item, planned }: { item: BoardItem; planned: boolean }) {
+  if (item.plan_reason) {
+    return (
+      <>
+        <span className="text-ink">{item.plan_reason}</span>
+        {item.plan_age ? (
+          <span className="num ml-2 text-[0.625rem] text-ink-muted">recorded {item.plan_age} ago</span>
+        ) : null}
+      </>
+    );
+  }
+  if (!planned) {
+    return <span className="text-ink-muted">no plan has run since start</span>;
+  }
+  if (item.reason) return <>{item.reason}</>;
+  return <>moving</>;
 }
 
 export function BoardScreen() {
@@ -193,7 +223,7 @@ export function BoardScreen() {
                                 : "px-3 py-[var(--density-row-pad-y)] text-ink-muted"
                             }
                           >
-                            {item.reason || "moving"}
+                            <WhyCell item={item} planned={project.planned} />
                           </td>
                         </tr>
                       ))}

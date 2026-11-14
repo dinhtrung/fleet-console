@@ -348,6 +348,62 @@ from the app for it), or when a `rig-lifecycle:` line reads `roster=unknown` and
 Do not run it because a line reads `stopped_with_demand`: the tick is already starting that rig under its
 five-minute backoff.
 
+## Why the fleet is waiting
+
+Three surfaces answer "why is nothing moving", and they answer different questions. None of them is a
+button that acts on a seat.
+
+### What `attention_required` means
+
+A seat reports `attention_required` when its harness has stopped on something only a person can
+resolve — a permission prompt, a harness launch that wants confirmation, an arbitrated input. The rig
+records it as `needsAttention` (plus `arbitratedNeedsInput` and the activity's own `needsInput`), and
+the app reads those keys into a `SeatAttention` per reason: `attention`, `input` or `arbitrated`, with
+the text the rig reports when it has any.
+
+A seat in that state is **not running**, so it is not a builder: the dispatcher counts it as taken and
+says so — `no_free_builder` with the detail `every admitted seat is taken (N waiting on a human)`. That
+line is the difference between "the fleet is busy" and "the fleet is stuck on you", and it is why a
+project can look idle with work queued.
+
+The app records the wait as a ledger fact, one obligation per seat and question: `attention.raised`
+the first tick it sees the question, `attention.resolved` on the first successful read that no longer
+reports it. A failed rig read resolves nothing — absence has to be observed, never inferred — and no
+timer resolves anything, because an answered question and a question nobody asked again look identical
+to a clock.
+
+### How the board does not answer for you
+
+The Projects page carries a **waiting on a human** panel for each project: the seat, its rig, the
+question text and how long the app has seen it, plus one link to the OpenRig UI where a person answers
+the prompt. There is no approve control, and there will not be one: a board that can answer an agent's
+permission prompt can grant an agent anything by accident. The panel links; you answer where the seat
+is running.
+
+Two states in that panel are facts in their own right:
+
+- **unknown** — the rig read failed, so the app cannot say who is waiting. It renders as `unknown` with
+  the read's error, never as an empty list: an unread rig must not look healthy.
+- **the rig gave no question** — the seat is waiting and sent no text. It is still listed; a silent
+  prompt is a wait, and hiding it would make an unreadable prompt look like an idle seat.
+
+### How to read the why-column
+
+Every item row on the board carries a reason, and the column prefers the most durable fact it has:
+
+1. **the last plan's recorded reason** — `plan_reason` stores, per item, what the last plan decided
+   about it (`no_free_builder`, `live_row`, `branch_open_cr`, …) with its detail and the head it was
+   computed on. It survives a restart, which a tick's journal line does not. The cell prints the reason
+   and its detail and how long ago that plan ran.
+2. **the state-derived reason** — a stale verdict (`verdict stale: ACCEPT a1b2c3 is on …`), a refused
+   merge, a dispatch that ended. This is what the row can say when no plan skipped the item.
+3. **no plan has run since start** — before the first tick there is no reason table to read, and the
+   cell says so in words. A blank cell would read as "nothing wrong".
+
+An empty reason table **after** a plan is a different fact: the last plan had nothing to say about that
+item — it dispatched it, or the item was not open. The board knows the difference because the tick
+writes its status block; it never confuses "nothing was skipped" with "nothing was planned".
+
 ## The board
 
 ```

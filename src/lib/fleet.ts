@@ -7,6 +7,11 @@ export interface BoardItem {
   seat?: string;
   age: string;
   reason: string;
+  /** The last plan's recorded reason for leaving this item undispatched (#428), with its detail.
+   *  Absent means the last plan had nothing to say — which `planned` on the project separates from
+   *  "no plan has run yet". */
+  plan_reason?: string;
+  plan_age?: string;
   url?: string;
   labels: string[];
   /** Both commits a stale verdict names (console-ui): the judged sha and the head the review
@@ -43,6 +48,9 @@ export interface BoardProject {
   key: string;
   name: string;
   paused: boolean;
+  /** True once any tick has run: an empty plan-reason table then means the plan skipped nothing,
+   *  and before it the board must say nothing has been planned yet (#429). */
+  planned: boolean;
   /** How old each mirror read is (#394). The phrase, the thresholds and the never-read
    *  wording are built server-side, so every client prints the same thing. */
   forge_read: MirrorRead;
@@ -218,6 +226,32 @@ export interface Project {
   /** The reviewer seat's member prefix (#384): review rows go to `<reviewer>@<rig>`. Empty means
    *  the service's default, so the edit dialog carries it back unchanged. */
   reviewer?: string;
+  /** The "waiting on a human" panel (#429). `known: false` is an unread rig, never a clear one,
+   *  and `seats` is every seat on the project's rigs that has stopped on a person. */
+  waiting: WaitingPanel;
+}
+
+/** One seat waiting on a person. The panel shows it and links where a person answers it; the
+ *  board has no control that answers on their behalf (design D5). */
+export interface WaitingSeat {
+  seat: string;
+  rig: string;
+  kind: string;
+  /** Empty when the rig reported no text: `asking` says the wait is real and the prompt silent. */
+  question: string;
+  asking: boolean;
+  /** How long the app has seen the question, "" when it cannot say. */
+  since?: string;
+  since_at?: string;
+}
+
+export interface WaitingPanel {
+  /** False when the rig read failed: the surface must render that, not an empty list. */
+  known: boolean;
+  reason?: string;
+  /** Where the OpenRig UI answers. Absent when the daemon did not say where it listens. */
+  ui_url?: string;
+  seats: WaitingSeat[];
 }
 
 export interface ProjectsResponse {

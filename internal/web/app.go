@@ -73,6 +73,9 @@ type Config struct {
 	// Waker is the mirror loop's wake channel. Nil means no loop is running in this
 	// process (the one-shot commands); a verified delivery still answers 202.
 	Waker *mirror.Waker
+	// Now pins the clock for the read paths that measure an age (#429). Nil reads
+	// time.Now; a test supplies a fixed instant so an age is asserted, not raced.
+	Now func() time.Time
 }
 
 // New builds the HTTP app. /api/health is open; every other /api route needs
@@ -97,7 +100,10 @@ func New(cfg Config) (*fiber.App, error) {
 		IdleTimeout:  60 * time.Second,
 	})
 	hub := NewHub()
-	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor, Waker: cfg.Waker, Tick: cfg.TickInterval, MaxWait: cfg.MaxWait}
+	fleet := &Fleet{
+		Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor,
+		Waker: cfg.Waker, Tick: cfg.TickInterval, MaxWait: cfg.MaxWait, Now: cfg.Now,
+	}
 
 	app.Use(idempotency())
 	// Liveness is a constant on purpose (design D1): this route answers "the
