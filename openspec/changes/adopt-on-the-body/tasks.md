@@ -1,0 +1,29 @@
+# Tasks — adoption reads the body, not the branch
+
+## 1. The rule
+
+- [ ] 1.1 `internal/act/merge.go`: replace the `branchPrefix` prefix test in `MergeAdopted` with a comparison of the
+      item number the branch carries (last segment up to the first `-`, digits only) against the item from the body.
+- [ ] 1.2 Branch carries the same number → proceed as today. Different number → refuse, naming both numbers. No number
+      → proceed and emit one warning naming the convention and the branch.
+- [ ] 1.3 Keep the live-dispatch-on-another-branch refusal and the `Closes #n` requirement untouched.
+- [ ] 1.4 Delete `branchPrefix` if it has no other caller; if it does, leave it and say so in the PR body.
+
+## 2. The warning
+
+- [ ] 2.1 Dedupe the warning on `(item, head)` through the same ledger every other raise uses, one line per pair.
+- [ ] 2.2 Test: three ticks, one head → one warning; a new head → a second warning.
+
+## 3. Proof
+
+- [ ] 3.1 `TestAdoptedMergeAcceptsABranchWithNoItem`: `fix/<slug>` + `Closes #450` → merged, one warning.
+- [ ] 3.2 `TestAdoptedMergeAcceptsFixPrefixedBranch`: `fix/450-…` → merged, no warning.
+- [ ] 3.3 `TestAdoptedMergeRefusesABranchNamingAnotherItem`: `fix/438-…` + `Closes #451` → refused, error names both.
+- [ ] 3.4 `TestAdoptedMergeFeatureBranchUnchanged`: `feature/450-…` → merged, no warning (today's behaviour).
+- [ ] 3.5 `TestAdoptedMergeStillRefusesLiveDispatchOnAnotherBranch`: unchanged refusal still fires.
+
+## 4. Docs and gate
+
+- [ ] 4.1 `docs/fleet-console.md`: the branch convention is a convention, not a gate; what a mismatch means.
+- [ ] 4.2 `go build ./... && go vet ./... && go test ./...` with output pasted in the PR.
+- [ ] 4.3 `openspec validate --all --strict`.
