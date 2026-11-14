@@ -42,6 +42,13 @@ Ordered so each task leaves the tree green. `#n` is the GitHub issue that carrie
 - [ ] 6.2 Capacity summed over the active tier; a rig named twice or by two projects fails validation
 - [ ] 6.3 Fill-first inside a tier; a boundary is crossed only by its trigger
       not fail over; re-dispatch reuses the branch
+- [x] 6.8 "One unreadable rig does not blank the project" (#438): a failed fleet-wide roster read is retried per declared
+      rig, so the rigs that answer keep their seats and only the blind ones are dropped. `ProjectResult.RigUnread` /
+      `RigUnknown` / `RigError` carry it per project; a project whose every rig is unread writes no roster and plans
+      nothing (`decide.StatusStale`, never "no free builder"), and a project with a free seat missing names the rig in
+      its refusal (`…; rig <name> unread`). Verified: `TestOneUnreadRigDoesNotBlankTheOther`,
+      `TestEveryRigUnreadMakesTheProjectUnknown`, `TestUnreadRigDoesNotTakeTheOtherRigsCapacity`,
+      `TestUnreadRigIsNamedWhenNoSeatIsFree`, `TestEveryRigUnreadDecidesNothing`.
 
 ## 7. Verify on the box
 

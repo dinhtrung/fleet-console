@@ -185,6 +185,20 @@ type Snapshot struct {
 	ForgeOK        bool     `json:"forge_ok"`
 	ForgeError     string   `json:"forge_error,omitempty"`
 
+	// RigUnread names the project's rigs whose seats this tick could not read
+	// (#438). Their seats are simply absent from Builders, so the capacity the
+	// plan sees is the readable rigs' — the right number to dispatch on — and a
+	// refusal that would otherwise read as "the fleet is full" says which rig
+	// went blind instead.
+	RigUnread []string `json:"rig_unread,omitempty"`
+	// RigUnknown is true when the project's capacity could not be read at all:
+	// every rig it declares failed to answer. The plan then decides nothing,
+	// because an unread fleet is not an empty one — treating it as empty would
+	// report "no free builder" for a project that may well have builders.
+	RigUnknown bool `json:"rig_unknown,omitempty"`
+	// RigError is that failure, so the stale tick names what went wrong.
+	RigError string `json:"rig_error,omitempty"`
+
 	Dispatches []DispatchState `json:"dispatches,omitempty"`
 	CRs        []CRState       `json:"change_requests,omitempty"`
 	Verdicts   []VerdictState  `json:"verdicts,omitempty"`
@@ -284,6 +298,25 @@ func Decide(s Snapshot) Result {
 	if !s.Project.Enabled || s.Project.OnHold {
 		// A disabled or held project is not a tick source; it produces no intents.
 		return Result{Status: StatusNothing}
+	}
+	if s.RigUnknown {
+		// Unknown capacity is stale, not empty (#438). The one line the caller
+		// reports names the rig read, so the operator learns the project was not
+		// planned rather than that it had nowhere to dispatch.
+		//
+		// Stale is the deliberate answer for a live project, and it is not
+		// StatusNothing: Nothing would claim the project was planned and needed
+		// nothing, which is the very thing an unread roster cannot establish.
+		// Anything reading plan status therefore sees stale while a rig is blind,
+		// and that is the intended reading — not an oversight to be "fixed" into
+		// Nothing. The arm sits after enabled/onhold on purpose: a paused project
+		// is not planned at all, so there is nothing for a blind rig to withhold
+		// from it.
+		detail := s.RigError
+		if detail == "" {
+			detail = "rig read failed"
+		}
+		return Result{Status: StatusStale, Error: detail}
 	}
 
 	items := append([]Item(nil), s.Items...)
@@ -452,7 +485,7 @@ func Decide(s Snapshot) Result {
 	// refused for the same reason, and the count must not depend on which item
 	// happened to ask (#426). exhausted gates the human count: while a free seat
 	// remains, the refusal is the cap's doing, not the fleet's.
-	refusalDetail := noFreeBuilderDetail(tierRefusal, s.Project.Rigs, s.WaitingOnHuman, len(free) == 0)
+	refusalDetail := noFreeBuilderDetail(tierRefusal, s.Project.Rigs, s.WaitingOnHuman, s.RigUnread, len(free) == 0)
 
 	for index, item := range ready {
 		if index >= limit {
@@ -592,18 +625,48 @@ type tierRefusal struct {
 // names its own reason and is left alone: two facts on one line read as one. exhausted is whether the
 // plan had no free seat at all; a cap-bound refusal is the cap's doing, so a count there would answer
 // a question nobody asked.
-func noFreeBuilderDetail(refusal tierRefusal, rigs []RigRef, waiting []string, exhausted bool) string {
+func noFreeBuilderDetail(refusal tierRefusal, rigs []RigRef, waiting, unread []string, exhausted bool) string {
 	count := 0
 	if exhausted {
 		count = waitingOnHuman(rigs, waiting)
 	}
-	if detail := refusal.String(); detail != "" {
+	var detail string
+	if rendered := refusal.String(); rendered != "" {
 		if refusal.Kind == refusalTaken {
-			return withHumanCount(detail, count)
+			detail = withHumanCount(rendered, count)
+		} else {
+			detail = rendered
 		}
-		return detail
+	} else {
+		detail = withHumanCount("every admitted seat is taken", count)
 	}
-	return withHumanCount("every admitted seat is taken", count)
+	// A rig that went unread explains a zero capacity better than either form
+	// above: the seats are not busy, they are unseen (#438). Same gate as the
+	// human count — while a free seat remains the skip is the cap's doing, and a
+	// blind rig did not cause it.
+	if exhausted {
+		detail = withUnreadRigs(detail, unread)
+	}
+	return detail
+}
+
+// withUnreadRigs names the rigs whose read failed, and leaves the line alone when
+// every rig answered: no detail ever grows an empty `unread`.
+func withUnreadRigs(detail string, unread []string) string {
+	named := make([]string, 0, len(unread))
+	for _, rigName := range unread {
+		if rigName != "" {
+			named = append(named, rigName)
+		}
+	}
+	switch len(named) {
+	case 0:
+		return detail
+	case 1:
+		return fmt.Sprintf("%s; rig %s unread", detail, named[0])
+	default:
+		return fmt.Sprintf("%s; rigs %s unread", detail, strings.Join(named, ", "))
+	}
 }
 
 // withHumanCount appends the count to a detail line, and leaves the line byte for byte alone when

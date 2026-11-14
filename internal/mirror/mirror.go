@@ -43,6 +43,20 @@ type ProjectResult struct {
 	ForgeError     string
 	BranchError    string
 	RigWarnings    []string
+	// RigUnread names this project's declared rigs whose seats the tick could
+	// not read (#438), in the order the project declares them. A rig here
+	// contributes no seats, and that zero is a fact about the read, not about
+	// the fleet.
+	RigUnread []string
+	// RigUnknown is true when this project's capacity cannot be known at all:
+	// every rig it declares failed to answer, or it declares none and the
+	// roster read itself failed. The project is then undecided, which is not
+	// the same as empty — an empty fleet would mean "no free builder".
+	RigUnknown bool
+	// RigError is this project's first rig read failure, "" when the read
+	// answered. It names the rig, so a refusal can say which one went blind
+	// rather than reporting a bare zero.
+	RigError string
 }
 
 // TickResult is everything one tick read.
@@ -51,6 +65,13 @@ type TickResult struct {
 	Projects map[string]ProjectResult
 	RigStale bool
 	RigError string
+	// QueueStale is the queue read's own failure, kept apart from RigStale so a
+	// failed roster read does not cost the project its rows: the two reads are
+	// independent, and only the one that failed is stale. (#438)
+	QueueStale bool
+	// RigUnread lists every rig this tick could not read, so a caller holding
+	// the aggregate can still name the blind one.
+	RigUnread []string
 	// RigDown is the one rig failure with a decision attached (epic #320, D1):
 	// no daemon answered. Everything else that sets RigStale keeps the
 	// lifecycle's generic refusal — a timeout is not a missing daemon.
@@ -110,6 +131,10 @@ type statusBlock struct {
 	RigError       string   `json:"rig_error,omitempty"`
 	BranchError    string   `json:"branch_error,omitempty"`
 	RigWarnings    []string `json:"rig_warnings,omitempty"`
+	// RigUnread names the project's rigs the tick could not read (#438). A
+	// reader that sees seats and this list together knows the roster is partial
+	// and which rig is missing, instead of reading the gap as an empty rig.
+	RigUnread []string `json:"rig_unread,omitempty"`
 }
 
 // Tick reads every project once. Forge failures keep the previous item rows and
@@ -121,18 +146,32 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 	var rows []rig.QueueRow
 	var seats []rig.Seat
 	seatsRead := false
+	// rigErrors holds the rigs whose seats this tick could not read. One rig
+	// that cannot answer must not take the others' seats with it (#438): the
+	// roster read is fleet-wide, so a single slow or downgraded rig used to
+	// blank every rig of the project and its capacity with them.
+	rigErrors := map[string]error{}
 	if m.Rig != nil {
 		var err error
 		rows, err = m.Rig.QueueList(ctx)
 		if err != nil {
-			result.RigStale, result.RigError = true, err.Error()
+			result.QueueStale, result.RigError = true, err.Error()
 			result.RigDown = errors.Is(err, rig.ErrDaemonDown)
 		} else {
 			rows = m.fillBodies(ctx, rows)
 		}
 		seats, err = m.Rig.Seats(ctx)
-		if err != nil {
-			result.RigStale = true
+		if err == nil {
+			seatsRead = true
+		} else {
+			// The fleet-wide read is the fast path: it answers for every rig at
+			// once. When it fails, ask each declared rig on its own — the rigs
+			// that answer keep their seats, and only the blind ones are reported.
+			// A deployment with no declared rig admits every seat, so there is
+			// no list to decompose and the failure stays the whole roster's.
+			perRig, perRigErrs := m.seatsPerRig(ctx, declaredRigs(projects))
+			seats, rigErrors = perRig, perRigErrs
+			seatsRead = len(rigErrors) == 0
 			if result.RigError == "" {
 				result.RigError = err.Error()
 			}
@@ -142,9 +181,23 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 			if !result.RigDown {
 				result.RigDown = errors.Is(err, rig.ErrDaemonDown)
 			}
-		} else {
-			seatsRead = true
+			for _, rigErr := range rigErrors {
+				if !result.RigDown {
+					result.RigDown = errors.Is(rigErr, rig.ErrDaemonDown)
+				}
+			}
 		}
+	}
+	// RigStale means "the roster is not whole": the queue read failed, or a rig
+	// the projects declare could not be read. A decomposition that recovered
+	// every rig leaves it false, because the fleet is known — assembled from
+	// parts is still known.
+	result.RigUnread = sortedRigNames(rigErrors)
+	// A mirror with no rig adapter reads no roster, which is not a failure: the
+	// rosters are empty because nothing asked, not because something went blind.
+	rosterFailed := m.Rig != nil && !seatsRead
+	if result.QueueStale || len(rigErrors) > 0 {
+		result.RigStale = true
 	}
 
 	for _, project := range projects {
@@ -152,11 +205,26 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 			Rows:  filterRows(rows, project.Rigs),
 			Seats: filterSeats(seats, project.Rigs),
 		}
+		for _, rigName := range project.Rigs {
+			if rigErr, ok := rigErrors[rigName]; ok {
+				pr.RigUnread = append(pr.RigUnread, rigName)
+				if pr.RigError == "" {
+					pr.RigError = rigErr.Error()
+				}
+			}
+		}
+		// Unknown, not empty: a project whose every rig went unread has no
+		// capacity this tick, and a project that declares no rig admits every
+		// seat, so it is unknown exactly when the roster read failed.
+		pr.RigUnknown = rosterFailed && (len(project.Rigs) == 0 || len(pr.RigUnread) == len(project.Rigs))
 		// Only a read that answered can say a rig has no seats. After a failed
 		// read every configured rig would look absent, so the stale flag and
-		// RigError carry the truth and no rig is named as a ghost.
+		// RigError carry the truth and no rig is named as a ghost. A rig that
+		// went unread is named as unread, not as absent — the same rule (#438).
 		if seatsRead {
 			pr.RigWarnings = missingRigs(project.Rigs, seats)
+		} else if len(project.Rigs) > 0 {
+			pr.RigWarnings = missingRigs(project.Rigs, seats, pr.RigUnread...)
 		}
 
 		timeout := m.projectTimeoutFor(ctx, project.ID)
@@ -228,15 +296,25 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 			}
 		}
 
+		rigStale, rigError := result.RigStale, result.RigError
+		if len(pr.RigUnread) > 0 {
+			rigStale = true
+			rigError = pr.RigError
+		}
 		status := statusBlock{
 			ForgeStale: pr.ForgeStale, ForgeForbidden: pr.ForgeForbidden, ForgeError: pr.ForgeError,
-			RigStale: result.RigStale, RigDown: result.RigDown, RigError: result.RigError,
-			BranchError: pr.BranchError, RigWarnings: pr.RigWarnings,
+			RigStale: rigStale, RigDown: result.RigDown, RigError: rigError,
+			BranchError: pr.BranchError, RigWarnings: pr.RigWarnings, RigUnread: pr.RigUnread,
 		}
 		if err := m.Store.PutSnapshot(ctx, project.ID, "status", status, at); err != nil {
 			return result, err
 		}
-		if !result.RigStale {
+		// The roster write is per project: the queue read and this project's own
+		// rigs are what it depends on, so a project whose rigs all answered
+		// keeps a fresh roster even when another project's rig is blind (#438).
+		// An unknown project writes no roster at all — a partial or empty one
+		// would be read as a fact about the fleet.
+		if !result.QueueStale && !pr.RigUnknown {
 			if err := m.Store.PutSnapshot(ctx, project.ID, "rig_queue", pr.Rows, at); err != nil {
 				return result, err
 			}
@@ -288,7 +366,10 @@ func (m *Mirror) fillBodies(ctx context.Context, rows []rig.QueueRow) []rig.Queu
 
 // missingRigs names configured rigs with no live seats. A project with one of
 // these has no builders for that rig and must not dispatch to it.
-func missingRigs(rigs []string, seats []rig.Seat) []string {
+// unread names the rigs whose read failed: a rig that went blind has no seats
+// to show, but it is not a rig without seats, so it must not be reported as a
+// ghost (#438).
+func missingRigs(rigs []string, seats []rig.Seat, unread ...string) []string {
 	if len(rigs) == 0 {
 		return nil
 	}
@@ -296,13 +377,68 @@ func missingRigs(rigs []string, seats []rig.Seat) []string {
 	for _, seat := range seats {
 		present[seat.Rig] = true
 	}
+	blind := make(map[string]bool, len(unread))
+	for _, rigName := range unread {
+		blind[rigName] = true
+	}
 	var missing []string
 	for _, rigName := range rigs {
-		if !present[rigName] {
+		if !present[rigName] && !blind[rigName] {
 			missing = append(missing, rigName)
 		}
 	}
 	return missing
+}
+
+// declaredRigs is every rig the projects declare, deduplicated and sorted. The
+// fleet-wide roster read is per host; the per-rig fallback needs the names, and
+// a set keyed by name is what makes one read per rig serve the projects that
+// share it.
+func declaredRigs(projects []Project) []string {
+	seen := make(map[string]bool, len(projects))
+	var names []string
+	for _, project := range projects {
+		for _, rigName := range project.Rigs {
+			if rigName == "" || seen[rigName] {
+				continue
+			}
+			seen[rigName] = true
+			names = append(names, rigName)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// seatsPerRig asks each rig for its own roster. It is the fallback for a failed
+// fleet-wide read (#438): the rigs that answer keep their seats and the rest are
+// reported, so one blind rig costs its own capacity and nobody else's.
+func (m *Mirror) seatsPerRig(ctx context.Context, rigs []string) ([]rig.Seat, map[string]error) {
+	var seats []rig.Seat
+	errs := make(map[string]error, len(rigs))
+	for _, rigName := range rigs {
+		rigSeats, err := m.Rig.SeatsForRig(ctx, rigName)
+		if err != nil {
+			errs[rigName] = fmt.Errorf("rig %s: %w", rigName, err)
+			continue
+		}
+		seats = append(seats, rigSeats...)
+	}
+	return seats, errs
+}
+
+// sortedRigNames is the unread set as a list, so a caller can name the blind
+// rigs in one stable order.
+func sortedRigNames(errs map[string]error) []string {
+	if len(errs) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(errs))
+	for rigName := range errs {
+		names = append(names, rigName)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // filterRows keeps the project's rows: those addressed to one of its rigs, and
@@ -386,6 +522,10 @@ func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []
 			Rigs: decideRigRefs(project.RigTiers), RelayMode: project.RelayMode,
 		},
 		ForgeOK: !result.ForgeStale,
+		// Capacity is the readable rigs' (#438): Builders below carries the
+		// seats of the rigs that answered, and these two fields say which rigs
+		// did not, so the plan can name them instead of reporting a bare zero.
+		RigUnread: result.RigUnread, RigUnknown: result.RigUnknown, RigError: result.RigError,
 	}
 	if result.ForgeStale {
 		snapshot.ForgeError = result.ForgeError

@@ -473,3 +473,115 @@ func TestTierRigsSurviveTheRoundTripAndTheFilters(t *testing.T) {
 		t.Fatalf("filterRows = %d rows, want 2: a tier-1 row was dropped or a foreign one kept", len(got))
 	}
 }
+
+// seatNode is one `rig ps --nodes` row: a running builder seat on a rig.
+func seatNode(rigName, logicalID string) string {
+	return fmt.Sprintf(`{"nodeId":"n-%s-%s","rigName":%q,"canonicalSessionName":"%s@%s","logicalId":%q,"lifecycleState":"running","sessionStatus":"running"}`,
+		rigName, logicalID, rigName, "build", rigName, logicalID)
+}
+
+// twoRigProject binds app to rig-a and rig-b: the shape #438 is about, where a
+// project's capacity is the sum over its rigs.
+func twoRigFixture(t *testing.T) (*store.Store, int64) {
+	t.Helper()
+	st := newStore(t)
+	id, err := st.CreateProject(context.Background(), store.ProjectInput{
+		Key: "app", Name: "app", ForgeKind: "github", ForgeProject: "o/app",
+		Rigs: []string{"rig-a", "rig-b"}, ConcurrencyCap: 2, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	return st, id
+}
+
+// TestOneUnreadRigDoesNotBlankTheOther is #438's scenario: the fleet-wide roster
+// read fails, rig-b cannot answer on its own either, and rig-a's seats must
+// survive — capacity comes from the rigs that answered.
+func TestOneUnreadRigDoesNotBlankTheOther(t *testing.T) {
+	ctx := context.Background()
+	st, id := twoRigFixture(t)
+	runner := runnerFunc(func(_ context.Context, args ...string) ([]byte, error) {
+		if len(args) == 0 || args[0] != "ps" {
+			return []byte("[]"), nil
+		}
+		switch {
+		case args[1] == "--nodes" && len(args) > 2 && args[2] == "-A":
+			return nil, errors.New("rig ps --nodes -A: exit 1: node listing timed out")
+		case args[len(args)-1] == "rig-a":
+			return []byte("[" + seatNode("rig-a", "build") + "]"), nil
+		default:
+			return nil, errors.New("rig ps --nodes --rig rig-b: exit 1: daemon refused")
+		}
+	})
+	m := &Mirror{Store: st, Rig: rig.NewAdapter(runner)}
+	read, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: forge.NewFake(forge.KindGitHub), Rigs: []string{"rig-a", "rig-b"}}})
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	pr := read.Projects["app"]
+	if len(pr.Seats) != 1 || pr.Seats[0].Rig != "rig-a" {
+		t.Fatalf("seats = %+v, want rig-a's seat kept", pr.Seats)
+	}
+	if len(pr.RigUnread) != 1 || pr.RigUnread[0] != "rig-b" {
+		t.Fatalf("unread = %v, want [rig-b]", pr.RigUnread)
+	}
+	if pr.RigUnknown {
+		t.Fatal("project reported unknown while one rig answered: capacity is known, at one")
+	}
+	if !strings.Contains(pr.RigError, "rig-b") {
+		t.Fatalf("rig error = %q, want it to name rig-b", pr.RigError)
+	}
+	if len(pr.RigWarnings) != 0 {
+		t.Fatalf("warnings = %v, want none: rig-b went unread, it is not a ghost", pr.RigWarnings)
+	}
+	if !read.RigStale || len(read.RigUnread) != 1 || read.RigUnread[0] != "rig-b" {
+		t.Fatalf("aggregate stale=%v unread=%v, want rig-b named", read.RigStale, read.RigUnread)
+	}
+	// The readable roster is a fact worth keeping: the project writes it and the
+	// status block records the gap beside it.
+	if payload, _, err := st.GetSnapshot(ctx, id, "rig_seats"); err != nil || len(payload) == 0 {
+		t.Fatalf("rig_seats = %s, %v; want the readable rigs written", payload, err)
+	}
+	status, _, err := st.GetSnapshot(ctx, id, "status")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !strings.Contains(string(status), `"rig_unread":["rig-b"]`) {
+		t.Fatalf("status = %s, want rig_unread naming rig-b", status)
+	}
+}
+
+// TestEveryRigUnreadMakesTheProjectUnknown: an unread fleet is not an empty one,
+// so the project is undecided and writes no roster at all.
+func TestEveryRigUnreadMakesTheProjectUnknown(t *testing.T) {
+	ctx := context.Background()
+	st, id := twoRigFixture(t)
+	runner := runnerFunc(func(_ context.Context, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "ps" {
+			return nil, errors.New("rig ps: exit 1: no daemon")
+		}
+		return []byte("[]"), nil
+	})
+	m := &Mirror{Store: st, Rig: rig.NewAdapter(runner)}
+	read, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: forge.NewFake(forge.KindGitHub), Rigs: []string{"rig-a", "rig-b"}}})
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	pr := read.Projects["app"]
+	if !pr.RigUnknown {
+		t.Fatal("project not marked unknown with every rig unread")
+	}
+	if len(pr.Seats) != 0 {
+		t.Fatalf("seats = %+v, want none", pr.Seats)
+	}
+	if len(pr.RigUnread) != 2 || pr.RigUnread[0] != "rig-a" || pr.RigUnread[1] != "rig-b" {
+		t.Fatalf("unread = %v, want [rig-a rig-b] in declared order", pr.RigUnread)
+	}
+	if payload, at, err := st.GetSnapshot(ctx, id, "rig_seats"); err != nil || len(payload) != 0 || !at.IsZero() {
+		t.Fatalf("rig_seats = %s at %v, %v; want no roster written", payload, at, err)
+	}
+	if status, err := st.MirrorStatus(ctx, id); err != nil || status.LastRigAt != nil {
+		t.Fatalf("rig stamp = %v, %v; want none", status.LastRigAt, err)
+	}
+}

@@ -3,6 +3,7 @@ package mirror
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/dinhtrung/fleet-console/internal/forge"
 )
@@ -72,6 +73,11 @@ func projectBusyReason(key string, project ProjectResult) string {
 		return fmt.Sprintf("%s: forge read stale", key)
 	case project.BranchError != "":
 		return fmt.Sprintf("%s: branch read failed: %s", key, project.BranchError)
+	case len(project.RigUnread) > 0:
+		// A blind rig is not idleness either (#438): the project's capacity is
+		// unknown for that rig, and backing off lengthens the interval exactly
+		// while the app cannot see it.
+		return fmt.Sprintf("%s: rig read failed: %s unread", key, strings.Join(project.RigUnread, ", "))
 	}
 	for _, item := range project.Items {
 		if item.State == forge.StateOpen {
