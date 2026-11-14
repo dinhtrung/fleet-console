@@ -1527,3 +1527,38 @@ func TestProjectReviewerRoundTrip(t *testing.T) {
 		t.Fatalf("file kept a default reviewer key:\n%s", h.bytes(t))
 	}
 }
+
+// TestProjectEpicSerialRoundTrip (#443 follow-up): epic_serial: false is an
+// operator's escape hatch, and the fixed edit form carries it back on every
+// save. The API contract that makes that work: an edit sending the value keeps
+// it, and only a genuine change is reported as changed.
+func TestProjectEpicSerialRoundTrip(t *testing.T) {
+	h := newProjectsHarness(t, nil)
+	off := false
+
+	resp, body := h.do(t, http.MethodPut, "/api/projects/existing-1",
+		editBody("existing-1", func(r *ProjectRequest) { r.EpicSerial = &off }))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(h.bytes(t)), "epic_serial: false") {
+		t.Fatalf("file does not carry the escape hatch:\n%s", h.bytes(t))
+	}
+
+	// The shape the fixed dialog sends: the row's own value carried on a rename.
+	resp, body = h.do(t, http.MethodPut, "/api/projects/existing-1",
+		editBody("existing-1", func(r *ProjectRequest) { r.Name = "Renamed one"; r.EpicSerial = &off }))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("rename status = %d, want 200 (%s)", resp.StatusCode, body)
+	}
+	var answer EditProjectResponse
+	if err := json.Unmarshal(body, &answer); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(answer.Changed) != 1 || answer.Changed[0] != "name" {
+		t.Fatalf("changed = %v, want only the name", answer.Changed)
+	}
+	if !strings.Contains(string(h.bytes(t)), "epic_serial: false") {
+		t.Fatalf("a rename erased the escape hatch:\n%s", h.bytes(t))
+	}
+}

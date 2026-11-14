@@ -226,6 +226,9 @@ export interface Project {
   /** The reviewer seat's member prefix (#384): review rows go to `<reviewer>@<rig>`. Empty means
    *  the service's default, so the edit dialog carries it back unchanged. */
   reviewer?: string;
+  /** One child of an epic at a time (#443). Absent means true; false is the escape hatch and must
+   *  survive a save from this dialog, so it is carried, not defaulted away. */
+  epic_serial?: boolean;
   /** The "waiting on a human" panel (#429). `known: false` is an unread rig, never a clear one,
    *  and `seats` is every seat on the project's rigs that has stopped on a person. */
   waiting: WaitingPanel;
@@ -326,6 +329,8 @@ export interface CreateProjectInput {
   };
   /** Carried so a whole-definition save never clears it (#384); empty is the default. */
   reviewer?: string;
+  /** Carried so a whole-definition save never clears it (#443); true is the default. */
+  epic_serial?: boolean;
 }
 
 export interface CreateProjectResponse {
