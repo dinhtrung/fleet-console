@@ -35,6 +35,11 @@ type LifecycleAction struct {
 	Reason string
 	// Quiet is how long the rig had been quiet when a stop was decided.
 	Quiet time.Duration
+	// Facts is the `running=… ready=… seats_known=…` tail of the journal line,
+	// copied from the LifecycleRig the rule decided on (design D3): the
+	// executor's outcome line and the `none` line therefore read the same
+	// numbers, and neither recomputes them.
+	Facts string
 }
 
 // LifecycleProject is one project bound to a rig, as the decision reads it.
@@ -299,18 +304,12 @@ func (l *Lifecycle) Decide(projects []LifecycleProjectFacts, seatsKnown, rigDown
 // <rig> started — <reason>`), so a start tick logs exactly one line per rig
 // and an outcome is never claimed before it happens.
 func LifecycleLine(entry LifecycleRig, action *LifecycleAction) string {
-	ready := 0
-	for _, project := range entry.Projects {
-		if project.Managed && project.Fresh {
-			ready += project.Ready
-		}
-	}
-	facts := fmt.Sprintf("running=%d ready=%d seats_known=%t", entry.Running, ready, entry.SeatsKnown)
-	if entry.RosterUnknown {
-		facts += " roster=unknown"
-	}
+	facts := rigFacts(entry)
 	if action == nil {
 		return fmt.Sprintf("rig-lifecycle: %s none — %s", entry.Name, facts)
+	}
+	if action.Facts != "" {
+		facts = action.Facts
 	}
 	switch action.Kind {
 	case LifecycleStart:
@@ -321,6 +320,22 @@ func LifecycleLine(entry LifecycleRig, action *LifecycleAction) string {
 	default:
 		return fmt.Sprintf("rig-lifecycle: %s none — %s", entry.Name, facts)
 	}
+}
+
+// rigFacts is the numbers half of the journal line, computed once from the
+// entry the rule decided on (design D3).
+func rigFacts(entry LifecycleRig) string {
+	ready := 0
+	for _, project := range entry.Projects {
+		if project.Managed && project.Fresh {
+			ready += project.Ready
+		}
+	}
+	facts := fmt.Sprintf("running=%d ready=%d seats_known=%t", entry.Running, ready, entry.SeatsKnown)
+	if entry.RosterUnknown {
+		facts += " roster=unknown"
+	}
+	return facts
 }
 
 // Start executes the start actions and returns the rigs whose launch failed,
@@ -393,6 +408,7 @@ func DecideLifecycle(in LifecycleInput) []LifecycleAction {
 			if reason, ok := startReason(rigEntry); ok {
 				actions = append(actions, LifecycleAction{
 					Kind: LifecycleStart, Rig: rigEntry.Name, Spec: rigEntry.SpecPath, Reason: reason,
+					Facts: rigFacts(rigEntry),
 				})
 			}
 			continue
@@ -413,6 +429,7 @@ func DecideLifecycle(in LifecycleInput) []LifecycleAction {
 		}
 		actions = append(actions, LifecycleAction{
 			Kind: LifecycleStop, Rig: rigEntry.Name, Quiet: in.Now.Sub(rigEntry.QuietSince),
+			Facts: rigFacts(rigEntry),
 		})
 	}
 	return actions
@@ -636,7 +653,7 @@ func (e *LifecycleExecutor) start(ctx context.Context, action LifecycleAction) e
 		return err
 	}
 	e.clearNote("rig " + action.Rig + " up")
-	e.logf("rig-lifecycle: %s started — %s", action.Rig, action.Reason)
+	e.logf("rig-lifecycle: %s started — %s — %s", action.Rig, action.Reason, action.Facts)
 	if _, err := e.Store.AppendEvent(ctx, store.Event{
 		Actor: "act", Kind: "rig.started", Subject: action.Rig, Detail: action.Reason,
 	}); err != nil {
@@ -658,7 +675,7 @@ func (e *LifecycleExecutor) Stop(ctx context.Context, actions []LifecycleAction)
 		}
 		e.clearNote("rig " + action.Rig + " down")
 		quiet := action.Quiet.Round(time.Second)
-		e.logf("rig-lifecycle: %s stopped — quiet %s", action.Rig, quiet)
+		e.logf("rig-lifecycle: %s stopped — quiet %s — %s", action.Rig, quiet, action.Facts)
 		if _, err := e.Store.AppendEvent(ctx, store.Event{
 			Actor: "act", Kind: "rig.stopped", Subject: action.Rig, Detail: "quiet " + quiet.String(),
 		}); err != nil {

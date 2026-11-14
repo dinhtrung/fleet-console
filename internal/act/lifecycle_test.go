@@ -679,8 +679,8 @@ func TestRigLifecycleExecutorAuditsSuccess(t *testing.T) {
 	if len(events) != 2 || events[0].Kind != "rig.stopped" {
 		t.Fatalf("events = %+v, want rig.stopped newest", events)
 	}
-	if lines[len(lines)-1] != "rig-lifecycle: %s stopped — quiet %s" {
-		t.Fatalf("stop line = %q", lines[len(lines)-1])
+	if !strings.HasPrefix(lines[len(lines)-1], "rig-lifecycle: %s stopped — quiet %s") {
+		t.Fatalf("stop line = %q, want the stopped-with-quiet wording", lines[len(lines)-1])
 	}
 }
 

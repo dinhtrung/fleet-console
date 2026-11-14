@@ -18,8 +18,8 @@
 - [x] 2.3 Test: a table over {running quiet, stopped with demand, stopped no demand, unknown roster} asserts the line text.
       Shipped as `TestLifecycleLine` (five rows, including `stop`), plus `TestLifecycleDecideLogsOneLinePerRig` for the
       one-line-per-rig promise through the coordinator. A rig the rule acted on keeps the executor's outcome line
-      (`rig-lifecycle: <rig> started — <reason>`, the accepted spec's wording), so the tick never logs two lines for
-      one rig and never claims an outcome before the launch happened.
+      (`rig-lifecycle: <rig> started — <reason> — <facts>`, the accepted spec's wording plus the same facts), so the
+      tick never logs two lines for one rig and never claims an outcome before the launch happened.
 
 ## 3. A plan skip reaches the journal
 
