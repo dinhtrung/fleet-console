@@ -238,6 +238,15 @@ type Forge interface {
 	// CRNotes reads a change request's conversation, keyed by the change
 	// request's own number. This is where verdicts are posted.
 	CRNotes(ctx context.Context, number int) ([]Comment, error)
+	// ItemState reads one item's state, closed items included. Items is the open
+	// list — both adapters ask for open only (github.go, gitlab.go) — so a closed
+	// item is absent from it, and absent cannot be told from "no such item" there.
+	// That difference is the whole re-home rule: a branch named for a *closed* item
+	// is a replay, a branch named for a number nobody has is a typo, and only this
+	// read can separate them. It answers with StateOpen or StateClosed and errors
+	// on anything else, including a number the forge does not have: a state nobody
+	// reported is never read as closed.
+	ItemState(ctx context.Context, number int) (string, error)
 	// SubIssues reads one epic's children, open and closed both. Items reads the
 	// open list only, so a closed child is absent from its result and "no
 	// sub-issues" cannot be told from "all sub-issues closed" there. The epic
@@ -253,6 +262,18 @@ type Forge interface {
 	// the integrator, not to a seat.
 	Ready(ctx context.Context, number int) error
 	Merge(ctx context.Context, number int, sha string) error
+}
+
+// normalizeState maps a payload's state name onto the two states the app acts on.
+// An unrecognised name is an error and never a default: reading a state nobody
+// reported as "closed" would re-home a branch onto the wrong item, and reading it
+// as "open" would refuse a merge that is legitimate.
+func normalizeState(number int, raw string) (string, error) {
+	switch state := strings.ToLower(strings.TrimSpace(raw)); state {
+	case StateOpen, StateClosed:
+		return state, nil
+	}
+	return "", fmt.Errorf("forge: item #%d reported state %q, which is neither open nor closed", number, raw)
 }
 
 // Timeout scales one project's read deadline with the work in it:

@@ -39,6 +39,13 @@ type Fake struct {
 	SubIssuesValue map[int][]Item
 	SubIssuesErr   error
 	SubIssuesAsked []int
+	// ItemStateValue holds states for items the open list does not carry. A real
+	// adapter asks for open only, so a closed item is *absent* from ItemsValue and
+	// a fake that only consulted the list could not model the re-home case at all
+	// (#464). An entry here wins over ItemsValue; ItemStateErr fails every read,
+	// which is how a test states "the forge could not say".
+	ItemStateValue map[int]string
+	ItemStateErr   error
 	// posted holds the comments this fake wrote, so Notes returns them the way a
 	// real forge would. It is unexported: a test asserts through Writes or through
 	// a caller's behaviour, not by reaching for this.
@@ -132,6 +139,24 @@ func (f *Fake) SubIssues(_ context.Context, number int) ([]Item, error) {
 		return nil, f.ReadErr
 	}
 	return append([]Item(nil), f.SubIssuesValue[number]...), nil
+}
+
+// ItemState answers with the configured per-item state, then with the state of a
+// matching item in ItemsValue, and otherwise errors — a number the forge does not
+// have is not a state, and the re-home rule depends on that difference.
+func (f *Fake) ItemState(_ context.Context, number int) (string, error) {
+	if f.ItemStateErr != nil {
+		return "", f.ItemStateErr
+	}
+	if state, ok := f.ItemStateValue[number]; ok {
+		return state, nil
+	}
+	for _, item := range f.ItemsValue {
+		if item.Number == number {
+			return item.State, nil
+		}
+	}
+	return "", fmt.Errorf("forge: item #%d was not found", number)
 }
 
 // SetMarker records a marker write.

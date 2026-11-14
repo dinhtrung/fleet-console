@@ -177,6 +177,27 @@ func (g *GitLab) openIssues(ctx context.Context) ([]glIssue, error) {
 	return all, nil
 }
 
+// ItemState reads one issue's state. Items asks state=opened and so never returns
+// a closed one; this is the read that tells a re-homed branch (#438 closed, branch
+// kept, #449) from a number that names nothing at all. One request, not a list.
+// GitLab spells the open state "opened", and that is the only name this adapter
+// translates: an unknown name is an error, never a guess.
+func (g *GitLab) ItemState(ctx context.Context, number int) (string, error) {
+	raw, err := g.cli.api(ctx, fmt.Sprintf("projects/%s/issues/%d", g.enc, number))
+	if err != nil {
+		return "", fmt.Errorf("forge: read GitLab issue %d: %w", number, err)
+	}
+	var issue glIssue
+	if err := json.Unmarshal(raw, &issue); err != nil {
+		return "", fmt.Errorf("forge: decode GitLab issue %d: %w", number, err)
+	}
+	state := strings.ToLower(strings.TrimSpace(issue.State))
+	if state == "opened" {
+		state = StateOpen
+	}
+	return normalizeState(number, state)
+}
+
 type glWorkItemNode struct {
 	IID   string `json:"iid"`
 	State string `json:"state"`

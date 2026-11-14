@@ -150,11 +150,14 @@ func TestAdoptRefusesAVerdictAtAnotherSha(t *testing.T) {
 	}
 }
 
-// TestAdoptRefusesABranchThatCannotBelong: the branch convention is the cheap
-// way to reject a pull request that merely mentions the item.
-func TestAdoptRefusesABranchThatCannotBelong(t *testing.T) {
+// TestAdoptRefusesABranchNamingAnotherOpenItem: the branch is a consistency
+// check now, so naming a different item refuses only while that item is open —
+// two live items would claim one branch, and a human decides which work survives
+// (openspec/changes/adopt-on-the-body, D2/D4).
+func TestAdoptRefusesABranchNamingAnotherOpenItem(t *testing.T) {
 	ctx, _, _, _, fake, in := adoptedFixture(t, "abc1234")
-	fake.RequestsValue[0].Branch = "hotfix/unrelated"
+	fake.ItemsValue = append(fake.ItemsValue, forge.Item{Number: 6, Kind: forge.KindTask, State: forge.StateOpen, Title: "Six"})
+	fake.RequestsValue[0].Branch = "fix/6-follow-up"
 	in.CRs = fake.RequestsValue
 
 	report, err := RunTick(ctx, in)
@@ -162,13 +165,13 @@ func TestAdoptRefusesABranchThatCannotBelong(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 	if len(report.Merges) != 0 {
-		t.Fatalf("merged a branch that cannot belong: %+v", report.Merges)
+		t.Fatalf("merged a branch naming another open item: %+v", report.Merges)
 	}
-	if !hasSkip(report, "does not start with feature/5-") {
-		t.Fatalf("skipped = %v, want the branch prefix named", report.Skipped)
+	if !hasSkip(report, "closes #5 but is on fix/6-follow-up, which names #6") {
+		t.Fatalf("skipped = %v, want both items named", report.Skipped)
 	}
-	if !hasSkip(report, "hotfix/unrelated") {
-		t.Fatalf("skipped = %v, want the offending branch named", report.Skipped)
+	if !hasSkip(report, "#6 is still open") {
+		t.Fatalf("skipped = %v, want the open state named", report.Skipped)
 	}
 	if hasWrite(fake.Writes, "merge", 9, "abc1234") {
 		t.Fatalf("merge written for the wrong branch: %+v", fake.Writes)
@@ -209,9 +212,10 @@ func TestAdoptRefusesWhileALiveDispatchIsOnAnotherBranch(t *testing.T) {
 // change request, so it is recorded even when nothing can merge yet.
 func TestVerdictIsStoredWithNoDispatch(t *testing.T) {
 	ctx, st, _, _, fake, in := adoptedFixture(t, "abc1234")
-	// A branch that cannot belong refuses the merge, so only the capture can
-	// explain a verdict row existing afterwards.
-	fake.RequestsValue[0].Branch = "hotfix/unrelated"
+	// A branch naming another *open* item refuses the merge, so only the capture
+	// can explain a verdict row existing afterwards.
+	fake.ItemsValue = append(fake.ItemsValue, forge.Item{Number: 6, Kind: forge.KindTask, State: forge.StateOpen, Title: "Six"})
+	fake.RequestsValue[0].Branch = "fix/6-follow-up"
 	in.CRs = fake.RequestsValue
 
 	report, err := RunTick(ctx, in)
@@ -237,7 +241,8 @@ func TestVerdictIsStoredWithNoDispatch(t *testing.T) {
 // so the capture must be idempotent by item when there is no dispatch.
 func TestAdoptedVerdictIsNotStoredTwice(t *testing.T) {
 	ctx, st, _, _, fake, in := adoptedFixture(t, "abc1234")
-	fake.RequestsValue[0].Branch = "hotfix/unrelated"
+	fake.ItemsValue = append(fake.ItemsValue, forge.Item{Number: 6, Kind: forge.KindTask, State: forge.StateOpen, Title: "Six"})
+	fake.RequestsValue[0].Branch = "fix/6-follow-up"
 	in.CRs = fake.RequestsValue
 
 	for range 2 {
