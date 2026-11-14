@@ -353,11 +353,20 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 		// The stamps are the only evidence a stalled mirror leaves behind.
 		bp.ForgeRead = mirrorReadAt(now, projectStatus.LastForgeAt, f.Tick, f.MaxWait, "forge")
 		bp.RigRead = mirrorReadAt(now, projectStatus.LastRigAt, f.Tick, f.MaxWait, "rig")
-		// A tick that wrote its status block is the evidence a plan has run
-		// (#429), and a recorded reason is proof on its own — the write happens
-		// inside a plan. Either one makes an empty reason table mean "nothing
-		// was skipped" rather than "nothing has been planned yet".
-		bp.Planned = projectStatus.LastTickAt != nil || len(planReasons) > 0
+		// Planned answers "has a plan ever run for this project", which is what
+		// makes an empty reason table readable (#429): after a plan it means
+		// "nothing was skipped", before one it means "nothing is known yet".
+		//
+		// The tick's own stamp is the primary witness and the reason rows are the
+		// fallback, not an equal partner: plan_reason is cleared by a project
+		// delete and by a project going disabled or onhold (#428), so a project
+		// that was planned and has since been paused keeps last_tick_at and loses
+		// its rows. Preferring the stamp keeps that case honest; the rows still
+		// answer for a tick whose status block this process has not read yet.
+		bp.Planned = projectStatus.LastTickAt != nil
+		if !bp.Planned {
+			bp.Planned = len(planReasons) > 0
+		}
 		// A question waiting an hour must not look like a project with nothing
 		// to do (#377): the ledger's unanswered verdict questions ride the same
 		// read the board already makes, and a row the queue says is finished

@@ -158,3 +158,50 @@ func TestWhyColumnBeforeAnyTick(t *testing.T) {
 		t.Fatalf("plan reason = %q, want none", reason)
 	}
 }
+
+// TestWhyColumnReasonRowsAreTheFallbackWitness: a recorded reason with no status
+// block still means a plan ran, so the column reads as planned rather than
+// "no plan has run since start". The stamp is the primary witness because
+// plan_reason is cleared when a project is deleted, disabled or onhold (#428) —
+// a paused project that was planned keeps the stamp and loses its rows, and must
+// still read as planned.
+func TestWhyColumnReasonRowsAreTheFallbackWitness(t *testing.T) {
+	ctx := context.Background()
+	h := newWhyHarness(t)
+	if err := h.st.ReplacePlanReasons(ctx, h.pid, []store.PlanReason{{
+		ItemNumber: 7, Reason: "live_row", Detail: "qitem-9",
+		TickAt: time.Date(2026, 11, 14, 1, 1, 30, 0, time.UTC),
+	}}); err != nil {
+		t.Fatalf("plan reasons: %v", err)
+	}
+	planned, reason, _ := h.boardItemWhy(t)
+	if !planned {
+		t.Fatalf("planned = false, want true from the reason row alone")
+	}
+	if reason != "live_row — qitem-9" {
+		t.Fatalf("plan_reason = %q, want the recorded reason and detail", reason)
+	}
+}
+
+// TestWhyColumnPausedProjectKeepsTheStamp: the rows go when a project is paused,
+// the stamp stays, and the answer stays "planned" — the empty table then means
+// the last plan skipped nothing, not that nothing was ever planned.
+func TestWhyColumnPausedProjectKeepsTheStamp(t *testing.T) {
+	ctx := context.Background()
+	h := newWhyHarness(t)
+	if err := h.st.PutSnapshot(ctx, h.pid, "status", map[string]any{}, time.Date(2026, 11, 14, 1, 1, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	// The tick that planned this project has run, and its rows are gone (a
+	// pause clears them, #428).
+	if err := h.st.ReplacePlanReasons(ctx, h.pid, nil); err != nil {
+		t.Fatalf("clear reasons: %v", err)
+	}
+	planned, reason, _ := h.boardItemWhy(t)
+	if !planned {
+		t.Fatalf("planned = false, want true from last_tick_at after the rows were cleared")
+	}
+	if reason != "" {
+		t.Fatalf("plan_reason = %q, want none recorded", reason)
+	}
+}
