@@ -444,11 +444,13 @@ func runTick(ctx context.Context, eff *config.Effective, db *store.Store, out, e
 		RigStale    bool                   `json:"rig_stale"`
 		RigError    string                 `json:"rig_error,omitempty"`
 		RigWarnings map[string][]string    `json:"rig_warnings,omitempty"`
+		RigUnread   map[string][]string    `json:"rig_unread,omitempty"`
 		Projects    map[string]decide.Plan `json:"projects"`
 	}
 	output := tickOutput{
 		At: read.At.UTC().Format(time.RFC3339), RigStale: read.RigStale, RigError: read.RigError,
 		RigWarnings: make(map[string][]string, len(projects)),
+		RigUnread:   make(map[string][]string, len(projects)),
 		Projects:    make(map[string]decide.Plan, len(projects)),
 	}
 	for _, project := range projects {
@@ -465,6 +467,15 @@ func runTick(ctx context.Context, eff *config.Effective, db *store.Store, out, e
 		}
 		if len(result.RigWarnings) > 0 {
 			output.RigWarnings[project.Key] = result.RigWarnings
+		}
+		// A rig that went unread is the other half of the same report: the ghost
+		// line says a rig answered with no seats, this one says a rig did not
+		// answer at all, and only the second explains a capacity of zero (#438).
+		for _, rigName := range result.RigUnread {
+			fmt.Fprintf(errOut, "rig: %s: rig %s unread\n", project.Key, rigName)
+		}
+		if len(result.RigUnread) > 0 {
+			output.RigUnread[project.Key] = result.RigUnread
 		}
 	}
 	encoder := json.NewEncoder(out)
