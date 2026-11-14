@@ -2,7 +2,6 @@ package act
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -45,7 +44,7 @@ func TestAttentionRaisedOncePerQuestion(t *testing.T) {
 	seats := attentionSeat("dev-review@rig-a", "Approve the merge?")
 
 	for tick := 1; tick <= 5; tick++ {
-		if err := coordinator.Observe(ctx, seats, true); err != nil {
+		if err := coordinator.Observe(ctx, seats, []string{"rig-a"}, true); err != nil {
 			t.Fatalf("tick %d: %v", tick, err)
 		}
 	}
@@ -69,23 +68,21 @@ func TestAttentionResolvedByAnObservedRead(t *testing.T) {
 	coordinator, notices := newAttention(t, st, now)
 	seats := attentionSeat("dev-review@rig-a", "Approve the merge?")
 
-	if err := coordinator.Observe(ctx, seats, true); err != nil {
+	if err := coordinator.Observe(ctx, seats, []string{"rig-a"}, true); err != nil {
 		t.Fatalf("raise: %v", err)
 	}
-	if err := coordinator.Observe(ctx, nil, true); err != nil {
+	if err := coordinator.Observe(ctx, nil, []string{"rig-a"}, true); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if err := coordinator.Observe(ctx, nil, true); err != nil {
+	if err := coordinator.Observe(ctx, nil, []string{"rig-a"}, true); err != nil {
 		t.Fatalf("repeat: %v", err)
 	}
 	if resolved := attentionEvents(t, st, EventAttentionResolved); len(resolved) != 1 {
 		t.Fatalf("resolved = %+v, want one resolution", resolved)
 	}
-	if len(*notices) != 2 || !(*notices)[1].Resolved {
-		t.Fatalf("notices = %+v, want a raise and one resolve", *notices)
-	}
-	if !strings.Contains((*notices)[1].Seat, "dev-review") {
-		t.Fatalf("resolved notice = %+v, want the seat named", (*notices)[1])
+	// D2: the resolution is one event and no notice.
+	if len(*notices) != 1 || (*notices)[0].Resolved {
+		t.Fatalf("notices = %+v, want only the raise", *notices)
 	}
 }
 
@@ -97,7 +94,7 @@ func TestAttentionFailedReadProvesNothing(t *testing.T) {
 	now := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
 	coordinator, notices := newAttention(t, st, now)
 
-	if err := coordinator.Observe(ctx, attentionSeat("dev-review@rig-a", "Approve?"), false); err != nil {
+	if err := coordinator.Observe(ctx, attentionSeat("dev-review@rig-a", "Approve?"), []string{"rig-a"}, false); err != nil {
 		t.Fatalf("failed read: %v", err)
 	}
 	if raised := attentionEvents(t, st, EventAttentionRaised); len(raised) != 0 {
@@ -105,10 +102,10 @@ func TestAttentionFailedReadProvesNothing(t *testing.T) {
 	}
 
 	// Raise it, then fail the read: the obligation stands untouched.
-	if err := coordinator.Observe(ctx, attentionSeat("dev-review@rig-a", "Approve?"), true); err != nil {
+	if err := coordinator.Observe(ctx, attentionSeat("dev-review@rig-a", "Approve?"), []string{"rig-a"}, true); err != nil {
 		t.Fatalf("raise: %v", err)
 	}
-	if err := coordinator.Observe(ctx, nil, false); err != nil {
+	if err := coordinator.Observe(ctx, nil, []string{"rig-a"}, false); err != nil {
 		t.Fatalf("failed read: %v", err)
 	}
 	if resolved := attentionEvents(t, st, EventAttentionResolved); len(resolved) != 0 {
@@ -128,10 +125,10 @@ func TestAttentionChangedQuestionIsANewObligation(t *testing.T) {
 	now := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
 	coordinator, _ := newAttention(t, st, now)
 
-	if err := coordinator.Observe(ctx, attentionSeat("dev-review@rig-a", "Approve?"), true); err != nil {
+	if err := coordinator.Observe(ctx, attentionSeat("dev-review@rig-a", "Approve?"), []string{"rig-a"}, true); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	if err := coordinator.Observe(ctx, attentionSeat("dev-review@rig-a", "Allow the seat to start?"), true); err != nil {
+	if err := coordinator.Observe(ctx, attentionSeat("dev-review@rig-a", "Allow the seat to start?"), []string{"rig-a"}, true); err != nil {
 		t.Fatalf("second: %v", err)
 	}
 	if raised := attentionEvents(t, st, EventAttentionRaised); len(raised) != 2 {
@@ -139,5 +136,47 @@ func TestAttentionChangedQuestionIsANewObligation(t *testing.T) {
 	}
 	if resolved := attentionEvents(t, st, EventAttentionResolved); len(resolved) != 1 {
 		t.Fatalf("resolved = %+v, want the old question resolved", resolved)
+	}
+}
+
+// TestAttentionUncoveredRigResolvesNothing (#427 review finding 1): a project
+// bound only to rig-b observes no seats there, and that must not resolve rig-a's
+// standing obligation — its read never covered rig-a. The reviewer's repro: a
+// per-project empty read followed by the standing read used to give raised=2,
+// resolved=1.
+func TestAttentionUncoveredRigResolvesNothing(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	now := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
+	coordinator, notices := newAttention(t, st, now)
+
+	if err := coordinator.Observe(ctx, attentionSeat("dev-review@rig-a", "Approve?"), []string{"rig-a"}, true); err != nil {
+		t.Fatalf("raise: %v", err)
+	}
+	// Ticks that cover only rig-b: rig-a's obligation is not in their view.
+	for tick := 0; tick < 3; tick++ {
+		if err := coordinator.Observe(ctx, nil, []string{"rig-b"}, true); err != nil {
+			t.Fatalf("uncovered tick %d: %v", tick, err)
+		}
+	}
+	if raised := attentionEvents(t, st, EventAttentionRaised); len(raised) != 1 {
+		t.Fatalf("raised = %+v, want the one obligation, not a re-raise", raised)
+	}
+	if resolved := attentionEvents(t, st, EventAttentionResolved); len(resolved) != 0 {
+		t.Fatalf("resolved = %+v, want nothing resolved by a read that never covered the rig", resolved)
+	}
+	if len(*notices) != 1 {
+		t.Fatalf("notices = %+v, want only the raise", *notices)
+	}
+
+	// The covering read that reports it clear is the one that resolves it.
+	if err := coordinator.Observe(ctx, nil, []string{"rig-a"}, true); err != nil {
+		t.Fatalf("cover read: %v", err)
+	}
+	if resolved := attentionEvents(t, st, EventAttentionResolved); len(resolved) != 1 {
+		t.Fatalf("resolved = %+v, want the covering read to resolve it", resolved)
+	}
+	if len(*notices) != 1 {
+		t.Fatalf("notices = %+v, want no notice on resolution", *notices)
 	}
 }

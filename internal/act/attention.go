@@ -54,10 +54,13 @@ type AttentionCoordinator struct {
 	seen map[string]attentionSeen
 }
 
-// Observe consumes one project's seats for one read. readOK false means the rig
-// read failed or was stale: it proves nothing, so nothing is raised and nothing
-// is resolved — absence must be observed, not inferred (design D2).
-func (c *AttentionCoordinator) Observe(ctx context.Context, seats []rig.Seat, readOK bool) error {
+// Observe consumes one read's seats for the rigs it covered. coveredRigs is
+// what the read actually looked at: a project bound only to rig-b must not
+// resolve rig-a's standing obligation, because its read never covered rig-a
+// (#427 review). readOK false means the read failed or was stale: it proves
+// nothing, so nothing is raised and nothing is resolved — absence must be
+// observed, not inferred (design D2).
+func (c *AttentionCoordinator) Observe(ctx context.Context, seats []rig.Seat, coveredRigs []string, readOK bool) error {
 	if c == nil || c.Store == nil {
 		return nil
 	}
@@ -70,6 +73,13 @@ func (c *AttentionCoordinator) Observe(ctx context.Context, seats []rig.Seat, re
 		c.seen = map[string]attentionSeen{}
 	}
 	now := c.now()
+
+	covered := make(map[string]bool, len(coveredRigs))
+	for _, name := range coveredRigs {
+		if name != "" {
+			covered[name] = true
+		}
+	}
 
 	current := make(map[string]rig.SeatAttention)
 	for _, seat := range seats {
@@ -100,16 +110,18 @@ func (c *AttentionCoordinator) Observe(ctx context.Context, seats []rig.Seat, re
 		if _, still := current[fingerprint]; still {
 			continue
 		}
+		// Only a read that covered the obligation's rig can see it answered.
+		if !covered[standing.notice.Rig] {
+			continue
+		}
 		delete(c.seen, fingerprint)
 		detail := fmt.Sprintf("question=%s; stood=%s;",
 			standing.notice.Question, now.Sub(standing.since).Round(time.Second))
 		if err := c.write(ctx, EventAttentionResolved, standing.notice, detail); err != nil {
 			return err
 		}
-		c.notify(AttentionNotice{
-			Seat: standing.notice.Seat, Rig: standing.notice.Rig, Kind: standing.notice.Kind,
-			Question: standing.notice.Question, Since: standing.since, Resolved: true,
-		})
+		// D2: the resolution is one event and no notice — the raise was the alert;
+		// its clearing needs no second one.
 	}
 	return nil
 }
@@ -144,15 +156,12 @@ func (c *AttentionCoordinator) now() time.Time {
 	return time.Now().UTC()
 }
 
-// AttentionLine renders one notice as the journal line main prints.
+// AttentionLine renders one raise as the journal line main prints. A resolution
+// has no notice (design D2), so there is no resolved form here.
 func AttentionLine(notice AttentionNotice) string {
 	question := notice.Question
 	if strings.TrimSpace(question) == "" {
 		question = "the rig gave no question"
-	}
-	if notice.Resolved {
-		return fmt.Sprintf("%s on %s is answered after %s: %s",
-			notice.Seat, notice.Rig, time.Since(notice.Since).Round(time.Second), question)
 	}
 	return fmt.Sprintf("%s on %s is waiting on a human (%s): %s", notice.Seat, notice.Rig, notice.Kind, question)
 }

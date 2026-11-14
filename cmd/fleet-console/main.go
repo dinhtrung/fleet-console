@@ -886,7 +886,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 			// A failed or stale rig read proves nothing about a seat (#427): it
 			// raises nothing and resolves nothing.
 			for _, project := range rows {
-				if err := attention.Observe(ctx, reads[project.ID].Seats, !read.RigStale && !read.RigDown); err != nil {
+				covered := project.Rigs
+				if len(covered) == 0 && project.Rig != "" {
+					covered = []string{project.Rig}
+				}
+				if err := attention.Observe(ctx, reads[project.ID].Seats, covered, !read.RigStale && !read.RigDown); err != nil {
 					fmt.Fprintf(stderr, "attention: %v\n", err)
 				}
 			}
