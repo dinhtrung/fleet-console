@@ -59,6 +59,11 @@ func (s *Store) ReplacePlanReasons(ctx context.Context, projectID int64, reasons
 	for _, reason := range reasons {
 		tickAt := reason.TickAt
 		if tickAt.IsZero() {
+			// No caller reaches this: act passes the tick's own clock. A zero
+			// time would store year 1 and every surface would read the reason
+			// as centuries old, so the fallback errs the other way — the row
+			// reads as just written, which is at worst optimistic, never a
+			// fabricated age.
 			tickAt = time.Now().UTC()
 		}
 		if _, err := stmt.ExecContext(ctx, projectID, reason.ItemNumber, reason.Reason,

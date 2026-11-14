@@ -220,3 +220,27 @@ func TestStalePlanKeepsTheLastReason(t *testing.T) {
 		t.Fatalf("tick_at = %s, want the last real tick %s", reasons[0].TickAt, now)
 	}
 }
+
+// TestPlanReasonRowsCollapseADuplicateItem: one item, one row. A plan that skips
+// the same item twice has a bug, and the table must not turn that into two rows
+// — the primary key would refuse the insert and take the whole write with it.
+func TestPlanReasonRowsCollapseADuplicateItem(t *testing.T) {
+	at := time.Date(2026, 11, 14, 2, 0, 0, 0, time.UTC)
+	rows := planReasonRows(nil, decide.Plan{Skips: []decide.Skip{
+		{Number: 9, Reason: decide.ReasonNoFreeBuilder, Detail: "first"},
+		{Number: 5, Reason: decide.ReasonLiveRow, Detail: "qitem-1"},
+		{Number: 9, Reason: decide.ReasonBlocked, Detail: "second"},
+	}}, at)
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v, want one row per item", rows)
+	}
+	if rows[0].ItemNumber != 5 {
+		t.Fatalf("rows[0] = %+v, want the lower item number first", rows[0])
+	}
+	if rows[1].ItemNumber != 9 || rows[1].Reason != string(decide.ReasonBlocked) || rows[1].Detail != "second" {
+		t.Fatalf("#9 = %+v, want the last answer for the item", rows[1])
+	}
+	if !rows[1].TickAt.Equal(at) {
+		t.Fatalf("tick_at = %s, want %s", rows[1].TickAt, at)
+	}
+}
