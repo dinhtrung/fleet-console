@@ -121,13 +121,29 @@ func TestBusy(t *testing.T) {
 			reasonContains: "rig read stale",
 		},
 		{
+			// Stale plus an error: the roster is not whole, so the reason is a
+			// failure. The recovered shape is the next case and reads differently.
 			name: "a failed rig read is busy",
+			read: TickResult{
+				Projects: map[string]ProjectResult{"app": {}},
+				RigStale: true,
+				RigError: "daemon unreachable",
+			},
+			want:           true,
+			reasonContains: "rig read failed: daemon unreachable",
+		},
+		{
+			// The fleet-wide read failed and every rig answered on its own: the
+			// roster is whole, so calling the whole roster "failed" would be
+			// wrong, but the broken read still earns the normal cadence (#447
+			// review, note 2).
+			name: "a recovered rig read is busy and says so",
 			read: TickResult{
 				Projects: map[string]ProjectResult{"app": {}},
 				RigError: "daemon unreachable",
 			},
 			want:           true,
-			reasonContains: "rig read failed: daemon unreachable",
+			reasonContains: "rig read recovered per rig: daemon unreachable",
 		},
 		{
 			name: "one busy project among quiet ones is busy",
