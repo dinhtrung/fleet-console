@@ -2,6 +2,7 @@ package act
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"regexp"
@@ -44,6 +45,11 @@ type TickInput struct {
 	// dispatch intent on that rig is skipped with the same named reason rather
 	// than writing a worktree and a row no seat will ever claim (design D5).
 	LifecycleFailed map[string]string
+	// RunningSeats names the seats the tick's roster read calls running. A rig
+	// whose start failed this tick keeps dispatching to them: the launch failure
+	// is a fact about the rig's start, not about agents that are up and free
+	// (#431). A seat not named here is not dispatched to.
+	RunningSeats map[string]bool
 	// OnDecision receives every decision this tick raised, so the caller can
 	// put it on somebody's phone. It is called after the row exists. It cannot
 	// fail the tick: a dead transport is not a dead fleet (design.md §5), so a
@@ -573,12 +579,15 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		noteDispatchSkip(ctx, actions, skip)
 	}
 
-	// A rig whose launch failed this tick has nothing to claim its work: name the
-	// failure once, before the dispatch loop, whatever the plan carried. The skip
-	// is the one line the operator sees, and the issue is retried next tick.
+	// A rig whose launch failed this tick names the failure once — not on every
+	// tick it stands (#431): the ledger row is the durable record, the line is
+	// the operator's one alert, and a changed error is a new fact that prints
+	// again. The start itself is retried on the lifecycle's own backoff.
 	for _, rigName := range projectRigs(in.Project) {
 		if failure, ok := in.LifecycleFailed[rigName]; ok {
-			report.Skipped = append(report.Skipped, fmt.Sprintf("rig %s up: %s", rigName, failure))
+			if noteStartFailure(ctx, actions, rigName, failure) {
+				report.Skipped = append(report.Skipped, fmt.Sprintf("rig %s up: %s", rigName, failure))
+			}
 		}
 	}
 	for _, intent := range in.Plan.Intents {
@@ -591,7 +600,7 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			continue
 		}
 		if rigName := rigFromSeat(intent.Seat); rigName != "" {
-			if _, ok := in.LifecycleFailed[rigName]; ok {
+			if _, failed := in.LifecycleFailed[rigName]; failed && !in.RunningSeats[intent.Seat] {
 				continue
 			}
 		}
@@ -820,4 +829,20 @@ func noteDispatchSkip(ctx context.Context, actions *Actions, skip decide.Skip) {
 		detail += " detail=" + skip.Detail + ";"
 	}
 	_, _ = actions.event(ctx, "act", "dispatch.skip", subject, detail)
+}
+
+// noteStartFailure records one rig's start failure and answers whether this is
+// the first tick that saw it (#431). The line prints once per distinct failure
+// and the rig.start_failed event keeps it durable; the error text is hashed
+// into the dedupe key, so a changed error asks again and a repeat stays quiet.
+func noteStartFailure(ctx context.Context, actions *Actions, rigName, failure string) bool {
+	sum := sha256.Sum256([]byte(failure))
+	key := fmt.Sprintf("failure=%x;", sum[:4])
+	subject := "rig " + rigName
+	exists, err := actions.Store.HasEvent(ctx, "rig.start_failed", subject, key)
+	if err != nil || exists {
+		return false
+	}
+	_, _ = actions.event(ctx, "act", "rig.start_failed", subject, key+" detail="+failure)
+	return true
 }

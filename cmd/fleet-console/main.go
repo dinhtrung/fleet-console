@@ -914,7 +914,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 					Items: projectRead.Items, CRs: projectRead.CRs, Rows: projectRead.Rows,
 					Plan: plan, WorktreeRoot: worktreeRoot(eff, project, source),
 					LifecycleFailed: lifecycleFailed, RelayMode: relayMode, RelaySeat: relaySeat,
-					Reviewer: eff.ReviewerFor(projectKey),
+					RunningSeats: runningSeats(projectRead.Seats),
+					Reviewer:     eff.ReviewerFor(projectKey),
 					// A raised decision reaches the phone from here: the tick
 					// knows the row exists, and the notifier owns the transport.
 					// The note goes on the item first when decision_notes is on, so
@@ -1305,4 +1306,17 @@ func warnReviewerSeats(ctx context.Context, eff *config.Effective, adapter *rig.
 				project.Key, reviewer, strings.Join(rigs, ","))
 		}
 	}
+}
+
+// runningSeats is the roster read's "running" seats by canonical session name
+// (#431). The dispatch loop needs it to tell a failed start from a dead seat:
+// a rig that failed to start still has agents a tick can use.
+func runningSeats(seats []rig.Seat) map[string]bool {
+	out := make(map[string]bool, len(seats))
+	for _, seat := range seats {
+		if seat.Running() {
+			out[seat.Session] = true
+		}
+	}
+	return out
 }
