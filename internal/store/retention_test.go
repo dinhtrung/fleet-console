@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -21,6 +22,32 @@ func appendEvent(t *testing.T, st *Store, subject string) int64 {
 		t.Fatalf("event: %v", err)
 	}
 	return id
+}
+
+// appendOldEvents inserts n rows past the window in one transaction. Calling
+// AppendEvent per row would be a transaction each, and these tests need
+// thousands of rows to reach a second batch.
+func appendOldEvents(t *testing.T, st *Store, n int, at time.Time) {
+	t.Helper()
+	tx, err := st.db.Begin()
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.Prepare(`INSERT INTO event (at, actor, kind, subject, detail) VALUES (?, 'act', 'test.event', ?, 'd')`)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	defer func() { _ = stmt.Close() }()
+	stamp := at.UTC().Format(time.RFC3339Nano)
+	for i := 0; i < n; i++ {
+		if _, err := stmt.Exec(stamp, fmt.Sprintf("project:bulk-%d", i)); err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
 }
 
 func eventSubjects(t *testing.T, st *Store) []string {
@@ -198,5 +225,116 @@ func TestPruneEventsKeepsTheSummarySubject(t *testing.T) {
 	subjects := eventSubjects(t, st)
 	if len(subjects) != 1 || subjects[0] != "project app" {
 		t.Fatalf("subjects = %v, want the summary kept", subjects)
+	}
+}
+
+// TestPruneEventsDryRunCountsEveryBatch (#466): the dry run discounted every
+// page after the first by the live rows an earlier page had kept, because it
+// subtracted the running total instead of the page's own. A run over four pages
+// reported the second, third and fourth as if page one's two live rows were on
+// them too. The count has to be the number of rows that would go.
+func TestPruneEventsDryRunCountsEveryBatch(t *testing.T) {
+	ctx := context.Background()
+	st := upsertStore(t)
+	_, pid, err := st.UpsertProject(ctx, baseUpsert())
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	now := time.Now().UTC()
+	old := now.AddDate(0, 0, -100)
+
+	// Two live rows, on their own item, older than the window — written *first* so
+	// they land on the first page. The bug only bites when a kept row is on an
+	// earlier page than the rows after it: the running total it subtracted was
+	// page one's, applied to pages two onward.
+	if _, err := st.CreateDispatch(ctx, NewDispatch{
+		ProjectID: pid, ItemNumber: 5, Attempt: 1, Seat: "seat@rig",
+		Branch: "feature/5-x", Worktree: "wt", BaseSHA: "base", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		backdateEvent(t, st, appendEvent(t, st, "#5"), old)
+	}
+	appendOldEvents(t, st, 1200, old)
+
+	counts, err := st.PruneEvents(ctx, now.AddDate(0, 0, -90), 500, false)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if counts.Scanned != 1202 || counts.Deleted != 1200 || counts.KeptLive != 2 {
+		t.Fatalf("counts = %+v, want 1202 scanned, 1200 deleted, 2 kept live", counts)
+	}
+	if subjects := eventSubjects(t, st); len(subjects) == 0 {
+		t.Fatal("a dry run deleted rows")
+	}
+}
+
+// TestPruneEventsDryRunAtTheBatchBoundary (#466): a full page is not the end of
+// the run. Exactly one batch's worth, and one row past it, both report every row
+// — the page that comes back empty is what ends the walk, so an off-by-one at
+// the boundary cannot come back unnoticed.
+func TestPruneEventsDryRunAtTheBatchBoundary(t *testing.T) {
+	for _, rows := range []int{499, 500, 501} {
+		t.Run(fmt.Sprintf("%d rows", rows), func(t *testing.T) {
+			ctx := context.Background()
+			st := upsertStore(t)
+			now := time.Now().UTC()
+			appendOldEvents(t, st, rows, now.AddDate(0, 0, -100))
+
+			counts, err := st.PruneEvents(ctx, now.AddDate(0, 0, -90), 500, false)
+			if err != nil {
+				t.Fatalf("prune: %v", err)
+			}
+			if counts.Scanned != rows || counts.Deleted != rows || counts.KeptLive != 0 {
+				t.Fatalf("counts = %+v, want %d scanned and deleted", counts, rows)
+			}
+		})
+	}
+}
+
+// TestPruneEventsApplyDeletesWhatTheDryRunCounted (#466): the dry run exists to
+// be trusted before the apply runs. The two paths must agree row for row across
+// batches, and the apply must not start deleting what the guard kept.
+func TestPruneEventsApplyDeletesWhatTheDryRunCounted(t *testing.T) {
+	ctx := context.Background()
+	st := upsertStore(t)
+	_, pid, err := st.UpsertProject(ctx, baseUpsert())
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	now := time.Now().UTC()
+	old := now.AddDate(0, 0, -100)
+	if _, err := st.CreateDispatch(ctx, NewDispatch{
+		ProjectID: pid, ItemNumber: 5, Attempt: 1, Seat: "seat@rig",
+		Branch: "feature/5-x", Worktree: "wt", BaseSHA: "base", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		backdateEvent(t, st, appendEvent(t, st, "#5"), old)
+	}
+	appendOldEvents(t, st, 1200, old)
+
+	dry, err := st.PruneEvents(ctx, now.AddDate(0, 0, -90), 500, false)
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	applied, err := st.PruneEvents(ctx, now.AddDate(0, 0, -90), 500, true)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if applied.Deleted != dry.Deleted || applied.KeptLive != dry.KeptLive {
+		t.Fatalf("apply = %+v, dry run = %+v: the two paths disagree", applied, dry)
+	}
+	if applied.Deleted != 1200 || applied.KeptLive != 2 || applied.Scanned != 1202 {
+		t.Fatalf("apply = %+v, want 1202 scanned, 1200 deleted, 2 kept", applied)
+	}
+	subjects := eventSubjects(t, st)
+	if len(subjects) != 2 || subjects[0] != "#5" || subjects[1] != "#5" {
+		t.Fatalf("subjects = %v, want only the two live rows", subjects)
+	}
+	if applied.Deleted != 1200 || applied.KeptLive != 2 || len(subjects) != 2 {
+		t.Fatalf("apply = %+v, subjects = %v", applied, subjects)
 	}
 }
