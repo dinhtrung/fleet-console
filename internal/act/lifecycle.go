@@ -577,7 +577,7 @@ func (e *LifecycleExecutor) Start(ctx context.Context, actions []LifecycleAction
 		if action.Kind != LifecycleStart {
 			continue
 		}
-		if e.deferred(action.Rig) {
+		if e.deferred(action) {
 			continue
 		}
 		if err := e.start(ctx, action); err != nil {
@@ -594,12 +594,14 @@ func (e *LifecycleExecutor) Start(ctx context.Context, actions []LifecycleAction
 // logs the wait once per change when it is. Whether deferred or attempted,
 // every tick that reaches the window's edge with demand still standing
 // records the attempt time.
-func (e *LifecycleExecutor) deferred(rig string) bool {
+func (e *LifecycleExecutor) deferred(action LifecycleAction) bool {
+	rig := action.Rig
 	now := e.now()
 	if last, ok := e.lastStart[rig]; ok {
 		if elapsed := now.Sub(last); elapsed < StartBackoff {
 			e.note("rig "+rig+" up deferred",
-				fmt.Sprintf("%s up deferred — last attempt %s ago", rig, elapsed.Round(time.Second)))
+				fmt.Sprintf("%s up deferred — last attempt %s ago — %s",
+					rig, elapsed.Round(time.Second), action.Facts))
 			return true
 		}
 	}
@@ -628,7 +630,7 @@ func (e *LifecycleExecutor) start(ctx context.Context, action LifecycleAction) e
 	}
 	if _, err := os.Stat(spec); err != nil {
 		if !os.IsNotExist(err) {
-			e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v", action.Rig, err))
+			e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v — %s", action.Rig, err, action.Facts))
 			return err
 		}
 		// A rig imported from a bundle (#389) has a database row and no spec
@@ -644,12 +646,12 @@ func (e *LifecycleExecutor) start(ctx context.Context, action LifecycleAction) e
 			resolveErr = fmt.Errorf("no rig spec at %s (export wrote nothing)", spec)
 		}
 		if resolveErr != nil {
-			e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v", action.Rig, resolveErr))
+			e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v — %s", action.Rig, resolveErr, action.Facts))
 			return resolveErr
 		}
 	}
 	if _, err := e.Rigs.Up(ctx, spec); err != nil {
-		e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v", action.Rig, err))
+		e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v — %s", action.Rig, err, action.Facts))
 		return err
 	}
 	e.clearNote("rig " + action.Rig + " up")

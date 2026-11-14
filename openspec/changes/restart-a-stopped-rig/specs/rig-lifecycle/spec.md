@@ -31,11 +31,15 @@ Each tick SHALL log one line per rig it considered, naming the decision (start, 
 - **THEN** the line names `roster unknown` and the item count, not a bare `running=0`
 
 ### Requirement: A ready item that is not dispatched says why
-When the plan leaves a ready item undispatched for a reason the operator can act on, the tick SHALL write one line naming the item and the plan's reason, and SHALL record that (item, reason) once on the ledger rather than once per tick.
+When the plan leaves a ready item undispatched for a reason the operator can act on, the tick SHALL write one line naming the item and the plan's reason, once per (item, reason, head) — where the head is the item's open change request — and SHALL NOT repeat it on a later tick while those three are unchanged.
 
 #### Scenario: No free builder
 - **WHEN** every admitted seat is taken and an item is ready
-- **THEN** the line names the item and `no_free_builder`, and the second tick over the same state adds no second ledger row
+- **THEN** one line names the item and `no_free_builder`, and the next tick with the same item, reason and head writes nothing
+
+#### Scenario: The head moves
+- **WHEN** the same item is skipped for the same reason but its change request now has a different head
+- **THEN** the line is written again, because the old head's refusal says nothing about the new one
 
 #### Scenario: In-flight state stays quiet
 - **WHEN** the item is already dispatched or a live row holds it

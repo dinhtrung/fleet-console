@@ -565,10 +565,16 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	// A plan that refuses to dispatch an item already knows why, and until #402
 	// that reason reached nobody: plan.Skips was read by no production code, so
 	// three ready items could sit undispatched while the tick reported nothing.
-	// Name every refusal the operator can act on, and put it on the ledger once
-	// per (item, reason) so a persistent one does not flood the audit.
+	// Name every refusal the operator can act on, once per (item, reason, head):
+	// an unchanged fact is silence on both the journal and the ledger, so a
+	// perpetually-skipped item does not flood either, while a changed reason or a
+	// moved head is a new fact and says so (#403 requirement 3).
 	for _, skip := range in.Plan.Skips {
 		if routineSkip(skip.Reason) {
+			continue
+		}
+		head := skipHead(in.CRs, skip.Number)
+		if noteDispatchSkip(ctx, actions, skip, head) {
 			continue
 		}
 		line := fmt.Sprintf("#%d dispatch not taken: %s", skip.Number, skip.Reason)
@@ -576,7 +582,6 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			line += " (" + skip.Detail + ")"
 		}
 		report.Skipped = append(report.Skipped, line)
-		noteDispatchSkip(ctx, actions, skip)
 	}
 
 	// A rig whose launch failed this tick names the failure once — not on every
@@ -814,21 +819,50 @@ func routineSkip(reason decide.Reason) bool {
 	return false
 }
 
-// noteDispatchSkip records one refusal per (item, reason) on the ledger. The
-// key terminates with `;` like the other dedupe keys, so a later, different
-// reason for the same item is a new fact and asks again.
-func noteDispatchSkip(ctx context.Context, actions *Actions, skip decide.Skip) {
-	key := fmt.Sprintf("reason=%s;", skip.Reason)
+// noteDispatchSkip records one refusal per (item, reason, head) on the ledger,
+// and answers whether the fact was already there — the caller prints the line
+// only when it is new. The head is the item's open change request: a re-review
+// moves it, and a skip about the old head says nothing about the new one. The
+// key terminates with `;` like the other dedupe keys, so `reason=live_row;` can
+// never match `reason=live_row_extra;` and `head=aaaa111;` can never match
+// `head=aaaa1110;`. A ledger read that fails is doubt, not silence: the line
+// prints and the write is attempted (the best-effort rule the other raises
+// follow), because a missed audit row must never hide the refusal.
+func noteDispatchSkip(ctx context.Context, actions *Actions, skip decide.Skip, head string) bool {
+	key := fmt.Sprintf("item=%d; reason=%s; head=%s;", skip.Number, skip.Reason, head)
 	subject := fmt.Sprintf("#%d", skip.Number)
 	exists, err := actions.Store.HasEvent(ctx, "dispatch.skip", subject, key)
-	if err != nil || exists {
-		return
+	if err == nil && exists {
+		return true
 	}
 	detail := key
 	if skip.Detail != "" {
 		detail += " detail=" + skip.Detail + ";"
 	}
 	_, _ = actions.event(ctx, "act", "dispatch.skip", subject, detail)
+	return false
+}
+
+// skipHead is the head a skip is about: the highest-numbered open change
+// request that closes the item, lowercased. Empty when the item has no open
+// change request — the key then carries an empty head, and the first change
+// request to open is a new fact.
+func skipHead(crs []forge.ChangeRequest, item int) string {
+	best, head := 0, ""
+	for _, cr := range crs {
+		if cr.Merged || !strings.EqualFold(cr.State, "open") || cr.HeadSHA == "" {
+			continue
+		}
+		closes := cr.ClosesItem
+		if closes == 0 {
+			closes = forge.ParseCloses(cr.Body)
+		}
+		if closes != item || cr.Number < best {
+			continue
+		}
+		best, head = cr.Number, strings.ToLower(cr.HeadSHA)
+	}
+	return head
 }
 
 // noteStartFailure records one rig's start failure and answers whether this is
