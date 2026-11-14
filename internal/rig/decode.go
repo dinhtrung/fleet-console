@@ -37,7 +37,29 @@ type Seat struct {
 	Profile      string `json:"profile"`
 	Permission   string `json:"permission"`
 	LastActivity string `json:"last_activity"`
+	// Attention is every reason this seat has stopped on a human, in the order
+	// attention, input, arbitrated (#425). Empty is the ordinary case: a seat
+	// that is not waiting on anybody.
+	Attention []SeatAttention `json:"attention,omitempty"`
 }
+
+// SeatAttention is one reason a seat has stopped on a human, read from node keys
+// the rig already sends (needsAttention, needsInputEvidence,
+// arbitratedNeedsInput). The rig reports the state, not its age; how long the
+// app has seen it is the app's own memory (#425, design D1).
+type SeatAttention struct {
+	Seat     string // canonical session name
+	Rig      string
+	Kind     string // attention | input | arbitrated
+	Question string // the text the rig reports, trimmed; "" when it gives none
+}
+
+// The three kinds, in the order a node's entries are produced.
+const (
+	AttentionKindAttention  = "attention"
+	AttentionKindInput      = "input"
+	AttentionKindArbitrated = "arbitrated"
+)
 
 // Running reports whether this seat's lifecycle is the running state, which is
 // the only fact about whether its rig is up (openspec rig-lifecycle: "The
@@ -96,6 +118,12 @@ type seatWire struct {
 	Profile          string `json:"profile"`
 	PermissionPolicy string `json:"permissionPolicy"`
 	LastActivity     string `json:"lastActivityAt"`
+	// The attention keys (#425). They are read raw because the rig spells them
+	// three ways — a bool, a string, or an object carrying the question — and an
+	// unexpected shape must still count as a block, never as a guess at text.
+	NeedsAttention       json.RawMessage `json:"needsAttention"`
+	ArbitratedNeedsInput json.RawMessage `json:"arbitratedNeedsInput"`
+	NeedsInputEvidence   json.RawMessage `json:"needsInputEvidence"`
 }
 
 // ParseQueueList decodes the queue list and enforces the required fields.
@@ -213,6 +241,20 @@ func ParseSeats(data []byte, unknown func(key string)) ([]Seat, error) {
 			Permission:   permission,
 			LastActivity: wire.LastActivity,
 		}
+		for _, probe := range []struct {
+			kind string
+			raw  json.RawMessage
+		}{
+			{AttentionKindAttention, wire.NeedsAttention},
+			{AttentionKindInput, wire.NeedsInputEvidence},
+			{AttentionKindArbitrated, wire.ArbitratedNeedsInput},
+		} {
+			if blocked, question := attentionQuestion(probe.raw); blocked {
+				seat.Attention = append(seat.Attention, SeatAttention{
+					Seat: seat.Session, Rig: seat.Rig, Kind: probe.kind, Question: question,
+				})
+			}
+		}
 		for _, check := range []struct {
 			field, path, value string
 		}{
@@ -262,4 +304,42 @@ func WaitsOnHuman(state, destination, blockedOn string) bool {
 	default:
 		return false
 	}
+}
+
+// attentionQuestion interprets one attention key (#425). The rig has spelled
+// these three ways: a bool (the live 0.7.13 shape), a string holding the
+// question, or an object carrying it. Absent, null and false are no block; any
+// other shape is a block, and a shape that names no text is a block with no
+// question rather than nothing at all.
+func attentionQuestion(raw json.RawMessage) (blocked bool, question string) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return false, ""
+	}
+	switch trimmed[0] {
+	case 't', 'f':
+		var value bool
+		if err := json.Unmarshal(trimmed, &value); err == nil && value {
+			return true, ""
+		}
+		return false, ""
+	case '"':
+		var value string
+		if err := json.Unmarshal(trimmed, &value); err == nil {
+			return true, strings.TrimSpace(value)
+		}
+	case '{':
+		var object map[string]any
+		if err := json.Unmarshal(trimmed, &object); err == nil {
+			for _, key := range []string{"question", "text", "message"} {
+				if text, ok := object[key].(string); ok {
+					if text = strings.TrimSpace(text); text != "" {
+						return true, text
+					}
+				}
+			}
+			return true, ""
+		}
+	}
+	return true, ""
 }
