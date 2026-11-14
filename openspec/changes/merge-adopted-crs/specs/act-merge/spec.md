@@ -35,7 +35,7 @@ forge merge, SHALL write the ordinary `merge` event after it, and SHALL NOT crea
 ### Requirement: Adoption refuses the ambiguous cases and names them
 
 Adoption SHALL refuse, naming the reason in the tick's skip line, when a live dispatch exists for the same item on a
-different branch, and when the change request's branch does not start with `feature/<item>-`.
+different branch, and when the change request's branch names a different item that is still open.
 
 #### Scenario: Two branches, one item
 
@@ -43,10 +43,14 @@ different branch, and when the change request's branch does not start with `feat
   `feature/<item>-hand`
 - **THEN** neither is adopted, the skip line names both branches, and the operator chooses
 
-#### Scenario: A branch that cannot belong to the item
+#### Scenario: A branch that belongs to a different open item
 
-- **WHEN** a pull request closing `#<item>` comes from a branch that does not start with `feature/<item>-`
-- **THEN** it is not adopted and the skip line names the branch
+- **WHEN** a pull request closing `#<item>` comes from a branch that names another item that is still open
+- **THEN** it is not adopted and the skip line names both numbers
+
+> The branch-prefix clause this requirement used to carry was superseded by `adopt-on-the-body` (#453): the body's
+> `Closes #n` adopts the item, a branch naming no item merges with one warning, and a branch naming a closed item is a
+> re-home. `act-merge` holds the current rule.
 
 ### Requirement: A verdict is recorded whether or not the merge proceeds
 

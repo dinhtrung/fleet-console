@@ -73,6 +73,3 @@ no lifecycle action"*. The old count made that scenario false, not true.
       `stopped_with_demand`; a second tick inside `StartBackoff` → no second launch; the app's own start clears the
       record), and the rule table's "no start for a rig the operator stopped by hand" and "a down daemon starts on
       demand without our own stop record" cases. Red/green proven by dropping the provenance guard.
-
-Sections 1–3 stay open. They address silence — an unread roster, and a journal that never says why nothing happened —
-and they are worth doing on their own; they are not what kept the rig down.
