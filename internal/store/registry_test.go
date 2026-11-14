@@ -58,6 +58,12 @@ func TestDeleteProjectRemovesAppRows(t *testing.T) {
 	if err := st.PutSnapshot(ctx, id, "forge", map[string]string{"items": "1"}, time.Now().UTC()); err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
+	if err := st.ReplacePlanReasons(ctx, id, []PlanReason{{
+		ProjectID: id, ItemNumber: 7, Reason: "no_free_builder", Detail: "every admitted seat is taken",
+		TickAt: time.Now().UTC(),
+	}}); err != nil {
+		t.Fatalf("plan reasons: %v", err)
+	}
 	if err := st.DeleteProject(ctx, id); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
@@ -79,5 +85,22 @@ func TestDeleteProjectRemovesAppRows(t *testing.T) {
 	}
 	if path, err := st.RepoPath(ctx, id); err != nil || path != "" {
 		t.Fatalf("repo path = %q, %v", path, err)
+	}
+	if reasons, err := st.PlanReasons(ctx, id); err != nil || len(reasons) != 0 {
+		t.Fatalf("plan reasons = %+v, %v; want deleted with the project", reasons, err)
+	}
+
+	// project.id has no AUTOINCREMENT, so SQLite hands the freed rowid to the
+	// next project. A family left behind would be inherited by a project that
+	// never wrote it — the reasons of a deleted project showing on a new one.
+	_, again, err := st.UpsertProject(ctx, baseUpsert())
+	if err != nil {
+		t.Fatalf("second project: %v", err)
+	}
+	if again != id {
+		t.Logf("second project got id %d, not the freed %d; the inheritance guard is untested here", again, id)
+	}
+	if reasons, err := st.PlanReasons(ctx, again); err != nil || len(reasons) != 0 {
+		t.Fatalf("recreated project %d inherited plan reasons = %+v, %v", again, reasons, err)
 	}
 }

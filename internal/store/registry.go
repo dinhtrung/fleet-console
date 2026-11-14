@@ -54,8 +54,13 @@ func (s *Store) LiveDispatch(ctx context.Context, projectID int64) (int64, bool,
 }
 
 // DeleteProject removes a project and the app-owned rows for it in one
-// transaction: verdicts, dispatches, items, snapshots, mirror metadata and
-// repos. Events are the audit trail and are kept.
+// transaction: verdicts, dispatches, items, plan reasons, snapshots, mirror
+// metadata and repos. Events are the audit trail and are kept.
+//
+// Every per-project family belongs in this list, and a new one is not finished
+// until it is here: project.id has no AUTOINCREMENT, so SQLite reuses a deleted
+// project's rowid, and a family left behind is inherited by the next project
+// that lands on the same id.
 func (s *Store) DeleteProject(ctx context.Context, projectID int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -66,6 +71,7 @@ func (s *Store) DeleteProject(ctx context.Context, projectID int64) error {
 		`DELETE FROM verdict WHERE dispatch_id IN (SELECT id FROM dispatch WHERE project_id = ?)`,
 		`DELETE FROM dispatch WHERE project_id = ?`,
 		`DELETE FROM item WHERE project_id = ?`,
+		`DELETE FROM plan_reason WHERE project_id = ?`,
 		`DELETE FROM snapshot WHERE project_id = ?`,
 		`DELETE FROM mirror_meta WHERE project_id = ?`,
 		`DELETE FROM repo WHERE project_id = ?`,

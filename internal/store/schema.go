@@ -7,11 +7,11 @@ import (
 
 // schemaVersion is the number of migrations in migrations. A database at this
 // user_version is current.
-const schemaVersion = 5
+const schemaVersion = 6
 
 // migrations are applied in order; migrations[i] moves user_version from i to
 // i+1. Never edit an applied migration; append a new one.
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5}
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6}
 
 // schemaV1 is design §6 verbatim. Do not add the queue_row, decision, lease or
 // task tables here: that state belongs to the rig.
@@ -114,6 +114,27 @@ ALTER TABLE verdict_new RENAME TO verdict;
 const schemaV5 = `
 ALTER TABLE project ADD COLUMN relay_mode TEXT NOT NULL DEFAULT '';
 ALTER TABLE project ADD COLUMN relay_seat TEXT NOT NULL DEFAULT '';
+`
+
+// schemaV6 keeps the plan's per-item reason (#428, design D4). Before it, the
+// reason a ready item was not dispatched lived in one tick's memory: #411 named
+// it on the journal, and an operator reading the board — or a restart later —
+// saw nothing. One row per item, keyed with its project because item numbers are
+// unique only within a project, replaced wholesale per tick by the plan.
+//
+// head is the item's open change request at plan time, the same head the
+// dispatch.skip ledger key uses: a re-review that moves the head makes the old
+// reason a different fact rather than a stale one.
+const schemaV6 = `
+CREATE TABLE plan_reason (
+  project_id INTEGER NOT NULL,
+  item_number INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  head TEXT NOT NULL DEFAULT '',
+  tick_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, item_number)
+);
 `
 
 func (s *Store) migrate(ctx context.Context) error {
