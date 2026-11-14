@@ -2,27 +2,36 @@
 
 ## 1. The start half survives an unread roster
 
-- [ ] 1.1 `internal/act/lifecycle.go`: keep `lastRunning map[string]int` on the `Lifecycle` coordinator, updated only when `SeatsKnown` is true.
-- [ ] 1.2 `buildLifecycleRigs`: when `SeatsKnown` is false and `lastRunning[rig] == 0`, build the entry as stopped (`Running: 0`) with a flag that the roster is unknown, instead of dropping the rig from the decision.
-- [ ] 1.3 `startReason`: the unknown-roster arm returns `roster unknown; N ready item(s)`; the known-stopped arm keeps today's wording.
-- [ ] 1.4 `DecideLifecycle`: the stop half still refuses an unknown roster — only the start half gains the arm.
-- [ ] 1.5 Tests: stale + last 0 + ready → one start; stale + last >0 → none; stale + no demand → none; known-stopped + demand → unchanged.
+- [x] 1.1 `internal/act/lifecycle.go`: keep `lastRunning map[string]int` on the `Lifecycle` coordinator, updated only when `SeatsKnown` is true.
+- [x] 1.2 `buildLifecycleRigs`: when `SeatsKnown` is false and `lastRunning[rig] == 0`, build the entry as stopped (`Running: 0`) with a flag that the roster is unknown, instead of dropping the rig from the decision.
+- [x] 1.3 `startReason`: the unknown-roster arm returns `roster unknown; N ready item(s)`; the known-stopped arm keeps today's wording.
+- [x] 1.4 `DecideLifecycle`: the stop half still refuses an unknown roster — only the start half gains the arm.
+- [x] 1.5 Tests: stale + last 0 + ready → one start; stale + last >0 → none; stale + no demand → none; known-stopped + demand → unchanged.
+      Shipped as `TestDecideLifecycleUnreadRoster` (seven cases, including the stop half staying dark and a rig this
+      process never read) and `TestLifecycleRemembersLastRunning` (the memory across good and failed reads, including a
+      restart that forgets it).
 
 ## 2. Every rig decision is one line
 
-- [ ] 2.1 `cmd/fleet-console/main.go` (or the lifecycle executor): one log line per rig per tick — `rig-lifecycle: <rig> <start|stop|none> — running=<n> ready=<n> seats_known=<bool>` plus the reason for start/stop.
-- [ ] 2.2 The line is built from the same `LifecycleRig` the rule decided on; no second computation.
-- [ ] 2.3 Test: a table over {running quiet, stopped with demand, stopped no demand, unknown roster} asserts the line text.
+- [x] 2.1 `cmd/fleet-console/main.go` (or the lifecycle executor): one log line per rig per tick — `rig-lifecycle: <rig> <start|stop|none> — running=<n> ready=<n> seats_known=<bool>` plus the reason for start/stop.
+- [x] 2.2 The line is built from the same `LifecycleRig` the rule decided on; no second computation.
+- [x] 2.3 Test: a table over {running quiet, stopped with demand, stopped no demand, unknown roster} asserts the line text.
+      Shipped as `TestLifecycleLine` (five rows, including `stop`), plus `TestLifecycleDecideLogsOneLinePerRig` for the
+      one-line-per-rig promise through the coordinator. A rig the rule acted on keeps the executor's outcome line
+      (`rig-lifecycle: <rig> started — <reason>`, the accepted spec's wording), so the tick never logs two lines for
+      one rig and never claims an outcome before the launch happened.
 
 ## 3. A plan skip reaches the journal
 
-- [ ] 3.1 `internal/act/tick.go`: print one `act-skip:` line per (item, reason, head) from `decide.Result.Skips`, reusing the ledger key that already rate-limits notices.
-- [ ] 3.2 No repeat while the reason and head are unchanged; a new head or a new reason prints again.
-- [ ] 3.3 Test: two ticks with `no_free_builder` → one line; reason changes → second line.
+- [x] 3.1 `internal/act/tick.go`: print one `act-skip:` line per (item, reason, head) from `decide.Result.Skips`, reusing the ledger key that already rate-limits notices.
+- [x] 3.2 No repeat while the reason and head are unchanged; a new head or a new reason prints again.
+- [x] 3.3 Test: two ticks with `no_free_builder` → one line; reason changes → second line.
+      Shipped as `TestPlanSkipPrintsOncePerItemReasonAndHead`, which also covers the moved head and the ledger key
+      (`item=<n>; reason=<r>; head=<sha>;`, kind `plan.skip`).
 
 ## 4. Docs and gate
 
-- [ ] 4.1 `docs/fleet-console.md`: how to read `rig-lifecycle:` lines and what `roster unknown` means; when an operator should run `rig start` by hand.
+- [x] 4.1 `docs/fleet-console.md`: how to read `rig-lifecycle:` lines and what `roster unknown` means; when an operator should run `rig start` by hand.
 - [x] 4.2 `go build ./... && go vet ./... && go test ./...` → build ok, vet clean, **1208 passed in 23 packages**.
 - [x] 4.3 `openspec validate --all --strict` → 34 passed, 0 failed.
 

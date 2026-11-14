@@ -1,11 +1,15 @@
 ## ADDED Requirements
 
 ### Requirement: A rig with demand is started even when its roster cannot be read
-When the rig read fails, a rig whose last known state had no running seat SHALL be treated as stopped and started once if a fresh managed project on it has ready items; a rig whose last known state had running seats SHALL NOT be started on an unread roster.
+When the rig read fails, a rig whose last known state had no running seat SHALL be treated as stopped and started once if a fresh managed project on it has ready items and the app's own newest lifecycle event for that rig is a stop (the same provenance the known-stopped arm requires, design D6); a rig whose last known state had running seats, or that this process has never read, SHALL NOT be started on an unread roster.
 
 #### Scenario: Stopped rig, stale read, ready work
-- **WHEN** the rig read is stale, the last known seat count was 0 and a ready item exists on a bound project
+- **WHEN** the rig read is stale, the last known seat count was 0, the app's newest lifecycle event for it is `rig.stopped`, and a ready item exists on a bound project
 - **THEN** one start is planned with a reason naming the unknown roster and the item count
+
+#### Scenario: A rig stopped by hand, stale read
+- **WHEN** the rig read is stale, the last known seat count was 0, and the app has written no `rig.stopped` event for it
+- **THEN** no start is planned, because the operator's stop stands even while the read is failing
 
 #### Scenario: Live rig, stale read
 - **WHEN** the rig read is stale and the last known seat count was above 0

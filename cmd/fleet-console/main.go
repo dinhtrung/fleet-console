@@ -866,7 +866,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 				return busy
 			}
 			// Which stopped rigs are ours to start: only the ones this app's
-			// quiet rule stopped (design D2, #403). An unread ledger means no rig
+			// quiet rule stopped (design D6, #403). An unread ledger means no rig
 			// qualifies this tick — starting an operator's manual `rig down` is a
 			// worse mistake than one tick of delay, and the next tick asks again.
 			quietStops, err := db.QuietStoppedRigs(ctx)
