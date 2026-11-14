@@ -26,6 +26,10 @@ func TestParseClosesIgnoresCode(t *testing.T) {
 		{"prose outside the fence still counts", "```\nCloses #1\n```\nThis closes #7.", 7},
 		{"inline code then prose", "Use `Closes #450`; this closes #8.", 8},
 		{"an unmatched backtick is literal text", "a ` b then Closes #7", 7},
+		{"an info-string line inside a fence is content", "Example:\n\n```\n```go\nCloses #99\n```\n", 0},
+		{"a short fence line inside a longer block is content", "Example:\n\n````\n```\nCloses #99\n````\n", 0},
+		{"a longer block closes properly and prose after it counts", "````\nCloses #1\n````\nThis closes #7.", 7},
+		{"inline runs match exactly", "say ``a ` Closes #99`` here", 0},
 		{"an unclosed fence runs to the end of the body", "text\n```\nCloses #3", 0},
 	}
 	for _, tc := range cases {
