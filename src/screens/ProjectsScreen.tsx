@@ -38,6 +38,7 @@ import {
   LoadingRows,
   Panel,
   PanelHead,
+  Checkbox,
   SelectInput,
   StatusMagnet,
   TextInput,
@@ -89,6 +90,7 @@ type Draft = {
   paths_main: string;
   paths_worktrees: string;
   reviewer: string;
+  epic_serial: boolean;
 };
 
 /** The error key each draft field owns. Only the two path fields differ, but they must be spelled
@@ -108,6 +110,7 @@ const ERROR_KEY: Record<keyof Draft, string> = {
   paths_main: "paths.main",
   paths_worktrees: "paths.worktrees",
   reviewer: "reviewer",
+  epic_serial: "epic_serial",
 };
 
 const BLANK: Draft = {
@@ -124,6 +127,7 @@ const BLANK: Draft = {
   paths_main: "",
   paths_worktrees: "",
   reviewer: "",
+  epic_serial: true,
 };
 
 /** The draft as the wire shape. Submit and the live panel both use this, so the checks run against
@@ -147,6 +151,7 @@ function draftInput(draft: Draft): CreateProjectInput {
       worktrees: draft.paths_worktrees.trim(),
     },
     reviewer: draft.reviewer.trim(),
+    epic_serial: draft.epic_serial,
   };
 }
 
@@ -185,6 +190,7 @@ function draftFromProject(project: Project): Draft {
     concurrency_cap: String(project.concurrency_cap),
     runtime: project.runtime ?? "omp",
     reviewer: project.reviewer ?? "",
+    epic_serial: project.epic_serial ?? true,
     paths_main: project.paths?.main ?? "",
     paths_worktrees: project.paths?.worktrees ?? "",
   };
@@ -434,7 +440,7 @@ export function ProjectsScreen() {
 
   const busy = create.isPending || update.isPending;
 
-  const change = (field: keyof Draft, value: string) => {
+  const change = (field: keyof Draft, value: Draft[keyof Draft]) => {
     setDraft((current) => ({ ...current, [field]: value }));
     const errorKey = ERROR_KEY[field];
     setErrors((current) => {
@@ -802,6 +808,12 @@ export function ProjectsScreen() {
                 error={errors.rigs}
                 hint="Comma-separated in dispatch order, for example “fleet-console, ghost”."
                 autoComplete="off"
+              />
+              <Checkbox
+                label="One child of an epic at a time"
+                hint="Uncheck to let an epic's siblings run in parallel (epic_serial: false)."
+                checked={draft.epic_serial}
+                onChange={(next) => change("epic_serial", next)}
               />
               <TextInput
                 label="Reviewer"
