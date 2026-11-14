@@ -2,6 +2,7 @@ package act
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/dinhtrung/fleet-console/internal/forge"
@@ -121,10 +122,15 @@ func TestAdoptedMergeRefusesABranchNamingAnotherItem(t *testing.T) {
 // fresh item and the branch kept its name, so the mismatch is a re-home — it
 // merges, and the warning says which items are involved and that it was re-homed
 // (#454).
+//
+// #438 is deliberately *absent* from the item list, the way both real adapters
+// behave: they ask for open items only, so a closed item never appears in Items.
+// The state comes from ItemState, which is the read that can see it (#464). A
+// fixture that leaves the closed item in ItemsValue would pass while the re-home
+// arm was unreachable in production.
 func TestAdoptedMergeAcceptsABranchNamingAClosedItem(t *testing.T) {
 	ctx, st, _, _, fake, in := adoptedFixture(t, "abc1234")
-	fake.ItemsValue = append(fake.ItemsValue,
-		forge.Item{Number: 438, Kind: forge.KindTask, State: forge.StateClosed, Title: "Old"})
+	fake.ItemStateValue = map[int]string{438: forge.StateClosed}
 	fake.RequestsValue[0].Branch = "fix/438-follow-up"
 	in.CRs = fake.RequestsValue
 
@@ -171,6 +177,35 @@ func TestBranchWarningIsOncePerItemAndHead(t *testing.T) {
 	}
 	if notes := branchEvents(t, ctx, st, 5); len(notes) != 2 {
 		t.Fatalf("branch warnings after a new head = %d, want 2", len(notes))
+	}
+}
+
+// TestAdoptedMergeRefusesABranchNamingAnItemTheForgeCannotRead: a number nobody
+// has is not a re-home. Items is the open list, so a closed item and a typo are
+// equally absent from it — the only way to tell them apart is a read that answers
+// for a closed item, and when that read fails the merge refuses rather than guess
+// (D4).
+func TestAdoptedMergeRefusesABranchNamingAnItemTheForgeCannotRead(t *testing.T) {
+	ctx, st, _, _, fake, in := adoptedFixture(t, "abc1234")
+	fake.ItemStateErr = errors.New("forge: item #438 was not found")
+	fake.RequestsValue[0].Branch = "fix/438-follow-up"
+	in.CRs = fake.RequestsValue
+
+	report, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(report.Merges) != 0 {
+		t.Fatalf("merged on a branch whose item could not be read: %+v", report.Merges)
+	}
+	if !hasSkip(report, "which names #438, whose state cannot be read") {
+		t.Fatalf("skipped = %v, want the unreadable item named", report.Skipped)
+	}
+	if hasWrite(fake.Writes, "merge", 9, "abc1234") {
+		t.Fatalf("merge written: %+v", fake.Writes)
+	}
+	if notes := branchEvents(t, ctx, st, 5); len(notes) != 0 {
+		t.Fatalf("branch warnings = %+v, want none: a refusal is the line", notes)
 	}
 }
 

@@ -183,6 +183,21 @@ func (g *GitHub) openIssues(ctx context.Context) ([]ghIssue, error) {
 	return all, nil
 }
 
+// ItemState reads one issue's state. Items asks state=open and so never returns a
+// closed one; this is the read that tells a re-homed branch (#438 closed, branch
+// kept, #449) from a number that names nothing at all. One request, not a list.
+func (g *GitHub) ItemState(ctx context.Context, number int) (string, error) {
+	raw, err := g.cli.api(ctx, fmt.Sprintf("repos/%s/issues/%d", g.slug, number))
+	if err != nil {
+		return "", fmt.Errorf("forge: read GitHub issue %d: %w", number, err)
+	}
+	var issue ghIssue
+	if err := json.Unmarshal(raw, &issue); err != nil {
+		return "", fmt.Errorf("forge: decode GitHub issue %d: %w", number, err)
+	}
+	return normalizeState(number, issue.State)
+}
+
 type ghChild struct {
 	Number int    `json:"number"`
 	State  string `json:"state"`

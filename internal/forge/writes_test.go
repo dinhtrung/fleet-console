@@ -44,7 +44,7 @@ func TestMergeMatchHeadCommit(t *testing.T) {
 // form that holds in both, which is why the guard is on the recorded argv rather
 // than on a live call.
 func TestEveryGitHubVerbCarriesTheRepo(t *testing.T) {
-	const declaredMethods = 11
+	const declaredMethods = 12
 	if got := reflect.TypeOf((*Forge)(nil)).Elem().NumMethod(); got != declaredMethods {
 		t.Fatalf("Forge declares %d methods, want %d: exercise the new one in this test and bump the count",
 			got, declaredMethods)
@@ -60,6 +60,7 @@ func TestEveryGitHubVerbCarriesTheRepo(t *testing.T) {
 	_, _ = github.ChangeRequests(ctx)
 	_, _ = github.Notes(ctx, 5)
 	_, _ = github.CRNotes(ctx, 9)
+	_, _ = github.ItemState(ctx, 5)
 	_, _ = github.SubIssues(ctx, 5)
 	_ = github.SetMarker(ctx, 5, false)
 	_ = github.Comment(ctx, 5, "body")

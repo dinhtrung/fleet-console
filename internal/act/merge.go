@@ -344,22 +344,6 @@ func branchItem(branch string) (int, bool) {
 	return number, true
 }
 
-// itemState reads one item's state. The item list is the only read the forge
-// offers, and this is asked only when a branch names a *different* item — the
-// shape that used to refuse outright — so the cost is one read on a rare path.
-func (a *Actions) itemState(ctx context.Context, item int) (string, error) {
-	items, err := a.Forge.Items(ctx, forge.Timeout{})
-	if err != nil {
-		return "", fmt.Errorf("refusing merge: cannot read item #%d to compare it with the branch: %w", item, err)
-	}
-	for _, entry := range items {
-		if entry.Number == item {
-			return entry.State, nil
-		}
-	}
-	return "", nil
-}
-
 // noteBranch writes the one line a branch that does not name this item earns. It
 // is a log line, not a refusal: deduped on (item, head) through the same ledger
 // every other raise uses, so a change request waiting an hour is one line and a
@@ -418,19 +402,19 @@ func (a *Actions) MergeAdopted(ctx context.Context, projectID int64, item int, r
 			"change request #%d is on %s, which names no item; the convention is %s<slug>",
 			request.Number, request.Branch, branchPrefix(item)))
 	} else if named != item {
-		state, err := a.itemState(ctx, named)
+		// ItemState is the one read that can see a closed item: Items is the open
+		// list, so a closed item is absent from it and absent cannot be told from a
+		// number nobody has (#464). An unreadable or absent item refuses — only a
+		// **closed** one turns a mismatch into a re-home, and guessing would merge
+		// work onto the wrong item (D4).
+		state, err := a.Forge.ItemState(ctx, named)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("refusing merge: change request #%d closes #%d but is on %s, which names #%d, whose state cannot be read: %w",
+				request.Number, item, request.Branch, named, err)
 		}
 		if state != forge.StateClosed {
-			// An unknown item refuses too: only a **closed** one turns a mismatch
-			// into a re-home, and guessing would merge work onto the wrong item (D4).
-			reason := fmt.Sprintf("#%d is still open, so two live items claim one branch", named)
-			if state != forge.StateOpen {
-				reason = fmt.Sprintf("the forge did not report #%d as closed", named)
-			}
-			return nil, fmt.Errorf("refusing merge: change request #%d closes #%d but is on %s, which names #%d: %s",
-				request.Number, item, request.Branch, named, reason)
+			return nil, fmt.Errorf("refusing merge: change request #%d closes #%d but is on %s, which names #%d: #%d is still open, so two live items claim one branch",
+				request.Number, item, request.Branch, named, named)
 		}
 		a.noteBranch(ctx, item, request, fmt.Sprintf(
 			"change request #%d closes #%d and is on %s, which names #%d (closed): the branch is re-homed to #%d",
