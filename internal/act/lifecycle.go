@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -382,6 +383,9 @@ func LiveRow(row rig.QueueRow) bool {
 type RigLifecycle interface {
 	Up(ctx context.Context, specPath string) (*rig.RunReport, error)
 	Down(ctx context.Context, rigName string, deleteRig bool) (*rig.DownReport, error)
+	// Export writes the rig's spec to specPath (#431): a rig created from a
+	// bundle exists only in the database, and the start needs a spec file.
+	Export(ctx context.Context, rigName, specPath string) error
 }
 
 // LifecycleExecutor applies lifecycle actions: it launches a spec, stops a rig
@@ -471,11 +475,26 @@ func (e *LifecycleExecutor) start(ctx context.Context, action LifecycleAction) e
 		spec = preflight.SpecPath(home, action.Rig)
 	}
 	if _, err := os.Stat(spec); err != nil {
-		if os.IsNotExist(err) {
-			err = fmt.Errorf("no rig spec at %s", spec)
+		if !os.IsNotExist(err) {
+			e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v", action.Rig, err))
+			return err
 		}
-		e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v", action.Rig, err))
-		return err
+		// A rig imported from a bundle (#389) has a database row and no spec
+		// file at the conventional path. Export it on demand instead of leaving
+		// the rig unstartable — a missing file is a resolvable fact, not a
+		// verdict (#431).
+		var resolveErr error
+		if mkErr := os.MkdirAll(filepath.Dir(spec), 0o755); mkErr != nil {
+			resolveErr = fmt.Errorf("no rig spec at %s: %w", spec, mkErr)
+		} else if exportErr := e.Rigs.Export(ctx, action.Rig, spec); exportErr != nil {
+			resolveErr = fmt.Errorf("no rig spec at %s and export failed: %w", spec, exportErr)
+		} else if _, statErr := os.Stat(spec); statErr != nil {
+			resolveErr = fmt.Errorf("no rig spec at %s (export wrote nothing)", spec)
+		}
+		if resolveErr != nil {
+			e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v", action.Rig, resolveErr))
+			return resolveErr
+		}
 	}
 	if _, err := e.Rigs.Up(ctx, spec); err != nil {
 		e.note("rig "+action.Rig+" up", fmt.Sprintf("%s up failed: %v", action.Rig, err))

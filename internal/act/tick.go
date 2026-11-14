@@ -44,6 +44,11 @@ type TickInput struct {
 	// dispatch intent on that rig is skipped with the same named reason rather
 	// than writing a worktree and a row no seat will ever claim (design D5).
 	LifecycleFailed map[string]string
+	// RunningSeats names the seats the tick's roster read calls running. A rig
+	// whose start failed this tick keeps dispatching to them: the launch failure
+	// is a fact about the rig's start, not about agents that are up and free
+	// (#431). A seat not named here is not dispatched to.
+	RunningSeats map[string]bool
 	// OnDecision receives every decision this tick raised, so the caller can
 	// put it on somebody's phone. It is called after the row exists. It cannot
 	// fail the tick: a dead transport is not a dead fleet (design.md §5), so a
@@ -591,7 +596,7 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			continue
 		}
 		if rigName := rigFromSeat(intent.Seat); rigName != "" {
-			if _, ok := in.LifecycleFailed[rigName]; ok {
+			if _, failed := in.LifecycleFailed[rigName]; failed && !in.RunningSeats[intent.Seat] {
 				continue
 			}
 		}

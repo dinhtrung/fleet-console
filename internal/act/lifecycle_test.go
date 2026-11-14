@@ -674,10 +674,13 @@ func TestRigLifecycleNeverDeletes(t *testing.T) {
 
 // TestRigLifecycleMissingSpecNamesThePath: a missing spec is a start failure
 // that names the path it looked for, never an invented one.
+// TestRigLifecycleMissingSpecNamesThePath: a missing spec is exported on demand
+// now (#431); when that cannot resolve it, the failure still names the path and
+// logs one line. The export is made to fail so this pins the unresolvable case.
 func TestRigLifecycleMissingSpecNamesThePath(t *testing.T) {
 	var lines []string
 	executor := &LifecycleExecutor{
-		Store: newStore(t), Rigs: &fakeLifecycleRig{}, Home: t.TempDir(),
+		Store: newStore(t), Rigs: &fakeLifecycleRig{exportErr: errString("export unavailable")}, Home: t.TempDir(),
 		Logf: func(format string, args ...any) { lines = append(lines, format) },
 	}
 	err := executor.start(context.Background(), LifecycleAction{Kind: LifecycleStart, Rig: "ghost"})
@@ -706,10 +709,12 @@ func writeSpec(t *testing.T) string {
 }
 
 type fakeLifecycleRig struct {
-	upErr      error
-	upCalls    int
-	downNames  []string
-	downDelete bool
+	upErr       error
+	upCalls     int
+	exportCalls int
+	exportErr   error
+	downNames   []string
+	downDelete  bool
 }
 
 func (f *fakeLifecycleRig) Up(context.Context, string) (*rig.RunReport, error) {
@@ -720,8 +725,61 @@ func (f *fakeLifecycleRig) Up(context.Context, string) (*rig.RunReport, error) {
 	return &rig.RunReport{Status: "ok"}, nil
 }
 
+func (f *fakeLifecycleRig) Export(_ context.Context, _, specPath string) error {
+	f.exportCalls++
+	if f.exportErr != nil {
+		return f.exportErr
+	}
+	if err := os.MkdirAll(filepath.Dir(specPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(specPath, []byte("name: r\n"), 0o600)
+}
+
 func (f *fakeLifecycleRig) Down(_ context.Context, name string, deleteRig bool) (*rig.DownReport, error) {
 	f.downNames = append(f.downNames, name)
 	f.downDelete = deleteRig
 	return &rig.DownReport{RigName: name}, nil
+}
+
+// TestStartExportsAMissingSpec (#431): a rig created from a bundle has a row and
+// no spec file. The start exports it on demand, once, and then launches it — a
+// missing file is resolvable, not a verdict.
+func TestStartExportsAMissingSpec(t *testing.T) {
+	st := newStore(t)
+	rigs := &fakeLifecycleRig{}
+	now := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
+	executor := &LifecycleExecutor{Store: st, Rigs: rigs, Now: func() time.Time { return now }}
+	spec := filepath.Join(t.TempDir(), "specs", "r", "rig.yaml")
+
+	action := LifecycleAction{Kind: LifecycleStart, Rig: "r", Spec: spec, Reason: "demand"}
+	if failed := executor.Start(context.Background(), []LifecycleAction{action}); failed != nil {
+		t.Fatalf("start failed: %v", failed)
+	}
+	if rigs.exportCalls != 1 || rigs.upCalls != 1 {
+		t.Fatalf("export calls = %d up calls = %d, want one each", rigs.exportCalls, rigs.upCalls)
+	}
+	if _, err := os.Stat(spec); err != nil {
+		t.Fatalf("exported spec missing: %v", err)
+	}
+}
+
+// TestStartNamesTheMissingSpecWhenExportFails (#431): when the export cannot
+// help, the failure names the rig and the path, and Up is never attempted.
+func TestStartNamesTheMissingSpecWhenExportFails(t *testing.T) {
+	st := newStore(t)
+	rigs := &fakeLifecycleRig{exportErr: errString("daemon unreachable")}
+	now := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
+	executor := &LifecycleExecutor{Store: st, Rigs: rigs, Now: func() time.Time { return now }}
+	spec := filepath.Join(t.TempDir(), "specs", "r", "rig.yaml")
+
+	failed := executor.Start(context.Background(), []LifecycleAction{
+		{Kind: LifecycleStart, Rig: "r", Spec: spec, Reason: "demand"},
+	})
+	if failed["r"] == "" || !strings.Contains(failed["r"], spec) || !strings.Contains(failed["r"], "export failed") {
+		t.Fatalf("failure = %q, want the path and the export", failed["r"])
+	}
+	if rigs.upCalls != 0 {
+		t.Fatalf("up calls = %d, want none without a spec", rigs.upCalls)
+	}
 }
