@@ -35,17 +35,14 @@ Ordered so each task leaves the tree green. `#n` is the GitHub issue that carrie
 
 ## 6. Tiers (D5a/D5b, #48 — rewritten for this change)
 
+> 6.4–6.7 and 7.1–7.2 were removed with their requirements (#398): no project runs tiers, and a second rig
+> on one project is forbidden by the operating model. Only fill-order and `on-full` spilling remain.
+
 - [ ] 6.1 Config: `rigs: [{name, tier, spill}]`, `rig: name` as the one-element form, `policy: tiered`
 - [ ] 6.2 Capacity summed over the active tier; a rig named twice or by two projects fails validation
 - [ ] 6.3 Fill-first inside a tier; a boundary is crossed only by its trigger
-- [ ] 6.4 Health: `stall_after` (10m) from session output plus seat state; `failover_after` (2)
-- [ ] 6.5 Tier change writes one event with a reason and escalates once; return is manual
-- [ ] 6.6 A live row is closed `superseded` on stall and re-dispatched on the same branch in the active tier
-- [ ] 6.7 Tests: fill-first; no spill under `on-unavailable`; failover after two unhealthy ticks; single slow tick does
       not fail over; re-dispatch reuses the branch
 
 ## 7. Verify on the box
 
-- [ ] 7.1 `tsim-v2` on tier 1 `tsim-fleet-claude`, tier 2 `tsim-fleet-omp` (`on-unavailable`)
-- [ ] 7.2 Stop tier 1's seats, confirm one event and a dispatch into tier 2 within two ticks
 - [ ] 7.3 Confirm a second app instance refuses to start while the service runs

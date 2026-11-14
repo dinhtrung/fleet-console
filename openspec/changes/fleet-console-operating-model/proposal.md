@@ -31,3 +31,18 @@ launched per project folder and a project may have several).
 
 Apply after `openspec archive fleet-console-v1`: this change MODIFIES two requirements of capabilities that v1 has not yet
 archived into `openspec/specs/`, so the validator reports that archiving this change first would be refused.
+
+## Removed (#398, 2026-11-14)
+
+Four requirements described a tier failover nobody operates and that the operating model forbids: two rigs on one
+project would run two dispatchers against the same queue. With no project configured with tiers, building them would
+create a mechanism that only the spec exercises. Removed with their tasks:
+
+- Failover follows health, not load (`failover_after`, `stall_after`)
+- A live row is not migrated between tiers (row closed `superseded` on stall)
+- The board names the active tier
+- A tier change is one event with a reason
+
+Kept: fill-first inside a tier, `on-full` spilling, tiered capacity and validation (all implemented and tested).
+A future multi-rig project that wants health-based failover needs a new change set and a decision about the two
+dispatchers, not the restoration of these four paragraphs.
