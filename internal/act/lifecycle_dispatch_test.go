@@ -72,3 +72,43 @@ func TestFailedStartDoesNotDispatchToADeadSeat(t *testing.T) {
 		t.Fatalf("skipped = %v, want the failure named", report.Skipped)
 	}
 }
+
+// TestFailedStartNamesTheFailureOnce (#431): the operator sees the failure on
+// the tick that first hits it, not on every tick it stands; a changed error is a
+// new fact and prints again. The ledger keeps one row per distinct failure.
+func TestFailedStartNamesTheFailureOnce(t *testing.T) {
+	ctx := context.Background()
+	in, _ := failedStartInput(t, map[string]bool{"builder@rig-a": true})
+
+	first, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	if !hasSkip(first, "rig rig-a up: no rig spec at /x") {
+		t.Fatalf("first tick skipped = %v, want the failure named", first.Skipped)
+	}
+	second, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+	if hasSkip(second, "rig rig-a up:") {
+		t.Fatalf("second tick skipped = %v, want the standing failure quiet", second.Skipped)
+	}
+
+	in.LifecycleFailed["rig-a"] = "no rig spec at /x and export failed: daemon unreachable"
+	third, err := RunTick(ctx, in)
+	if err != nil {
+		t.Fatalf("tick 3: %v", err)
+	}
+	if !hasSkip(third, "export failed: daemon unreachable") {
+		t.Fatalf("third tick skipped = %v, want the changed failure named", third.Skipped)
+	}
+
+	page, err := in.Store.Events(ctx, store.EventFilter{Kind: "rig.start_failed", Limit: 10})
+	if err != nil || len(page.Events) != 2 {
+		t.Fatalf("start failures = %v (%v), want two distinct rows", page.Events, err)
+	}
+	if page.Events[0].Subject != "rig rig-a" {
+		t.Fatalf("event subject = %q, want the rig named", page.Events[0].Subject)
+	}
+}
