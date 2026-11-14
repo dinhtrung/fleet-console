@@ -37,7 +37,29 @@ type Seat struct {
 	Profile      string `json:"profile"`
 	Permission   string `json:"permission"`
 	LastActivity string `json:"last_activity"`
+	// Attention is every reason this seat has stopped on a human, in the order
+	// attention, input, arbitrated (#425). Empty is the ordinary case: a seat
+	// that is not waiting on anybody.
+	Attention []SeatAttention `json:"attention,omitempty"`
 }
+
+// SeatAttention is one reason a seat has stopped on a human, read from node keys
+// the rig already sends (needsAttention, needsInputEvidence,
+// arbitratedNeedsInput). The rig reports the state, not its age; how long the
+// app has seen it is the app's own memory (#425, design D1).
+type SeatAttention struct {
+	Seat     string // canonical session name
+	Rig      string
+	Kind     string // attention | input | arbitrated
+	Question string // the text the rig reports, trimmed; "" when it gives none
+}
+
+// The three kinds, in the order a node's entries are produced.
+const (
+	AttentionKindAttention  = "attention"
+	AttentionKindInput      = "input"
+	AttentionKindArbitrated = "arbitrated"
+)
 
 // Running reports whether this seat's lifecycle is the running state, which is
 // the only fact about whether its rig is up (openspec rig-lifecycle: "The
@@ -96,6 +118,24 @@ type seatWire struct {
 	Profile          string `json:"profile"`
 	PermissionPolicy string `json:"permissionPolicy"`
 	LastActivity     string `json:"lastActivityAt"`
+	// The attention facts (#425). The two booleans are the block flags; a
+	// pointer keeps "absent" (unknown) apart from false (clear).
+	// needsInputEvidence is deliberately not decoded: the rig writes it for both
+	// an observed input and an observed clear, so reading it as a block invents a
+	// wait that is not there. The question text comes from the activity and error
+	// fields below.
+	NeedsAttention       *bool `json:"needsAttention"`
+	ArbitratedNeedsInput *bool `json:"arbitratedNeedsInput"`
+	ActivityState        struct {
+		NeedsInput struct {
+			Count  int     `json:"count"`
+			Reason *string `json:"reason"`
+		} `json:"needsInput"`
+	} `json:"activityState"`
+	AgentActivity struct {
+		Reason string `json:"reason"`
+	} `json:"agentActivity"`
+	LatestError *string `json:"latestError"`
 }
 
 // ParseQueueList decodes the queue list and enforces the required fields.
@@ -213,6 +253,10 @@ func ParseSeats(data []byte, unknown func(key string)) ([]Seat, error) {
 			Permission:   permission,
 			LastActivity: wire.LastActivity,
 		}
+		for _, block := range seatBlocks(wire) {
+			block.Seat, block.Rig = seat.Session, seat.Rig
+			seat.Attention = append(seat.Attention, block)
+		}
 		for _, check := range []struct {
 			field, path, value string
 		}{
@@ -262,4 +306,47 @@ func WaitsOnHuman(state, destination, blockedOn string) bool {
 	default:
 		return false
 	}
+}
+
+// seatBlocks derives a seat's attention entries from the facts the rig reports
+// (#425). The flags decide whether a block exists — a pointer, so absent
+// (unknown) is not invented as true — and the text comes from the activity the
+// rig records, never from needsInputEvidence, which the rig writes for an
+// observed clear as well as an observed input.
+func seatBlocks(wire seatWire) []SeatAttention {
+	var out []SeatAttention
+	if wire.NeedsAttention != nil && *wire.NeedsAttention {
+		out = append(out, SeatAttention{Kind: AttentionKindAttention, Question: attentionText(wire)})
+	}
+	if wire.ActivityState.NeedsInput.Count > 0 || reasonText(wire) != "" {
+		out = append(out, SeatAttention{Kind: AttentionKindInput, Question: attentionText(wire)})
+	}
+	if wire.ArbitratedNeedsInput != nil && *wire.ArbitratedNeedsInput {
+		out = append(out, SeatAttention{Kind: AttentionKindArbitrated, Question: attentionText(wire)})
+	}
+	return out
+}
+
+// reasonText is the activity's own input reason, when it names one.
+func reasonText(wire seatWire) string {
+	if wire.ActivityState.NeedsInput.Reason == nil {
+		return ""
+	}
+	return strings.TrimSpace(*wire.ActivityState.NeedsInput.Reason)
+}
+
+// attentionText is the question a waiting seat is asking, by the rig's own
+// precedence: the activity's input reason, then the startup/attention error,
+// then the activity hook's reason. A seat with none of them is still a block
+// with Question == "".
+func attentionText(wire seatWire) string {
+	if text := reasonText(wire); text != "" {
+		return text
+	}
+	if wire.LatestError != nil {
+		if text := strings.TrimSpace(*wire.LatestError); text != "" {
+			return text
+		}
+	}
+	return strings.TrimSpace(wire.AgentActivity.Reason)
 }
