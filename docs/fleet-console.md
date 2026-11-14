@@ -36,7 +36,9 @@ A merge happens only when four facts are true, re-read at the moment of the merg
 
 That line is the only thing the gate reads: a change request whose body merely references the item (`Refs`,
 `Part of`, a title mention) is never merged, undrafted or recorded, so partial work hands off with what remains
-instead of opening one.
+instead of opening one. It reads the body's prose, not its code: a `Closes #<n>` inside an inline code span or a
+fenced block is a body quoting the convention, so it associates no item — which is how a change request that
+documents the rule avoided being paired with the item it merely mentioned.
 
 The skip is visible and it now asks. One `change_request.no_item` event and one skip line per (change request,
 head) name the dead end; when the title or branch named an item, the same tick raises **one decision row**

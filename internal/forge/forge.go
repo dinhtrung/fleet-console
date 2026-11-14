@@ -330,8 +330,15 @@ var (
 )
 
 // ParseCloses extracts the item number a change request closes, if the body says so.
+//
+// Code is not prose. A body that quotes the convention — "by that point the app
+// has already read `Closes #450` from the body" — is describing the rule, not
+// closing item 450, and a gate that reads the quote pairs the change request
+// with an item it never touched (#455). So fenced blocks and inline code spans
+// are dropped before matching. Line-start is deliberately not required: "this
+// closes #12." mid-sentence is an honest body and GitHub accepts it.
 func ParseCloses(body string) int {
-	match := closesPattern.FindStringSubmatch(body)
+	match := closesPattern.FindStringSubmatch(proseOnly(body))
 	if match == nil {
 		return 0
 	}
@@ -340,6 +347,102 @@ func ParseCloses(body string) int {
 		return 0
 	}
 	return number
+}
+
+// proseOnly returns the parts of a body that state something, with fenced code
+// blocks and inline code spans removed. An unterminated block or span is still
+// treated as code: a quote whose end the body forgot to write is a quote.
+func proseOnly(body string) string {
+	var out strings.Builder
+	fence := "" // the opening run, e.g. "```" or "~~~~", or "" outside a block
+	for _, line := range strings.Split(body, "\n") {
+		if fence != "" {
+			if closesFence(line, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if opening, ok := opensFence(line); ok {
+			fence = opening
+			continue
+		}
+		out.WriteString(stripInlineCode(line))
+		out.WriteString("\n")
+	}
+	return out.String()
+}
+
+// opensFence reports the fence a line opens, if it opens one: up to three spaces
+// of indent and then three or more of the same fence character.
+func opensFence(line string) (string, bool) {
+	trimmed := strings.TrimLeft(line, " ")
+	if trimmed == "" || len(line)-len(trimmed) > 3 {
+		return "", false
+	}
+	char := trimmed[0]
+	if char != '`' && char != '~' {
+		return "", false
+	}
+	run := 0
+	for run < len(trimmed) && trimmed[run] == char {
+		run++
+	}
+	if run < 3 {
+		return "", false
+	}
+	return strings.Repeat(string(char), run), true
+}
+
+// closesFence reports whether a line closes the block a fence opened: the same
+// character, at least as long, and nothing else on the line.
+func closesFence(line, fence string) bool {
+	trimmed := strings.TrimSpace(line)
+	char := fence[0]
+	run := 0
+	for run < len(trimmed) && trimmed[run] == char {
+		run++
+	}
+	return run >= len(fence) && run == len(trimmed)
+}
+
+// stripInlineCode removes backtick code spans from one line, leaving a space in
+// their place so the words around them do not fuse. A span the line never closes
+// quotes the rest of the line.
+func stripInlineCode(line string) string {
+	var out strings.Builder
+	for i := 0; i < len(line); {
+		if line[i] != '`' {
+			out.WriteByte(line[i])
+			i++
+			continue
+		}
+		run := 0
+		for i+run < len(line) && line[i+run] == '`' {
+			run++
+		}
+		end := -1
+		for j := i + run; j < len(line); {
+			if line[j] != '`' {
+				j++
+				continue
+			}
+			closeRun := 0
+			for j+closeRun < len(line) && line[j+closeRun] == '`' {
+				closeRun++
+			}
+			if closeRun == run {
+				end = j + closeRun
+				break
+			}
+			j += closeRun
+		}
+		if end < 0 {
+			return out.String()
+		}
+		out.WriteByte(' ')
+		i = end
+	}
+	return out.String()
 }
 
 // DocsOnly reports whether every changed path is documentation. An openspec
