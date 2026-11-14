@@ -52,9 +52,17 @@ Anything unknown refuses and names the missing fact. The reviewer keeps the judg
 **Adoption: a hand-dispatched item still merges.** The four facts used to key on a `dispatch` row, so an item whose
 queue row was created by hand — `rig queue create`, outside the app — never merged: the watchdog skipped its change
 request with `closes no dispatch`. When the store holds no dispatch row, the same four facts are now enforced
-against the change request itself, plus two guards that exist only because there is no row to trust: the head branch
-must start with `feature/<item>-`, and a live dispatch for the same item on a *different* branch refuses rather than
-picking a winner. Adoption records `change_request.adopted` before the merge and the ordinary `merge` event after,
+against the change request itself, plus one guard that exists only because there is no row to trust: a live
+dispatch for the same item on a *different* branch refuses rather than picking a winner.
+
+The branch convention is a convention, not a gate. Adoption takes its item from `Closes #<n>` — the one
+machine-checked statement in the body — and the branch only has to agree with it: the last path segment up to
+its first `-` is read as an item number when it is all digits, so `feature/450-x` and `fix/450-x` agree, and
+`fix/delete-project-verdicts-by-project-id` names nothing to disagree with. A branch naming no item merges
+with one warning per (item, head) naming the convention; a branch naming a **different open** item refuses and
+names both, because then two live items claim one branch and a human picks. A branch naming a *closed* item is
+a **re-home**, not a mismatch: the work was replayed on a fresh item and the branch kept its name (#449 is the
+honest case), so it merges and the warning says so. Adoption records `change_request.adopted` before the merge and the ordinary `merge` event after,
 and it invents no dispatch row. Readiness stays the integrator's job: the watchdog marks a draft ready and merges,
 but a human still decides what is worth merging.
 

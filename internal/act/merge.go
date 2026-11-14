@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"strings"
@@ -309,15 +310,78 @@ func (a *Actions) Finalize(ctx context.Context, dispatchID int64, item int, requ
 	return result, nil
 }
 
-// branchPrefix is the app's branch convention: feature/<item>-<slug>. It is the
-// only cheap way to reject a pull request that merely mentions the item, and a
-// hand-made branch that follows it is treated exactly like the app's own.
+// branchPrefix is the app's branch convention: feature/<item>-<slug>. It is a
+// convention, not the gate: adoption takes its item from the body and the branch
+// only has to agree (openspec/changes/adopt-on-the-body, D1), so this string now
+// exists to name the convention in the one warning a branchless merge writes.
 func branchPrefix(item int) string { return fmt.Sprintf("feature/%d-", item) }
+
+// branchItem reads the item a branch names, if it names one: the last path
+// segment up to its first '-', and only when those characters are all digits.
+// feature/450-x → 450; fix/438-follow-up → 438; fix/delete-project-verdicts →
+// none. No prefix is required, because a prefix carries no meaning to the gate
+// and enumerating one only makes the next convention a bug report (D1).
+func branchItem(branch string) (int, bool) {
+	segment := branch
+	if slash := strings.LastIndex(segment, "/"); slash >= 0 {
+		segment = segment[slash+1:]
+	}
+	if dash := strings.Index(segment, "-"); dash >= 0 {
+		segment = segment[:dash]
+	}
+	if segment == "" {
+		return 0, false
+	}
+	for i := 0; i < len(segment); i++ {
+		if segment[i] < '0' || segment[i] > '9' {
+			return 0, false
+		}
+	}
+	number, err := strconv.Atoi(segment)
+	if err != nil {
+		return 0, false
+	}
+	return number, true
+}
+
+// itemState reads one item's state. The item list is the only read the forge
+// offers, and this is asked only when a branch names a *different* item — the
+// shape that used to refuse outright — so the cost is one read on a rare path.
+func (a *Actions) itemState(ctx context.Context, item int) (string, error) {
+	items, err := a.Forge.Items(ctx, forge.Timeout{})
+	if err != nil {
+		return "", fmt.Errorf("refusing merge: cannot read item #%d to compare it with the branch: %w", item, err)
+	}
+	for _, entry := range items {
+		if entry.Number == item {
+			return entry.State, nil
+		}
+	}
+	return "", nil
+}
+
+// noteBranch writes the one line a branch that does not name this item earns. It
+// is a log line, not a refusal: deduped on (item, head) through the same ledger
+// every other raise uses, so a change request waiting an hour is one line and a
+// new head is a second (D3).
+func (a *Actions) noteBranch(ctx context.Context, item int, request forge.ChangeRequest, detail string) {
+	subject := fmt.Sprintf("#%d", item)
+	key := "head=" + request.HeadSHA + ";"
+	if noted, err := a.Store.HasEvent(ctx, "change_request.branch", subject, key); err != nil || noted {
+		return
+	}
+	if _, err := a.event(ctx, "act", "change_request.branch", subject, key+" "+detail); err != nil {
+		// Best-effort: a ledger row is a breadcrumb, and refusing a merge because
+		// a warning could not be written would be worse than the missing line.
+		return
+	}
+}
 
 // MergeAdopted merges a change request the app never dispatched. It enforces the
 // same four facts as Merge — mergeable, `Closes #<item>`, green checks, ACCEPT at
-// the head sha — plus two refusals adoption alone needs, and it invents no
-// dispatch row (design D2).
+// the head sha — plus two guards adoption alone needs: a live dispatch on another
+// branch refuses, and the branch must not name a different *open* item. It invents
+// no dispatch row (design D2).
 //
 // The verdict is read by item, because there is no dispatch to key on; the
 // caller has already captured it (design D3), so a missing verdict here means the
@@ -342,9 +406,35 @@ func (a *Actions) MergeAdopted(ctx context.Context, projectID int64, item int, r
 				item, dispatch.Branch, request.Branch)
 		}
 	}
-	if !strings.HasPrefix(request.Branch, branchPrefix(item)) {
-		return nil, fmt.Errorf("refusing merge: change request #%d is on %s, which does not start with %s",
-			request.Number, request.Branch, branchPrefix(item))
+	// The body adopted the item (openspec/changes/adopt-on-the-body, D1). The
+	// branch is a consistency check, not the adopter: it may name this item, name
+	// none, or name an item that is already closed — that last one is a re-home,
+	// not a mismatch, because the work was replayed on a fresh item and the branch
+	// kept its name (#454). Only a different *open* item refuses, because then two
+	// live items claim one branch and a human decides which work survives (D2).
+	named, names := branchItem(request.Branch)
+	if !names {
+		a.noteBranch(ctx, item, request, fmt.Sprintf(
+			"change request #%d is on %s, which names no item; the convention is %s<slug>",
+			request.Number, request.Branch, branchPrefix(item)))
+	} else if named != item {
+		state, err := a.itemState(ctx, named)
+		if err != nil {
+			return nil, err
+		}
+		if state != forge.StateClosed {
+			// An unknown item refuses too: only a **closed** one turns a mismatch
+			// into a re-home, and guessing would merge work onto the wrong item (D4).
+			reason := fmt.Sprintf("#%d is still open, so two live items claim one branch", named)
+			if state != forge.StateOpen {
+				reason = fmt.Sprintf("the forge did not report #%d as closed", named)
+			}
+			return nil, fmt.Errorf("refusing merge: change request #%d closes #%d but is on %s, which names #%d: %s",
+				request.Number, item, request.Branch, named, reason)
+		}
+		a.noteBranch(ctx, item, request, fmt.Sprintf(
+			"change request #%d closes #%d and is on %s, which names #%d (closed): the branch is re-homed to #%d",
+			request.Number, item, request.Branch, named, item))
 	}
 	verdicts, err := a.Store.VerdictsForItem(ctx, projectID, item)
 	if err != nil {
