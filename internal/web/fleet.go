@@ -59,6 +59,14 @@ type boardItem struct {
 	// board draws them where the state is, not only in the drawer's detail.
 	VerdictSHA string `json:"verdict_sha,omitempty"`
 	HeadSHA    string `json:"head_sha,omitempty"`
+	// PlanReason is the last plan's recorded reason for leaving this item
+	// undispatched, with its detail (#428's plan_reason; #429's why-column).
+	// Empty means the last plan had nothing to say about this item, which is a
+	// different fact from "no plan has run" — boardProject.Planned tells them
+	// apart.
+	PlanReason string `json:"plan_reason,omitempty"`
+	// PlanAge is how old that record is, "" without a record.
+	PlanAge string `json:"plan_age,omitempty"`
 }
 
 type boardCounts struct {
@@ -91,6 +99,11 @@ type boardProject struct {
 	// Both are built server-side so the thresholds live in one place.
 	ForgeRead mirrorRead `json:"forge_read"`
 	RigRead   mirrorRead `json:"rig_read"`
+	// Planned is true once any tick has run for this project. It is what makes
+	// an empty plan_reason table readable: before the first tick nothing is
+	// known, after one an empty table means the last plan skipped nothing
+	// (#429). Without it the two cases would render as the same blank cell.
+	Planned bool `json:"planned"`
 }
 
 // boardQuestion is one unanswered operator question, read from the ledger and
@@ -285,6 +298,15 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 
 	result := make([]boardProject, 0, len(projects))
 	for _, p := range projects {
+		// The last plan's reasons (#428), one read per project: a recorded reason
+		// is the item's why-column when it exists (#429). A read failure is not a
+		// reason to fail the board — the state-derived reason still renders.
+		planReasons := map[int]store.PlanReason{}
+		if reasons, err := f.Store.PlanReasons(ctx, p.ID); err == nil {
+			for _, reason := range reasons {
+				planReasons[reason.ItemNumber] = reason
+			}
+		}
 		// One query per project, not per item: the newest attempt per item and the
 		// newest verdict per item are folded here.
 		allDispatches, err := f.Store.DispatchesForProject(ctx, p.ID)
@@ -331,6 +353,11 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 		// The stamps are the only evidence a stalled mirror leaves behind.
 		bp.ForgeRead = mirrorReadAt(now, projectStatus.LastForgeAt, f.Tick, f.MaxWait, "forge")
 		bp.RigRead = mirrorReadAt(now, projectStatus.LastRigAt, f.Tick, f.MaxWait, "rig")
+		// A tick that wrote its status block is the evidence a plan has run
+		// (#429), and a recorded reason is proof on its own — the write happens
+		// inside a plan. Either one makes an empty reason table mean "nothing
+		// was skipped" rather than "nothing has been planned yet".
+		bp.Planned = projectStatus.LastTickAt != nil || len(planReasons) > 0
 		// A question waiting an hour must not look like a project with nothing
 		// to do (#377): the ledger's unanswered verdict questions ride the same
 		// read the board already makes, and a row the queue says is finished
@@ -442,6 +469,15 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 				bp.Counts.Waiting++
 			case "blocked", "paused":
 				bp.Counts.Blocked++
+			}
+			if reason, ok := planReasons[row.Number]; ok {
+				row.PlanReason = reason.Reason
+				if reason.Detail != "" {
+					row.PlanReason += " — " + reason.Detail
+				}
+				if !reason.TickAt.IsZero() {
+					row.PlanAge = ageBetween(now, reason.TickAt)
+				}
 			}
 			bp.Items = append(bp.Items, row)
 		}

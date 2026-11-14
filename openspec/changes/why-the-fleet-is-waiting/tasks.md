@@ -53,15 +53,30 @@
 
 ## 5. Surfaces
 
-- [ ] 5.1 Project page: a "waiting on a human" panel from the seat list, with seat, rig, question, age, and a link to
+- [x] 5.1 Project page: a "waiting on a human" panel from the seat list, with seat, rig, question, age, and a link to
       the rig UI URL. No approve control.
-- [ ] 5.2 Project page: the item why-column reads the recorded reason; "no tick has run" when the table is empty.
-- [ ] 5.3 Tests: panel renders with one waiting seat; unknown rig read renders "unknown", not "clear"; why-column with
+      Shipped as `internal/web/waiting.go` (`waitingPanel`) on `GET /api/projects`'s project shape, rendered by the
+      Projects page. The seats come from the mirror's `rig_seats` snapshot (no per-request rig call); the read's health
+      is the status block's `rig_stale` plus the snapshot's presence (unread is `unknown`, never clear); the age is the
+      ledger's newest standing `attention.raised` (#427), with the snapshot stamp as the fallback; the link is
+      `rig.Status().UIURL()`, the daemon's own port, read once and only when something waits.
+- [x] 5.2 Project page: the item why-column reads the recorded reason; "no tick has run" when the table is empty.
+      Shipped on the board's item table — the surface that has an item why-column: `boardItem.plan_reason`/`plan_age`
+      from `store.PlanReasons` (#428) and `boardProject.planned` (a tick's status block, or any recorded reason) so an
+      empty table after a real plan reads as "the last plan skipped nothing" and only a never-planned project says
+      "no plan has run since start".
+- [x] 5.3 Tests: panel renders with one waiting seat; unknown rig read renders "unknown", not "clear"; why-column with
       and without a row.
+      `internal/web/waiting_test.go` (one seat with question+age+UI link; a failed read is unknown with the read's own
+      words; a never-read project is unknown; a seat with no question text is listed as Asking; the age comes from the
+      ledger's raise, not the read) and `internal/web/why_column_test.go` (recorded reason+detail+age; a planned
+      project with no record; a never-planned project). `internal/rig/status_test.go` pins the UI URL read.
 
 ## 6. Docs and gate
 
-- [ ] 6.1 `docs/fleet-console.md`: what `attention_required` means, why the board does not approve, how to read the
+- [x] 6.1 `docs/fleet-console.md`: what `attention_required` means, why the board does not approve, how to read the
       why-column.
+      Shipped as "Why the fleet is waiting" with its three subsections. #428's half of 6.2/6.3 was verified against
+      #440's base; the block's own gate is run at the rebase onto main.
 - [ ] 6.2 `go build ./... && go vet ./... && go test ./...` with output pasted in the PR.
 - [ ] 6.3 `openspec validate --all --strict`.

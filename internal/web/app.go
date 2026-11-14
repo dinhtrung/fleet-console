@@ -100,7 +100,10 @@ func New(cfg Config) (*fiber.App, error) {
 		IdleTimeout:  60 * time.Second,
 	})
 	hub := NewHub()
-	fleet := &Fleet{Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor, Waker: cfg.Waker, Tick: cfg.TickInterval, MaxWait: cfg.MaxWait}
+	fleet := &Fleet{
+		Store: cfg.Store, Rig: cfg.Rig, Hub: hub, Compat: compat, ForgeFor: cfg.ForgeFor,
+		Waker: cfg.Waker, Tick: cfg.TickInterval, MaxWait: cfg.MaxWait, Now: cfg.Now,
+	}
 
 	app.Use(idempotency())
 	// Liveness is a constant on purpose (design D1): this route answers "the
