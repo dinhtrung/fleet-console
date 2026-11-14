@@ -27,6 +27,11 @@
 - [ ] 3.4 `TestEpicSerialIgnoresOnHoldSibling`: a sibling carrying `onhold` does not block.
 - [ ] 3.5 `TestEpicSerialOffDispatchesBoth`: project sets `epic_serial: false` → both children dispatch.
 - [ ] 3.6 `TestEpicSerialLeavesUnparentedItemsAlone`: two parentless items still dispatch together.
+- [ ] 3.7 `TestEpicSerialHoldsOnSilentSeat`: a live dispatch whose seat is silent for hours keeps the epic held — one
+      dispatch in the plan, no second builder, and the silent-dispatch question is the one that speaks.
+- [ ] 3.8 `TestEpicSerialHoldsOnDraftCR`: an open unmerged CR with no live dispatch still holds, whether or not it is a
+      draft (the snapshot does not distinguish).
+- [ ] 3.9 `TestEpicSerialGrandfathersTwoInFlight`: two children already dispatched → no third child while both are live.
 
 ## 4. Docs and gate
 
