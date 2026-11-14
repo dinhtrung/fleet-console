@@ -22,7 +22,7 @@ import {
   setProjectOnhold,
   updateProject,
 } from "../lib/fleet";
-import type { ApiError, CreateProjectInput, Project } from "../lib/fleet";
+import type { ApiError, CreateProjectInput, Project, WaitingPanel } from "../lib/fleet";
 import {
   Badge,
   Button,
@@ -37,7 +37,9 @@ import {
   ErrorState,
   LoadingRows,
   Panel,
+  PanelHead,
   SelectInput,
+  StatusMagnet,
   TextInput,
   useToast,
 } from "../components/ui";
@@ -221,6 +223,84 @@ function validate(draft: Draft, existing: Project[], editing: boolean): Record<s
   if (!Number.isInteger(cap) || cap < 0) errors.concurrency_cap = "A whole number, zero or more.";
   if (!RUNTIMES.includes(draft.runtime)) errors.runtime = "Choose one of the runtimes this host lists.";
   return errors;
+}
+
+
+/** The project's "waiting on a human" panel (#429). It reports the wait and points at the place a
+ *  person answers it — the OpenRig UI. It deliberately has no control that answers: a board that can
+ *  approve an agent's prompt can grant an agent anything by accident (design D5).
+ *
+ *  Three states, and none of them may collapse into another: an unread rig is `unknown`, never an
+ *  empty list; a seat whose prompt has no text is still listed, saying the rig gave no question; and
+ *  a seat with a question shows the text and how long the app has seen it. */
+function WaitingOnAHuman({ panel, projectName }: { panel: WaitingPanel; projectName: string }) {
+  return (
+    <Panel>
+      <PanelHead
+        title="Waiting on a human"
+        count={panel.known ? panel.seats.length : undefined}
+        description={`Seats on ${projectName}'s rigs that have stopped and need a person.`}
+        actions={
+          panel.ui_url ? (
+            <a
+              href={panel.ui_url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[0.6875rem] underline decoration-rule-strong text-ink"
+            >
+              Answer in the rig UI
+            </a>
+          ) : null
+        }
+      />
+      {!panel.known ? (
+        <p className="flex flex-wrap items-center gap-2 border-t border-rule px-3 py-2 text-[0.6875rem] text-ink">
+          <StatusMagnet status="unknown" />
+          The rig read failed, so who is waiting is unknown — not clear.
+          {panel.reason ? <span className="font-mono text-ink-muted">{panel.reason}</span> : null}
+        </p>
+      ) : panel.seats.length === 0 ? (
+        <p className="border-t border-rule px-3 py-2 text-[0.6875rem] text-ink-muted">
+          No seat on this project&apos;s rigs is waiting on a human.
+        </p>
+      ) : (
+        <div className="overflow-x-auto border-t border-rule">
+          <table className="w-full border-collapse text-body">
+            <thead>
+              <tr className="border-b border-rule text-left">
+                <th className="label px-3 py-1.5 font-medium text-ink-muted">Seat</th>
+                <th className="label px-3 py-1.5 font-medium text-ink-muted">Rig</th>
+                <th className="label px-3 py-1.5 font-medium text-ink-muted">Question</th>
+                <th className="label px-3 py-1.5 font-medium text-ink-muted">Waiting</th>
+              </tr>
+            </thead>
+            <tbody>
+              {panel.seats.map((seat, index) => (
+                <tr key={`${seat.seat}-${seat.kind}-${index}`} className="border-b border-rule last:border-0">
+                  <td className="px-3 py-[var(--density-row-pad-y)] font-mono text-[0.6875rem] text-ink">
+                    {seat.seat}
+                  </td>
+                  <td className="px-3 py-[var(--density-row-pad-y)] font-mono text-[0.6875rem] text-ink-muted">
+                    {seat.rig}
+                  </td>
+                  <td className="px-3 py-[var(--density-row-pad-y)] text-ink">
+                    {seat.question ? seat.question : <span className="text-ink-muted">the rig gave no question</span>}
+                    {seat.kind ? <Badge tone="quiet" className="ml-2" mono>{seat.kind}</Badge> : null}
+                  </td>
+                  <td className="num px-3 py-[var(--density-row-pad-y)] text-ink-muted">
+                    {seat.since ?? "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="px-3 py-1.5 text-[0.6875rem] text-ink-muted">
+            The board does not answer for you: read the prompt and answer it where the seat is running.
+          </p>
+        </div>
+      )}
+    </Panel>
+  );
 }
 
 export function ProjectsScreen() {
@@ -434,6 +514,9 @@ export function ProjectsScreen() {
                 Close
               </Button>
             </div>
+            <div className="mb-3">
+              <WaitingOnAHuman panel={inspecting.waiting} projectName={inspecting.name} />
+            </div>
             <Panel>
               <ProjectPreflight projectKey={inspecting.key} />
             </Panel>
@@ -505,6 +588,14 @@ export function ProjectsScreen() {
                               {rig}
                             </Badge>
                           ))}
+                          {project.waiting.known && project.waiting.seats.length > 0 ? (
+                            <Badge
+                              tone="ink"
+                              title={`${project.waiting.seats.length} seat(s) waiting on a human`}
+                            >
+                              {project.waiting.seats.length} waiting on a human
+                            </Badge>
+                          ) : null}
                         </span>
                       </td>
                       <td className="num px-3 py-[var(--density-row-pad-y)] text-right text-ink">

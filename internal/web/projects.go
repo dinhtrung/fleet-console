@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/dinhtrung/fleet-console/internal/config"
 	"github.com/dinhtrung/fleet-console/internal/configfile"
 	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/registry"
+	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/gofiber/fiber/v3"
 )
@@ -114,6 +116,10 @@ type ProjectResponse struct {
 		Worktrees string `json:"worktrees"`
 	} `json:"paths"`
 	Source string `json:"source"`
+	// Waiting is the project's "waiting on a human" panel (#429): the seats on
+	// its rigs that have stopped on a person, and where a person answers them.
+	// Known=false means the rig read failed — an unread rig is not a clear one.
+	Waiting WaitingPanel `json:"waiting"`
 }
 
 type ProjectsListResponse struct {
@@ -184,7 +190,7 @@ func RegisterProjectsRoutes(api fiber.Router, cfg Config, configPath string) {
 	if remove == nil {
 		remove = configfile.RemoveProject
 	}
-	api.Get("/projects", listProjects(cfg.Store, configPath))
+	api.Get("/projects", listProjects(cfg.Store, configPath, cfg.Rig, cfg.Now))
 	api.Post("/projects", createProject(cfg.Store, configPath, write, cfg.Waker))
 	api.Put("/projects/:key", editProject(cfg.Store, configPath, update, cfg.Waker))
 	api.Put("/projects/:key/onhold", setProjectOnHold(cfg.Store, configPath, cfg.Waker))
@@ -297,7 +303,7 @@ func renderRow(row *store.ProjectRow, count store.ProjectCount, source string) P
 // on key, with counts from one grouped query. The route makes no forge call —
 // the list renders on every visit and a per-project forge read would put the
 // board's own traffic into the mirror's rate-limit budget (design D7).
-func listProjects(st *store.Store, configPath string) fiber.Handler {
+func listProjects(st *store.Store, configPath string, rigs *rig.Adapter, clock func() time.Time) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		if configPath == "" {
 			return c.Status(fiber.StatusInternalServerError).JSON(ErrorResponse{Error: "config.yaml path is not configured"})
@@ -319,6 +325,25 @@ func listProjects(st *store.Store, configPath string) fiber.Handler {
 			if !seen[row.Key] {
 				projects = append(projects, view.render(row.Key))
 			}
+		}
+		// The waiting panel is one read of the project's own snapshots and, when
+		// something is waiting, one `rig status` for the UI address (#429). A
+		// project with no store row has no rig read yet, which the panel says in
+		// words instead of rendering as clear.
+		now := time.Now().UTC()
+		if clock != nil {
+			now = clock().UTC()
+		}
+		for index := range projects {
+			row, ok := view.rows[projects[index].Key]
+			if !ok {
+				projects[index].Waiting = WaitingPanel{
+					Seats:  []WaitingSeat{},
+					Reason: "this project has no store row yet, so its rig has not been read",
+				}
+				continue
+			}
+			projects[index].Waiting = waitingPanel(c.Context(), st, row.ID, rigs, now)
 		}
 		return c.JSON(ProjectsListResponse{Projects: projects})
 	}
