@@ -87,18 +87,23 @@ func TestFailedRosterReachesThePanelAsUnknown(t *testing.T) {
 	}
 
 	// The panel half: unknown, carrying the read's own words, and never a list.
-	panel := waitingPanel(ctx, st, pid, "", now)
+	//
+	// The UI URL is passed in as a sentinel rather than "": an unknown panel must
+	// *clear* a link it was handed, and asserting that "" stayed "" would pass
+	// even if waitingPanel never touched the field.
+	const sentinelURL = "http://127.0.0.1:7433"
+	panel := waitingPanel(ctx, st, pid, sentinelURL, now)
 	if panel.Known {
 		t.Fatalf("panel = %+v, want unknown: an unread rig must not look healthy", panel)
 	}
-	if panel.Reason == "" {
-		t.Fatalf("panel = %+v, want the read's reason stated", panel)
+	if want := "rig ps: exit 1: no daemon"; panel.Reason != want {
+		t.Fatalf("reason = %q, want the read's own error %q", panel.Reason, want)
 	}
 	if len(panel.Seats) != 0 {
 		t.Fatalf("seats = %+v, want none presented as fact", panel.Seats)
 	}
 	if panel.UIURL != "" {
-		t.Fatalf("ui url = %q, want no link when nothing is known", panel.UIURL)
+		t.Fatalf("ui url = %q, want the handed link cleared when nothing is known", panel.UIURL)
 	}
 }
 
