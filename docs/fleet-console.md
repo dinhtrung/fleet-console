@@ -199,6 +199,21 @@ on. Nobody is going to answer a question about a commit the branch no longer car
 waiting: an older head's verdict says nothing about it, and neither does an older question come
 back to life when the head moves.
 
+### One child of an epic at a time
+
+An epic written as a plan advances one child at a time. A child holds its epic while it has a live dispatch **or an
+open, unmerged change request** — a builder's dispatch ends when the pull request opens, and starting the next sibling
+off `main` while the previous work is unmerged is exactly the conflict this prevents. The epic moves on when the
+previous child lands.
+
+A sibling that is not eligible is skipped with `epic_busy`, and the detail names the holder: `#<n> in flight` for a
+dispatch, `#<n> in review` for an open change request. Among eligible siblings the lowest number goes first — the order
+the epic was written in, not a guess at priority. A sibling carrying `onhold` holds nothing, and items without an epic
+parent are unaffected: they still run in parallel up to `concurrency_cap`.
+
+Some epics are genuinely independent lists (a sweep of unrelated chores). A project that knows better sets
+`epic_serial: false` on its entry, which restores parallel siblings; `--print-config` shows the setting it resolved.
+
 ### When a review is not a verdict
 
 A reviewer can finish a review without producing anything the grammar above can read: prose that

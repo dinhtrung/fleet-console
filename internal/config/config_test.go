@@ -847,3 +847,39 @@ func TestEventsKeepDays(t *testing.T) {
 		}
 	})
 }
+
+// TestEpicSerial (#443): the one-child-per-epic rule is on when the key is
+// absent, off only when the file says false, and --print-config shows the
+// effective value the caller threads into decide.
+func TestEpicSerial(t *testing.T) {
+	dir := t.TempDir()
+	load := func(body string) *Effective {
+		t.Helper()
+		path := writeConfig(t, t.TempDir(), body)
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		return eff
+	}
+	project := "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n"
+
+	serial := load(project)
+	if !serial.EpicSerialFor("a") {
+		t.Fatal("absent epic_serial must default to true")
+	}
+	if !serial.EpicSerialFor("missing") {
+		t.Fatal("an unknown project must default to serial")
+	}
+	off := load(project + "    epic_serial: false\n")
+	if off.EpicSerialFor("a") {
+		t.Fatal("epic_serial: false must restore parallel siblings")
+	}
+	printed, err := off.Print()
+	if err != nil {
+		t.Fatalf("print: %v", err)
+	}
+	if !strings.Contains(string(printed), "epic_serial: false") {
+		t.Fatalf("--print-config does not show the setting:\n%s", printed)
+	}
+}

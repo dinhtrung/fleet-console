@@ -627,6 +627,9 @@ type Project struct {
 	// Omitted when unset: the loader's default then applies, and a written
 	// empty string would be a different statement.
 	Reviewer string `yaml:"reviewer,omitempty"`
+	// EpicSerial is the one-child-per-epic rule (#443). Omitted when true (the
+	// default); an explicit false is written, because that is a statement.
+	EpicSerial *bool `yaml:"epic_serial,omitempty"`
 	// VerdictRelay is the verdict relay block (#375). A whole-definition write
 	// must carry it, or a board edit would silently drop a block the operator
 	// set — the API writes the same pair it reads.
