@@ -2,11 +2,11 @@
 
 ## 1. Readiness
 
-- [ ] 1.1 `internal/web/health.go`: `/api/ready` collects four facts — store read, per-project mirror heartbeat
+- [x] 1.1 `internal/web/health.go`: `/api/ready` collects four facts — store read, per-project mirror heartbeat
       against `2 × tick_interval`, the rig queue's last error and its age (cached 30 s), the last completed tick per
       project — and answers 200 with an empty failure list or 503 with the failures named and their numbers.
-- [ ] 1.2 `/api/health` keeps its constant body, with a comment saying why it must not read a dependency.
-- [ ] 1.3 Tests: healthy 200; a stale heartbeat 503 naming `mirror.<project>`; a slow read inside the threshold still
+- [x] 1.2 `/api/health` keeps its constant body, with a comment saying why it must not read a dependency.
+- [x] 1.3 Tests: healthy 200; a stale heartbeat 503 naming `mirror.<project>`; a slow read inside the threshold still
       200; dependencies down still 200 on `/api/health`.
 
 ## 2. Staleness on the board
@@ -19,22 +19,22 @@
 
 ## 3. Retention
 
-- [ ] 3.1 `events_keep_days` in settings (default 90, `0` disables) with the same validation path as the other
+- [x] 3.1 `events_keep_days` in settings (default 90, `0` disables) with the same validation path as the other
       allowlisted settings.
-- [ ] 3.2 BLOCKED by #430: the guard matches `project:<key>` but the summary writes `project <key>`, so a summary row
+- [x] 3.2 BLOCKED by #430: the guard matches `project:<key>` but the summary writes `project <key>`, so a summary row
       for a live project is pruned. Fix the shape before ticking.
       `internal/act/housekeep.go`: a retention step deleting in batches of 500, keeping every row whose item has a
       live dispatch or whose project has an unresolved queue row, writing one `housekeeping.retention` event per run
       with `scanned`, `deleted`, `kept_live`.
-- [ ] 3.3 Dry-run by default, like the other steps.
-- [ ] 3.4 Tests: window delete, live-work keep, dry run, disabled.
+- [x] 3.3 Dry-run by default, like the other steps.
+- [x] 3.4 Tests: window delete, live-work keep, dry run, disabled.
 
 ## 4. Docs and gate
 
-- [ ] 4.1 `docs/fleet-console.md`: a "Is it working?" section — what `/api/ready` checks, what the header colours
+- [x] 4.1 `docs/fleet-console.md`: a "Is it working?" section — what `/api/ready` checks, what the header colours
       mean, and how to read the retention event.
-- [ ] 4.2 `go build ./... && go vet ./... && go test ./...` green except the two known environment failures.
-- [ ] 4.3 `openspec validate --all --strict` green.
+- [x] 4.2 `go build ./... && go vet ./... && go test ./...` green except the two known environment failures.
+- [x] 4.3 `openspec validate --all --strict` green.
 
 ## Out of scope, filed separately
 
