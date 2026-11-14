@@ -160,14 +160,22 @@ type Branch struct {
 // Snapshot is everything a tick decides from. ForgeOK is false when the forge read
 // failed: a failed read is `stale`, never "no tasks".
 type Snapshot struct {
-	Project    Project  `json:"project"`
-	Items      []Item   `json:"items"`
-	Rows       []Row    `json:"rows"`
-	Branches   []Branch `json:"branches"`
-	Builders   []string `json:"builders"`
-	Dispatched []int    `json:"dispatched,omitempty"` // item numbers an earlier tick dispatched
-	ForgeOK    bool     `json:"forge_ok"`
-	ForgeError string   `json:"forge_error,omitempty"`
+	Project  Project  `json:"project"`
+	Items    []Item   `json:"items"`
+	Rows     []Row    `json:"rows"`
+	Branches []Branch `json:"branches"`
+	Builders []string `json:"builders"`
+	// WaitingOnHuman names the seats the rig reports as waiting on a human
+	// (lifecycle attention_required, or a node with a pending input), folded in
+	// by the caller from the same read Builders comes from (#426, design D3).
+	// A waiting seat is not a running seat, so it is never in Builders: without
+	// this list the plan cannot tell a busy fleet from one blocked on a person.
+	// It is also empty when the read did not carry the fact, so a detail built
+	// here never claims a count nobody read.
+	WaitingOnHuman []string `json:"waiting_on_human,omitempty"`
+	Dispatched     []int    `json:"dispatched,omitempty"` // item numbers an earlier tick dispatched
+	ForgeOK        bool     `json:"forge_ok"`
+	ForgeError     string   `json:"forge_error,omitempty"`
 
 	Dispatches []DispatchState `json:"dispatches,omitempty"`
 	CRs        []CRState       `json:"change_requests,omitempty"`
@@ -371,14 +379,15 @@ func Decide(s Snapshot) Result {
 		return result
 	}
 
+	// One refusal detail for the whole plan: every ready item over the limit is
+	// refused for the same reason, and the count must not depend on which item
+	// happened to ask (#426).
+	refusalDetail := noFreeBuilderDetail(tierRefusal, s.Project.Rigs, s.WaitingOnHuman)
+
 	for index, item := range ready {
 		if index >= limit {
-			detail := tierRefusal.String()
-			if detail == "" {
-				detail = "every admitted seat is taken"
-			}
 			result.Skips = append(result.Skips, Skip{
-				Number: item.Number, Reason: ReasonNoFreeBuilder, Detail: detail,
+				Number: item.Number, Reason: ReasonNoFreeBuilder, Detail: refusalDetail,
 			})
 			continue
 		}
@@ -489,6 +498,48 @@ type tierRefusal struct {
 	Name  string
 	Spill string
 	Fact  string
+}
+
+// noFreeBuilderDetail is the detail every no_free_builder skip in one plan carries. A tier refusal
+// names the trigger that stopped the walk and keeps that wording untouched; otherwise the line says
+// the admitted seats are taken, and when the rig reports seats waiting on a human it says how many,
+// because "busy fleet" and "fleet blocked on a person" are different problems with different
+// repairs (#426, design D3). The count is computed here, next to the seats, so the plan and every
+// surface quoting the detail read one number.
+func noFreeBuilderDetail(refusal tierRefusal, rigs []RigRef, waiting []string) string {
+	if detail := refusal.String(); detail != "" {
+		return detail
+	}
+	if count := waitingOnHuman(rigs, waiting); count > 0 {
+		return fmt.Sprintf("every admitted seat is taken (%d waiting on a human)", count)
+	}
+	return "every admitted seat is taken"
+}
+
+// waitingOnHuman counts the admitted seats the rig reports as waiting on a human. A seat on a rig
+// the project does not declare is ignored, exactly as fillSeats ignores it; a flat list (no tier
+// declaration) admits every seat, so every waiting seat counts there.
+func waitingOnHuman(rigs []RigRef, waiting []string) int {
+	if len(rigs) == 0 {
+		count := 0
+		for _, seat := range waiting {
+			if seat != "" {
+				count++
+			}
+		}
+		return count
+	}
+	declared := make(map[string]bool, len(rigs))
+	for _, ref := range rigs {
+		declared[ref.Name] = true
+	}
+	count := 0
+	for rigName, seats := range seatsByRig(waiting) {
+		if declared[rigName] {
+			count += len(seats)
+		}
+	}
+	return count
 }
 
 // String renders the spec's refusal form, `tier N (spill=<trigger>: <fact>)`, or "" when no tier
