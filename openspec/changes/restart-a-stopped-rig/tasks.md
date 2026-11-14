@@ -51,5 +51,15 @@ no lifecycle action"*. The old count made that scenario false, not true.
       `attention_required`, empty, mixed and all-exited rosters) and `TestStoppedRigStartsOnDemand` (demand → one start;
       no demand → none; stale read → none). Red/green proven by deleting the guard: `running = 1, want 0 for [exited]`.
 
+- [x] 5.5 `internal/store`: `QuietStoppedRigs` reads, per rig, whether the newest lifecycle event this app wrote is
+      `rig.stopped` — the only provenance for who stopped a rig, because the daemon uses one verb for both.
+- [x] 5.6 `internal/act`: `LifecycleRig.QuietStopped` carries it, `DecideLifecycle` starts a stopped rig only when it
+      is set (a down daemon is exempt), and the tick passes the map from the store.
+- [x] 5.7 Tests: `TestQuietStoppedRigsReadsTheNewestLifecycleEvent`, `TestBuildLifecycleRigsCarriesQuietStops`,
+      `TestStoppedRigStartNeedsOurOwnStopRecord` (operator stop → no start; our stop → one start with
+      `stopped_with_demand`; a second tick inside `StartBackoff` → no second launch; the app's own start clears the
+      record), and the rule table's "no start for a rig the operator stopped by hand" and "a down daemon starts on
+      demand without our own stop record" cases. Red/green proven by dropping the provenance guard.
+
 Sections 1–3 stay open. They address silence — an unread roster, and a journal that never says why nothing happened —
 and they are worth doing on their own; they are not what kept the rig down.

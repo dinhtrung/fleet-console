@@ -303,6 +303,19 @@ every other rig call keeps the 20 s read budget; a start is attempted at most on
 window. The stop half stays dark while the daemon is down: nothing that does not exist can be judged quiet, and
 no quiet streak opens for a rig the tick could not see.
 
+A healthy daemon with a **stopped** rig is the second shape. The quiet rule stops a rig with `rig down`, and a
+stopped rig keeps its node rows, so up-or-down is read from the seats that are actually `running` — never from
+whether rows exist. When a tick sees no running seat and a managed project with a fresh read and ready items, it
+starts the rig once with `stopped_with_demand: N ready item(s), no running seat` in the journal and the
+`rig.started` event, under the same five-minute backoff, so a failing launch is not hammered. A stale read is not
+demand and never starts anything.
+
+Only a rig **this app** stopped for being quiet is started again. `rig down` and `rig seat stop` use the same
+daemon verb the quiet rule uses, so the rig itself cannot say who stopped it; the app's own `rig.stopped` event is
+the one record that can, and a stopped rig with no such event was stopped by a person — it stays down until they
+say otherwise, because restarting it would overrule them. A rig that starts and stops by itself therefore comes
+back on demand; one you stopped by hand does not.
+
 ## The board
 
 ```

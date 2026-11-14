@@ -610,3 +610,36 @@ func (s *Store) HasEvent(ctx context.Context, kind, subject, contains string) (b
 	}
 	return true, nil
 }
+
+// QuietStoppedRigs reports, per rig subject, whether the newest lifecycle event
+// this app wrote for it is a stop. The executor writes exactly two: `rig.started`
+// with the demand that launched the rig, and `rig.stopped` with the quiet
+// window. An operator's `rig down` and `rig seat stop` write nothing here — and
+// they use the same daemon verb the quiet rule uses, so the daemon cannot name
+// who stopped a rig either — which makes this ledger the only provenance for
+// "did we stop it, or did a person?" (#403). Only a rig this app stopped is a
+// rig the lifecycle may start again; a rig absent from the map was stopped by
+// someone else, or was never seen, and stays down.
+func (s *Store) QuietStoppedRigs(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.subject, e.kind
+		FROM event e
+		JOIN (SELECT subject, MAX(id) AS id FROM event
+		      WHERE kind IN ('rig.started', 'rig.stopped') GROUP BY subject) newest
+		  ON newest.id = e.id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: quiet-stopped rigs: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]bool)
+	for rows.Next() {
+		var subject, kind string
+		if err := rows.Scan(&subject, &kind); err != nil {
+			return nil, fmt.Errorf("store: quiet-stopped rigs: %w", err)
+		}
+		if kind == "rig.stopped" {
+			out[subject] = true
+		}
+	}
+	return out, rows.Err()
+}

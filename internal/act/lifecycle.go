@@ -77,6 +77,14 @@ type LifecycleRig struct {
 	// not running can hold no fleet. The start branch treats it as a stopped
 	// rig with a known roster; the stop branch refuses it.
 	RigDown bool
+	// QuietStopped is true when this app's own quiet rule stopped the rig and
+	// has not started it since (design D2, #403). The daemon cannot answer this:
+	// `rig down` and `rig seat stop` are the same verbs the quiet rule uses, so
+	// a stopped rig looks identical whoever stopped it. The app's ledger can —
+	// only the executor writes `rig.stopped` — and only a rig it stopped is one
+	// it may revive. A rig stopped by hand is the operator's decision: it stays
+	// down until they say otherwise, because starting it would overrule them.
+	QuietStopped bool
 	// Projects are the projects bound to this rig.
 	Projects []LifecycleProject
 }
@@ -106,9 +114,11 @@ type LifecycleProjectFacts struct {
 // and live rows on each. A rig two projects share gets one entry carrying both
 // projects, so one busy project and one quiet project cannot produce a stop
 // (design D3). It is pure; the queue is counted once per row, not once per
-// project, so a shared rig's row is not counted twice.
-func BuildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]time.Time, seatsKnown bool) []LifecycleRig {
-	return buildLifecycleRigs(projects, prevQuiet, seatsKnown, false)
+// project, so a shared rig's row is not counted twice. quietStops is the app's
+// own stop ledger (`store.QuietStoppedRigs`), the only fact that says whether a
+// stopped rig is ours to start again or the operator's to keep down (#403).
+func BuildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]time.Time, seatsKnown bool, quietStops map[string]bool) []LifecycleRig {
+	return buildLifecycleRigs(projects, prevQuiet, seatsKnown, false, quietStops)
 }
 
 // buildLifecycleRigs is the builder with the daemon-down fact. A down daemon is
@@ -116,13 +126,16 @@ func BuildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]t
 // does not exist, so the tick reports the roster as known, zero seats running,
 // and marks the rig down. The start branch reads that as "stopped rig, decide
 // on demand"; the stop branch keeps its own guard so it stays dark while down.
-func buildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]time.Time, seatsKnown, rigDown bool) []LifecycleRig {
+func buildLifecycleRigs(projects []LifecycleProjectFacts, prevQuiet map[string]time.Time, seatsKnown, rigDown bool, quietStops map[string]bool) []LifecycleRig {
 	order := make([]string, 0, len(projects))
 	byRig := make(map[string]*LifecycleRig, len(projects))
 	link := func(rigName string) *LifecycleRig {
 		entry, ok := byRig[rigName]
 		if !ok {
-			entry = &LifecycleRig{Name: rigName, SeatsKnown: seatsKnown, QuietSince: prevQuiet[rigName]}
+			entry = &LifecycleRig{
+				Name: rigName, SeatsKnown: seatsKnown, QuietSince: prevQuiet[rigName],
+				QuietStopped: quietStops[rigName],
+			}
 			if rigDown {
 				entry.SeatsKnown = true
 				entry.RigDown = true
@@ -204,15 +217,17 @@ func NewLifecycle(settings config.LifecycleSettings, st *store.Store, rigs RigLi
 // tick. The caller runs the starts before the dispatch phase and the stops
 // after it. rigDown is the tick's daemon fact (epic #320, D2): a daemon that
 // is not running means every rig on it is down, and the start branch decides
-// on demand while the stop half stays dark.
-func (l *Lifecycle) Decide(projects []LifecycleProjectFacts, seatsKnown, rigDown bool, now time.Time) []LifecycleAction {
+// on demand while the stop half stays dark. quietStops is the app's own stop
+// ledger from `store.QuietStoppedRigs`: it is the fact that tells a rig this
+// rule stopped from one the operator stopped (#403).
+func (l *Lifecycle) Decide(projects []LifecycleProjectFacts, seatsKnown, rigDown bool, quietStops map[string]bool, now time.Time) []LifecycleAction {
 	if l == nil || l.Executor == nil || !l.Settings.Enabled {
 		return nil
 	}
 	if l.quiet == nil {
 		l.quiet = make(map[string]time.Time)
 	}
-	rigs := buildLifecycleRigs(projects, l.quiet, seatsKnown, rigDown)
+	rigs := buildLifecycleRigs(projects, l.quiet, seatsKnown, rigDown, quietStops)
 	actions := DecideLifecycle(LifecycleInput{
 		Enabled: l.Settings.Enabled, IdleAfter: l.Settings.IdleAfter, Now: now, Rigs: rigs,
 	})
@@ -266,8 +281,20 @@ func DecideLifecycle(in LifecycleInput) []LifecycleAction {
 		}
 		if rigEntry.Running == 0 || rigEntry.RigDown {
 			// A stopped rig is started before anything is written for it, and
-			// only when work exists. An idle stopped rig stays stopped, so a
-			// manual `rig down` stands until work needs the rig (design D2).
+			// only when work exists. An idle stopped rig stays stopped.
+			//
+			// Who stopped it decides whether we may start it at all (#403):
+			// only a rig this app stopped for being quiet is ours to revive.
+			// `rig down` and `rig seat stop` use the same daemon verb, so the
+			// daemon cannot name the author — the app's own `rig.stopped` event
+			// is the one record that can, and a rig with no such stop was
+			// stopped by a person. Starting that would overrule a decision the
+			// human made on purpose. A down daemon is exempt: nothing a person
+			// did takes a daemon down, and the accepted spec starts the rig
+			// when demand exists.
+			if !rigEntry.RigDown && !rigEntry.QuietStopped {
+				continue
+			}
 			// A rig whose daemon is down joins this arm with its demand decided
 			// the same way; the stop arm below stays out of reach because the
 			// down guard comes first here and RigQuiet cannot hold while down.
