@@ -68,7 +68,10 @@ type ProjectRequest struct {
 	// Reviewer is the member prefix review rows go to (#384). Empty means the
 	// default; the whole-definition PUT carries it or an edit would drop it.
 	Reviewer string `json:"reviewer"`
-	Paths    struct {
+	// EpicSerial is the one-child-per-epic rule (#443); nil means the default
+	// (true). The whole-definition PUT carries it, or an edit would drop it.
+	EpicSerial *bool `json:"epic_serial"`
+	Paths      struct {
 		Main      string `json:"main"`
 		Worktrees string `json:"worktrees"`
 	} `json:"paths"`
@@ -109,7 +112,10 @@ type ProjectResponse struct {
 	// Reviewer is the member prefix review rows go to (#384). Empty means the
 	// default; the whole-definition PUT carries it or an edit would drop it.
 	Reviewer string `json:"reviewer"`
-	Paths    struct {
+	// EpicSerial is the one-child-per-epic rule (#443); nil means the default
+	// (true). The whole-definition PUT carries it, or an edit would drop it.
+	EpicSerial *bool `json:"epic_serial"`
+	Paths      struct {
 		Main      string `json:"main"`
 		Worktrees string `json:"worktrees"`
 	} `json:"paths"`
@@ -283,6 +289,7 @@ func renderRow(row *store.ProjectRow, count store.ProjectCount, source string) P
 		RelayMode:      row.RelayMode,
 		RelaySeat:      row.RelaySeat,
 		Reviewer:       config.DefaultReviewer,
+		EpicSerial:     epicSerialPtr(true),
 	}
 	if out.Rigs == nil {
 		out.Rigs = []string{}
@@ -692,6 +699,7 @@ func requestProject(req ProjectRequest) config.Project {
 		CultureFile:    req.CultureFile,
 		VerdictRelay:   relayFromRequest(req.RelayMode, req.RelaySeat),
 		Reviewer:       req.Reviewer,
+		EpicSerial:     req.EpicSerial,
 	}
 	project.Paths.Main = req.Paths.Main
 	project.Paths.Worktrees = req.Paths.Worktrees
@@ -737,6 +745,9 @@ func writtenProject(project config.Project) configfile.Project {
 	if project.Reviewer != config.DefaultReviewer {
 		written.Reviewer = project.Reviewer
 	}
+	if project.EpicSerial != nil && !*project.EpicSerial {
+		written.EpicSerial = project.EpicSerial
+	}
 	written.Paths.Main = project.Paths.Main
 	written.Paths.Worktrees = project.Paths.Worktrees
 	return written
@@ -772,6 +783,7 @@ func projectDiff(oldEntry, newEntry config.Project) (changed, identity []string)
 	add("labels", false, maps.Equal(oldEntry.Labels, newEntry.Labels))
 	add("culture_file", false, oldEntry.CultureFile == newEntry.CultureFile)
 	add("reviewer", false, oldEntry.Reviewer == newEntry.Reviewer)
+	add("epic_serial", false, epicSerialOf(oldEntry) == epicSerialOf(newEntry))
 	add("relay_mode", false, relayOf(oldEntry).Mode == relayOf(newEntry).Mode)
 	add("relay_seat", false, relayOf(oldEntry).Seat == relayOf(newEntry).Seat)
 	add("paths.main", true, oldEntry.Paths.Main == newEntry.Paths.Main)
@@ -799,6 +811,7 @@ func diffDetail(oldEntry, newEntry config.Project, changed []string) string {
 		"gate_cmd": oldEntry.GateCmd, "labels": oldEntry.Labels,
 		"culture_file": oldEntry.CultureFile,
 		"reviewer":     oldEntry.Reviewer,
+		"epic_serial":  epicSerialOf(oldEntry),
 		"relay_mode":   relayOf(oldEntry).Mode, "relay_seat": relayOf(oldEntry).Seat,
 		"paths.main": oldEntry.Paths.Main, "paths.worktrees": oldEntry.Paths.Worktrees,
 	}
@@ -810,6 +823,7 @@ func diffDetail(oldEntry, newEntry config.Project, changed []string) string {
 		"gate_cmd": newEntry.GateCmd, "labels": newEntry.Labels,
 		"culture_file": newEntry.CultureFile,
 		"reviewer":     newEntry.Reviewer,
+		"epic_serial":  epicSerialOf(newEntry),
 		"relay_mode":   relayOf(newEntry).Mode, "relay_seat": relayOf(newEntry).Seat,
 		"paths.main": newEntry.Paths.Main, "paths.worktrees": newEntry.Paths.Worktrees,
 	}
@@ -942,7 +956,16 @@ func projectResponse(project config.Project, source string) ProjectResponse {
 		out.RelayMode, out.RelaySeat = project.VerdictRelay.Mode, project.VerdictRelay.Seat
 	}
 	out.Reviewer = project.Reviewer
+	out.EpicSerial = project.EpicSerial
 	out.Paths.Main = project.Paths.Main
 	out.Paths.Worktrees = project.Paths.Worktrees
 	return out
 }
+
+// epicSerialOf reads the epic-serial flag as a value: nil is the default (true),
+// so an absent key and an explicit true compare equal.
+func epicSerialOf(project config.Project) bool {
+	return project.EpicSerial == nil || *project.EpicSerial
+}
+
+func epicSerialPtr(value bool) *bool { return &value }

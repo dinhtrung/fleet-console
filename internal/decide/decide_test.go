@@ -68,8 +68,14 @@ func runCases(t *testing.T, cases []ruleCase) {
 // TestRuleEpicSkipped: an epic is never a candidate; its children are.
 func TestRuleEpicSkipped(t *testing.T) {
 	runCases(t, []ruleCase{{
-		name:       "epic is skipped, children run",
-		snapshot:   base(epic(1), child(task(2), 1), child(task(3), 1)),
+		name: "epic is skipped, children run",
+		// Parallel here: this case pins "children are candidates", and the
+		// serial rule (#443) is the default that now needs the opt-out.
+		snapshot: func() Snapshot {
+			s := base(epic(1), child(task(2), 1), child(task(3), 1))
+			s.Project.EpicParallel = true
+			return s
+		}(),
 		dispatches: []int{2, 3},
 		reasons:    map[int]Reason{1: ReasonEpic},
 	}})

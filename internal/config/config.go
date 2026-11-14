@@ -76,7 +76,12 @@ type Project struct {
 	// behaviour; a rig whose reviewer is named anything else names it here
 	// instead of waiting for the code to be edited.
 	Reviewer string `yaml:"reviewer,omitempty"`
-	Paths    struct {
+	// EpicSerial is the one-child-per-epic rule (#443): an epic advances one
+	// open child at a time while the current one has a live dispatch or an open
+	// change request. Default true; false restores parallel siblings for epics
+	// that are genuinely independent lists.
+	EpicSerial *bool `yaml:"epic_serial,omitempty"`
+	Paths      struct {
 		Main      string `yaml:"main"`
 		Worktrees string `yaml:"worktrees"`
 	} `yaml:"paths"`
@@ -758,6 +763,17 @@ func (e *Effective) Print() ([]byte, error) {
 // and dashes, no "@" (the rig is appended by the caller).
 var reviewerName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
+// EpicSerialFor reports whether a project serializes its epics' children
+// (#443). Unset is true: an epic written as a plan advances one child at a
+// time, and a project that knows better says so in its file.
+func (e *Effective) EpicSerialFor(projectKey string) bool {
+	project := findProjectByKey(e.Projects, projectKey)
+	if project == nil || project.EpicSerial == nil {
+		return true
+	}
+	return *project.EpicSerial
+}
+
 // ReviewerFor resolves a project's reviewer member prefix (#384). Unset is
 // DefaultReviewer; the caller appends "@<rig>" for the destination seat. This is
 // the one lookup path: the tick's raises and the plan's recognition both read
@@ -1032,6 +1048,10 @@ func ValidateProject(p *Project, dir, home string) error {
 	// reviewer (#384): the member prefix a project's review rows go to. Unset
 	// is the name every project had before the field existed. A bad value is a
 	// field error here rather than an unroutable row at dispatch time.
+	if p.EpicSerial == nil {
+		serial := true
+		p.EpicSerial = &serial
+	}
 	p.Reviewer = strings.TrimSpace(p.Reviewer)
 	if p.Reviewer == "" {
 		p.Reviewer = DefaultReviewer

@@ -56,6 +56,11 @@ type Project struct {
 	// The destination act writes and the recognition this package reads both
 	// come from ReviewerSeat/IsReviewerSeat, so they cannot drift.
 	Reviewer string `json:"reviewer,omitempty"`
+	// EpicParallel restores today's parallel siblings (#443) when true. The field
+	// is the opt-OUT so its zero value keeps the rule on: a caller that forgets
+	// to thread the config serializes epics rather than silently disabling the
+	// rule.
+	EpicParallel bool `json:"epic_parallel"`
 }
 
 // DefaultReviewer is the reviewer member prefix a project uses when its config
@@ -219,6 +224,9 @@ const (
 	ReasonBranchMergedCR    Reason = "branch_merged_cr"
 	ReasonBlocked           Reason = "blocked"
 	ReasonNoFreeBuilder     Reason = "no_free_builder"
+	// ReasonEpicBusy: another child of the same epic holds it — a live dispatch
+	// or an open unmerged change request (#443).
+	ReasonEpicBusy Reason = "epic_busy"
 )
 
 // Status is the tick's outcome.
@@ -308,9 +316,59 @@ func Decide(s Snapshot) Result {
 	liveRows := inflightNumbers(s.Rows)
 	branches := branchIndex(s.Branches)
 
+	// The epic rule (#443, design D1): a child holds its epic while it has a
+	// live dispatch row or an open unmerged change request, because a builder's
+	// dispatch ends when the pull request opens and the next sibling starting off
+	// main is the conflict this prevents. A sibling on hold holds nothing.
+	holders := map[int]epicHolder{}
+	claimed := map[int]int{}
+	if !s.Project.EpicParallel {
+		for _, item := range items {
+			if !item.open() || item.Kind == KindEpic || item.onHold() || item.Parent == nil {
+				continue
+			}
+			if _, openEpic := epics[*item.Parent]; !openEpic {
+				continue
+			}
+			_, inFlight := liveRows[item.Number]
+			inReview := false
+			if branch, ok := branches[item.Number]; ok {
+				inReview = branch.HasOpenCR && !branch.HasMergedCR
+			}
+			if !inFlight && !inReview {
+				continue
+			}
+			if existing, held := holders[*item.Parent]; !held || (existing.review && inFlight) {
+				holders[*item.Parent] = epicHolder{number: item.Number, review: !inFlight}
+			}
+		}
+	}
+
 	var result Result
 	result.Free = len(free)
 	var ready []Item
+	markReady := func(item Item) {
+		ready = append(ready, item)
+		if item.Parent != nil {
+			claimed[*item.Parent] = item.Number
+		}
+	}
+	// epicGate is the one-child rule (#443) at the last moment before a candidate
+	// becomes ready, so the item's own facts — a blocking relation, a live row, an
+	// open branch — keep their existing skip and the epic wait is the reason only
+	// when nothing more specific applies.
+	epicGate := func(item Item) (Skip, bool) {
+		if s.Project.EpicParallel || item.Parent == nil {
+			return Skip{}, false
+		}
+		if holder, held := holders[*item.Parent]; held && holder.number != item.Number {
+			return epicBusySkip(item.Number, holder), true
+		}
+		if chosen, taken := claimed[*item.Parent]; taken && chosen != item.Number {
+			return epicBusySkip(item.Number, epicHolder{number: chosen}), true
+		}
+		return Skip{}, false
+	}
 
 	for _, item := range items {
 		if !item.open() {
@@ -364,7 +422,11 @@ func Decide(s Snapshot) Result {
 				continue
 			}
 			// A branch with no change request is unfinished work: adopt it.
-			ready = append(ready, item)
+			if skip, busy := epicGate(item); busy {
+				result.Skips = append(result.Skips, skip)
+				continue
+			}
+			markReady(item)
 			continue
 		}
 		if blockers := openBlockers(s.Project.Forge, item); len(blockers) > 0 {
@@ -373,7 +435,11 @@ func Decide(s Snapshot) Result {
 			})
 			continue
 		}
-		ready = append(ready, item)
+		if skip, busy := epicGate(item); busy {
+			result.Skips = append(result.Skips, skip)
+			continue
+		}
+		markReady(item)
 	}
 
 	result.Ready = len(ready)
@@ -776,4 +842,20 @@ func joinNumbers(numbers []int) string {
 		parts[index] = fmt.Sprintf("%d", number)
 	}
 	return strings.Join(parts, ", #")
+}
+
+// epicHolder is the child that currently holds an epic (#443).
+type epicHolder struct {
+	number int
+	review bool // true when the hold is an open change request, not a dispatch
+}
+
+// epicBusySkip names the holder: "in flight" for a dispatch, "in review" for an
+// open change request (design D4).
+func epicBusySkip(item int, holder epicHolder) Skip {
+	detail := fmt.Sprintf("#%d in flight", holder.number)
+	if holder.review {
+		detail = fmt.Sprintf("#%d in review", holder.number)
+	}
+	return Skip{Number: item, Reason: ReasonEpicBusy, Detail: detail}
 }
