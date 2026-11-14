@@ -118,12 +118,24 @@ type seatWire struct {
 	Profile          string `json:"profile"`
 	PermissionPolicy string `json:"permissionPolicy"`
 	LastActivity     string `json:"lastActivityAt"`
-	// The attention keys (#425). They are read raw because the rig spells them
-	// three ways — a bool, a string, or an object carrying the question — and an
-	// unexpected shape must still count as a block, never as a guess at text.
-	NeedsAttention       json.RawMessage `json:"needsAttention"`
-	ArbitratedNeedsInput json.RawMessage `json:"arbitratedNeedsInput"`
-	NeedsInputEvidence   json.RawMessage `json:"needsInputEvidence"`
+	// The attention facts (#425). The two booleans are the block flags; a
+	// pointer keeps "absent" (unknown) apart from false (clear).
+	// needsInputEvidence is deliberately not decoded: the rig writes it for both
+	// an observed input and an observed clear, so reading it as a block invents a
+	// wait that is not there. The question text comes from the activity and error
+	// fields below.
+	NeedsAttention       *bool `json:"needsAttention"`
+	ArbitratedNeedsInput *bool `json:"arbitratedNeedsInput"`
+	ActivityState        struct {
+		NeedsInput struct {
+			Count  int     `json:"count"`
+			Reason *string `json:"reason"`
+		} `json:"needsInput"`
+	} `json:"activityState"`
+	AgentActivity struct {
+		Reason string `json:"reason"`
+	} `json:"agentActivity"`
+	LatestError *string `json:"latestError"`
 }
 
 // ParseQueueList decodes the queue list and enforces the required fields.
@@ -241,19 +253,9 @@ func ParseSeats(data []byte, unknown func(key string)) ([]Seat, error) {
 			Permission:   permission,
 			LastActivity: wire.LastActivity,
 		}
-		for _, probe := range []struct {
-			kind string
-			raw  json.RawMessage
-		}{
-			{AttentionKindAttention, wire.NeedsAttention},
-			{AttentionKindInput, wire.NeedsInputEvidence},
-			{AttentionKindArbitrated, wire.ArbitratedNeedsInput},
-		} {
-			if blocked, question := attentionQuestion(probe.raw); blocked {
-				seat.Attention = append(seat.Attention, SeatAttention{
-					Seat: seat.Session, Rig: seat.Rig, Kind: probe.kind, Question: question,
-				})
-			}
+		for _, block := range seatBlocks(wire) {
+			block.Seat, block.Rig = seat.Session, seat.Rig
+			seat.Attention = append(seat.Attention, block)
 		}
 		for _, check := range []struct {
 			field, path, value string
@@ -306,40 +308,45 @@ func WaitsOnHuman(state, destination, blockedOn string) bool {
 	}
 }
 
-// attentionQuestion interprets one attention key (#425). The rig has spelled
-// these three ways: a bool (the live 0.7.13 shape), a string holding the
-// question, or an object carrying it. Absent, null and false are no block; any
-// other shape is a block, and a shape that names no text is a block with no
-// question rather than nothing at all.
-func attentionQuestion(raw json.RawMessage) (blocked bool, question string) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return false, ""
+// seatBlocks derives a seat's attention entries from the facts the rig reports
+// (#425). The flags decide whether a block exists — a pointer, so absent
+// (unknown) is not invented as true — and the text comes from the activity the
+// rig records, never from needsInputEvidence, which the rig writes for an
+// observed clear as well as an observed input.
+func seatBlocks(wire seatWire) []SeatAttention {
+	var out []SeatAttention
+	if wire.NeedsAttention != nil && *wire.NeedsAttention {
+		out = append(out, SeatAttention{Kind: AttentionKindAttention, Question: attentionText(wire)})
 	}
-	switch trimmed[0] {
-	case 't', 'f':
-		var value bool
-		if err := json.Unmarshal(trimmed, &value); err == nil && value {
-			return true, ""
-		}
-		return false, ""
-	case '"':
-		var value string
-		if err := json.Unmarshal(trimmed, &value); err == nil {
-			return true, strings.TrimSpace(value)
-		}
-	case '{':
-		var object map[string]any
-		if err := json.Unmarshal(trimmed, &object); err == nil {
-			for _, key := range []string{"question", "text", "message"} {
-				if text, ok := object[key].(string); ok {
-					if text = strings.TrimSpace(text); text != "" {
-						return true, text
-					}
-				}
-			}
-			return true, ""
+	if wire.ActivityState.NeedsInput.Count > 0 || reasonText(wire) != "" {
+		out = append(out, SeatAttention{Kind: AttentionKindInput, Question: attentionText(wire)})
+	}
+	if wire.ArbitratedNeedsInput != nil && *wire.ArbitratedNeedsInput {
+		out = append(out, SeatAttention{Kind: AttentionKindArbitrated, Question: attentionText(wire)})
+	}
+	return out
+}
+
+// reasonText is the activity's own input reason, when it names one.
+func reasonText(wire seatWire) string {
+	if wire.ActivityState.NeedsInput.Reason == nil {
+		return ""
+	}
+	return strings.TrimSpace(*wire.ActivityState.NeedsInput.Reason)
+}
+
+// attentionText is the question a waiting seat is asking, by the rig's own
+// precedence: the activity's input reason, then the startup/attention error,
+// then the activity hook's reason. A seat with none of them is still a block
+// with Question == "".
+func attentionText(wire seatWire) string {
+	if text := reasonText(wire); text != "" {
+		return text
+	}
+	if wire.LatestError != nil {
+		if text := strings.TrimSpace(*wire.LatestError); text != "" {
+			return text
 		}
 	}
-	return true, ""
+	return strings.TrimSpace(wire.AgentActivity.Reason)
 }

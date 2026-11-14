@@ -13,43 +13,58 @@ func parseSeatsFixture(t *testing.T, payload string) []Seat {
 	return seats
 }
 
-// TestParseSeatsReadsAttention (#425): the three keys the rig already sends are
-// modelled, one entry per block, in the order attention, input, arbitrated, with
-// the text the rig gave.
+// TestParseSeatsReadsAttention (#425): a block exists when the rig's flag says
+// so, and the question is the text the rig records for it — the activity's input
+// reason, then the attention error, then the hook's reason. These are the live
+// 0.7.13 shapes.
 func TestParseSeatsReadsAttention(t *testing.T) {
 	seats := parseSeatsFixture(t, `[
-	  {"nodeId":"n1","rigName":"rig-a","canonicalSessionName":"dev-builder-claude@rig-a","lifecycleState":"running",
-	   "needsAttention": true,
-	   "needsInputEvidence": {"rung":"lifecycle-hooks","question":"  Allow the seat to start?  "},
-	   "arbitratedNeedsInput": "Approve the merge?"}
+	  {"nodeId":"n1","rigName":"rig-a","canonicalSessionName":"dev-review@rig-a","lifecycleState":"attention_required",
+	   "needsAttention": true, "arbitratedNeedsInput": null, "needsInputEvidence": null,
+	   "activityState": {"needsInput": {"count": 0, "reason": null}},
+	   "agentActivity": {"reason": "user_prompt_submit"},
+	   "latestError": "Harness launch requires attention: Codex resume has not yet reached an interactive conversation"},
+	  {"nodeId":"n2","rigName":"rig-a","canonicalSessionName":"dev-builder-omp@rig-a","lifecycleState":"attention_required",
+	   "needsAttention": false,
+	   "activityState": {"needsInput": {"count": 1, "reason": "  Allow the seat to start?  "}}},
+	  {"nodeId":"n3","rigName":"rig-a","canonicalSessionName":"dev-builder-pi@rig-a","lifecycleState":"attention_required",
+	   "arbitratedNeedsInput": true,
+	   "latestError": "Approve the merge?"}
 	]`)
-	if len(seats) != 1 {
-		t.Fatalf("seats = %d, want 1", len(seats))
+	want := [][]SeatAttention{
+		{{Seat: "dev-review@rig-a", Rig: "rig-a", Kind: AttentionKindAttention,
+			Question: "Harness launch requires attention: Codex resume has not yet reached an interactive conversation"}},
+		{{Seat: "dev-builder-omp@rig-a", Rig: "rig-a", Kind: AttentionKindInput, Question: "Allow the seat to start?"}},
+		{{Seat: "dev-builder-pi@rig-a", Rig: "rig-a", Kind: AttentionKindArbitrated, Question: "Approve the merge?"}},
 	}
-	attention := seats[0].Attention
-	if len(attention) != 3 {
-		t.Fatalf("attention = %+v, want three entries", attention)
-	}
-	want := []SeatAttention{
-		{Seat: "dev-builder-claude@rig-a", Rig: "rig-a", Kind: AttentionKindAttention, Question: ""},
-		{Seat: "dev-builder-claude@rig-a", Rig: "rig-a", Kind: AttentionKindInput, Question: "Allow the seat to start?"},
-		{Seat: "dev-builder-claude@rig-a", Rig: "rig-a", Kind: AttentionKindArbitrated, Question: "Approve the merge?"},
+	if len(seats) != len(want) {
+		t.Fatalf("seats = %d, want %d", len(seats), len(want))
 	}
 	for index := range want {
-		if attention[index] != want[index] {
-			t.Fatalf("attention[%d] = %+v, want %+v", index, attention[index], want[index])
+		if len(seats[index].Attention) != len(want[index]) {
+			t.Fatalf("seat %d attention = %+v, want %+v", index, seats[index].Attention, want[index])
+		}
+		for entry := range want[index] {
+			if seats[index].Attention[entry] != want[index][entry] {
+				t.Fatalf("seat %d attention[%d] = %+v, want %+v",
+					index, entry, seats[index].Attention[entry], want[index][entry])
+			}
 		}
 	}
 }
 
-// TestParseSeatsAttentionIsAdditive (#425): a rig that sends none of the keys
-// decodes to an empty list and no error — the decode must not start refusing
-// older rigs.
+// TestParseSeatsAttentionIsAdditive (#425): the live shape of a **working** seat
+// — flags false, and `needsInputEvidence` present because the rig records the
+// evidence of an observed clear as well — must decode to no block at all. Reading
+// that evidence as a block invented a human wait on every node.
 func TestParseSeatsAttentionIsAdditive(t *testing.T) {
 	seats := parseSeatsFixture(t, `[
-	  {"nodeId":"n1","rigName":"rig-a","canonicalSessionName":"dev-builder-claude@rig-a","lifecycleState":"running"},
-	  {"nodeId":"n2","rigName":"rig-a","canonicalSessionName":"dev-review@rig-a","lifecycleState":"running",
-	   "needsAttention": false, "arbitratedNeedsInput": false, "needsInputEvidence": null}
+	  {"nodeId":"n1","rigName":"rig-a","canonicalSessionName":"dev-builder-claude@rig-a","lifecycleState":"running",
+	   "needsAttention": false, "arbitratedNeedsInput": false,
+	   "needsInputEvidence": {"rung": "lifecycle-hooks", "observedAt": "2026-11-14T00:47:01.480Z"},
+	   "activityState": {"needsInput": {"count": 0, "reason": null}},
+	   "agentActivity": {"reason": "user_prompt_submit"}},
+	  {"nodeId":"n2","rigName":"rig-a","canonicalSessionName":"dev-builder-pi@rig-a","lifecycleState":"running"}
 	]`)
 	if len(seats) != 2 {
 		t.Fatalf("seats = %d, want 2", len(seats))
@@ -61,28 +76,29 @@ func TestParseSeatsAttentionIsAdditive(t *testing.T) {
 	}
 }
 
-// TestParseSeatsAttentionWithoutText (#425): a key set with no text is still a
-// block — the seat is waiting, and the board says the rig gave no question.
+// TestParseSeatsAttentionWithoutText (#425): a flag set with no text anywhere is
+// still a block — the seat is waiting, and the board says the rig gave no
+// question rather than hiding the seat.
 func TestParseSeatsAttentionWithoutText(t *testing.T) {
 	seats := parseSeatsFixture(t, `[
-	  {"nodeId":"n1","rigName":"rig-a","canonicalSessionName":"dev-builder-claude@rig-a","lifecycleState":"running",
+	  {"nodeId":"n1","rigName":"rig-a","canonicalSessionName":"dev-builder-claude@rig-a","lifecycleState":"attention_required",
 	   "needsAttention": true,
-	   "needsInputEvidence": {"rung":"lifecycle-hooks","observedAt":"2026-11-14T00:36:55.666Z"}}
+	   "activityState": {"needsInput": {"count": 0, "reason": null}},
+	   "agentActivity": {"reason": ""},
+	   "latestError": null}
 	]`)
 	attention := seats[0].Attention
-	if len(attention) != 2 {
-		t.Fatalf("attention = %+v, want two entries", attention)
+	if len(attention) != 1 {
+		t.Fatalf("attention = %+v, want one entry", attention)
 	}
-	for index, entry := range attention {
-		if entry.Question != "" {
-			t.Fatalf("attention[%d] question = %q, want empty", index, entry.Question)
-		}
+	if attention[0].Kind != AttentionKindAttention || attention[0].Question != "" {
+		t.Fatalf("attention[0] = %+v, want an attention block with no question", attention[0])
 	}
 }
 
 // TestAttentionKeysAreKnown (#425): the compat probe warned "unknown key" for
-// these three because the supported schema did not list them. Modelling the
-// decode and the schema together is what stops the warning.
+// these because the supported schema did not list them. Modelling the decode and
+// the schema together is what stops the warning.
 func TestAttentionKeysAreKnown(t *testing.T) {
 	for _, key := range []string{"needsAttention", "arbitratedNeedsInput", "needsInputEvidence"} {
 		if _, ok := known.seat[key]; !ok {
