@@ -13,12 +13,16 @@ gives 450; `fix/delete-project-verdicts-by-project-id` gives none; `fix/438-foll
 `Rejected:` requiring a fixed set of prefixes (`feature/`, `fix/`, `docs/`). The prefix carries no meaning to the gate,
 and enumerating it makes the next convention a bug report.
 
-## D2. A mismatch is a refusal, and it names both numbers
+## D2. A mismatch with a **live** item refuses; with a closed one it warns
 
-`fix/438-…` closing `#451` is not a naming quirk: the branch was written for another item, and the gate cannot know
-whether the work was re-homed deliberately. The refusal reads
-`change request #449 is on fix/438-… (#438) but closes #451` so the operator can re-home the branch or open the right
-item.
+`fix/438-…` closing `#451` is either mis-homing or a legitimate re-home: #438 was closed by another change request, the
+work was replayed on a fresh item, and the branch kept its name (this is exactly #449). The gate can tell those apart
+without guessing, because it can read whether the named item is still open:
+
+- named item **open** → refuse: two live items claim one branch, and a human decides.
+- named item **closed** → merge with one warning naming both items; the branch is a follow-up by construction.
+
+Anything else would make the honest re-home path require a branch rename and a new change request.
 
 ## D3. A missing number is one warning per head
 
