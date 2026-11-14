@@ -584,6 +584,14 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		report.Skipped = append(report.Skipped, line)
 	}
 
+	// The same plan reason survives the tick (#428, design D4): the board's
+	// why-column reads a store row instead of a journal line that a restart
+	// erases. Written after the skip lines so one plan is one record — every
+	// skipped item, one row each, replaced wholesale.
+	if err := recordPlanReasons(ctx, actions, in, actions.now()); err != nil {
+		report.Skipped = append(report.Skipped, fmt.Sprintf("plan reasons: %v", err))
+	}
+
 	// A rig whose launch failed this tick names the failure once — not on every
 	// tick it stands (#431): the ledger row is the durable record, the line is
 	// the operator's one alert, and a changed error is a new fact that prints

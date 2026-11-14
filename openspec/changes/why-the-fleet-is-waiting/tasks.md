@@ -31,11 +31,25 @@
 
 ## 4. The last reason survives the tick
 
-- [ ] 4.1 `internal/store`: a `plan_reason` table `(project_id, item_number, reason, detail, head, tick_at)`, upserted
+- [x] 4.1 `internal/store`: a `plan_reason` table `(project_id, item_number, reason, detail, head, tick_at)`, upserted
       per item, deleted when the item is dispatched or leaves the project.
-- [ ] 4.2 `internal/act`/`cmd`: write it from `decide.Result.Skips` after each plan; delete for dispatched items in the
+      Shipped as `schemaV6` plus `ReplacePlanReasons` / `PlanReasons` in `internal/store/plan_reason.go`: the write
+      replaces the project's rows in one transaction (`ReplaceItems`' shape) instead of an upsert plus a prune. The
+      result is the view this task asks for — one row per item, gone the same tick the item is dispatched or leaves
+      the forge — because a dispatched or departed item is in no plan skip, so nothing re-inserts it. Replace also
+      spares the write a set of "which items are still here" it would otherwise have to derive.
+- [x] 4.2 `internal/act`/`cmd`: write it from `decide.Result.Skips` after each plan; delete for dispatched items in the
       same tick.
-- [ ] 4.3 Tests: same reason twice → one row with the later time; reason change → overwritten; dispatch → deleted.
+      Written in `act.RunTick` (`recordPlanReasons`), not `cmd`: the tick is where the plan is applied, and a write in
+      `cmd` would have to re-derive the dispatched set from the intents. `head` is `skipHead` — the same head the
+      `dispatch.skip` ledger key uses. A plan that did not run writes nothing (stale forge read, disabled or onhold
+      project), so a failed read cannot blank the column; a store failure is one skip line and never fails a tick
+      that already dispatched.
+- [x] 4.3 Tests: same reason twice → one row with the later time; reason change → overwritten; dispatch → deleted.
+      `internal/act/plan_reason_test.go` drives `RunTick` for all four spec scenarios plus a stale-read tick and an
+      emptied project; `internal/store/plan_reason_test.go` covers the row semantics and project scoping. Red/green:
+      with the write neutered all four act tests fail, and with the delete neutered the dispatch and departure tests
+      fail.
 
 ## 5. Surfaces
 
