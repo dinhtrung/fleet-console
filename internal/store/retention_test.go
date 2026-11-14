@@ -165,3 +165,38 @@ func TestPruneEventsKeepsUnresolvedQueueItem(t *testing.T) {
 		t.Fatalf("subjects = %v, want #7 kept for its open queue row", subjects)
 	}
 }
+
+// TestPruneEventsKeepsTheSummarySubject (#430): the housekeeping summary writes
+// `project <key>` while the board's audit writes `project:<key>`. The guard reads
+// both through one shape list, so a project with live work keeps its summary.
+func TestPruneEventsKeepsTheSummarySubject(t *testing.T) {
+	ctx := context.Background()
+	st := upsertStore(t)
+	_, pid, err := st.UpsertProject(ctx, baseUpsert())
+	if err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := st.PutSnapshot(ctx, pid, "rig_queue", []map[string]string{
+		{"id": "qitem-1", "state": "pending", "pickup_state": "unclaimed"},
+	}, now); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+
+	summary := appendEvent(t, st, "project app")     // guarded project: kept
+	unrelated := appendEvent(t, st, "project other") // no live work: deleted
+	backdateEvent(t, st, summary, now.AddDate(0, 0, -100))
+	backdateEvent(t, st, unrelated, now.AddDate(0, 0, -100))
+
+	counts, err := st.PruneEvents(ctx, now.AddDate(0, 0, -90), 500, true)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if counts.Scanned != 2 || counts.Deleted != 1 || counts.KeptLive != 1 {
+		t.Fatalf("counts = %+v, want scanned 2, deleted 1, kept 1", counts)
+	}
+	subjects := eventSubjects(t, st)
+	if len(subjects) != 1 || subjects[0] != "project app" {
+		t.Fatalf("subjects = %v, want the summary kept", subjects)
+	}
+}
