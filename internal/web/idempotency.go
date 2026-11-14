@@ -40,6 +40,12 @@ func newIdemLedger() *idemLedger {
 // path, and this keeps the first-writer-wins check honest.
 func idempotency() fiber.Handler {
 	ledger := newIdemLedger()
+	return ledger.handler()
+}
+
+// handler is the middleware over one ledger. Split from idempotency so a test
+// can drive its own ledger and read the keys it stored (#474).
+func (l *idemLedger) handler() fiber.Handler {
 	return func(c fiber.Ctx) error {
 		// Session endpoints are idempotent by nature and are reached by a plain
 		// HTML form, which cannot set a header. The forge receiver is the same case
@@ -54,22 +60,28 @@ func idempotency() fiber.Handler {
 		case fiber.MethodGet, fiber.MethodHead, fiber.MethodOptions:
 			return c.Next()
 		}
-		key := strings.TrimSpace(c.Get(idempotencyKeyHeader))
+		// Clone: c.Get hands back a string that aliases fasthttp's reused header
+		// buffer (this app does not set fiber's Immutable option), and this key
+		// lives in the ledger for 24 hours. Without the copy the stored key's
+		// bytes are rewritten by a later request, so two entries end up with the
+		// same text and a lookup can replay an unrelated response — the response
+		// of a different request, with the handler never run (#474).
+		key := strings.Clone(strings.TrimSpace(c.Get(idempotencyKeyHeader)))
 		if key == "" {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "missing Idempotency-Key header"})
 		}
 
-		ledger.mu.Lock()
-		defer ledger.mu.Unlock()
+		l.mu.Lock()
+		defer l.mu.Unlock()
 
-		if entry, ok := ledger.entries[key]; ok {
+		if entry, ok := l.entries[key]; ok {
 			if time.Since(entry.at) <= idempotencyTTL {
 				if entry.contentType != "" {
 					c.Set(fiber.HeaderContentType, entry.contentType)
 				}
 				return c.Status(entry.status).Send(entry.body)
 			}
-			delete(ledger.entries, key)
+			delete(l.entries, key)
 		}
 
 		if err := c.Next(); err != nil {
@@ -79,7 +91,7 @@ func idempotency() fiber.Handler {
 		if status < 200 || status >= 300 {
 			return nil
 		}
-		ledger.put(key, idemEntry{
+		l.put(key, idemEntry{
 			status:      status,
 			contentType: string(c.Response().Header.ContentType()),
 			body:        append([]byte(nil), c.Response().Body()...),
