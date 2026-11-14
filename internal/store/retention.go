@@ -114,10 +114,27 @@ func keepForLiveWork(subject string, liveItems, guardedItems map[int]bool, guard
 		}
 		return liveItems[item] || guardedItems[item]
 	}
-	if key, ok := strings.CutPrefix(subject, "project:"); ok {
-		return guardedProjects[strings.TrimSpace(key)]
+	if key, ok := subjectProject(subject); ok {
+		return guardedProjects[key]
 	}
 	return false
+}
+
+// projectSubjectPrefixes are the shapes a project-scoped event subject can take,
+// written once so the guard cannot learn one and miss the other (#430):
+// `project:<key>` (the board's project.edit audit) and `project <key>` (the
+// housekeeping summary).
+var projectSubjectPrefixes = []string{"project:", "project "}
+
+// subjectProject reads the project key out of a project-scoped subject, or
+// answers false when the subject names no project.
+func subjectProject(subject string) (string, bool) {
+	for _, prefix := range projectSubjectPrefixes {
+		if key, ok := strings.CutPrefix(subject, prefix); ok {
+			return strings.TrimSpace(key), true
+		}
+	}
+	return "", false
 }
 
 func atoiSafe(value string) (int, error) {
