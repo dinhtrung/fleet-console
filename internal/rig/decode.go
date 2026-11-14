@@ -75,6 +75,20 @@ func (s Seat) Running() bool {
 // that is up and serving.
 const LifecycleRunning = "running"
 
+// LifecycleAttentionRequired is the lifecycle of a seat stopped on a person. It
+// is the minimum fact every rig reports: the attention decode is additive, so
+// an older rig may send no blocks at all (#425/#465).
+const LifecycleAttentionRequired = "attention_required"
+
+// WaitingOnHuman reports whether a seat is stopped on a person, by the one
+// predicate every surface reads (#465 follow-up): a node with a pending input
+// (non-empty Attention), or a lifecycle of attention_required for a rig that
+// sends no blocks. Two producers answering this differently is how the capacity
+// line and the waiting panel came to disagree.
+func (s Seat) WaitingOnHuman() bool {
+	return len(s.Attention) > 0 || s.Lifecycle == LifecycleAttentionRequired
+}
+
 // FieldError names the command and the field that failed its required check.
 // Field is the domain name; Path is the wire name when they differ.
 type FieldError struct {
