@@ -330,8 +330,14 @@ var (
 )
 
 // ParseCloses extracts the item number a change request closes, if the body says so.
+//
+// Code is not prose (#455): a body that quotes the convention — `Closes #450` in
+// a sentence explaining the rule, or a fenced example — states nothing about
+// the item. Fenced blocks and inline code spans are removed before matching;
+// line position is deliberately not required, because "this closes #12."
+// mid-sentence is an honest body and the forge accepts it.
 func ParseCloses(body string) int {
-	match := closesPattern.FindStringSubmatch(body)
+	match := closesPattern.FindStringSubmatch(withoutCode(body))
 	if match == nil {
 		return 0
 	}
@@ -361,4 +367,53 @@ func DocsOnly(paths []string) bool {
 		}
 	}
 	return true
+}
+
+// withoutCode removes fenced blocks (``` or ~~~) and inline code spans from a
+// body, so a keyword quoted as code never reads as a statement (#455). It
+// keeps the text around them intact and does not try to understand nested
+// constructs: markdown has no nesting that matters here, and a fence that ends
+// at end-of-body closes at end-of-body.
+func withoutCode(body string) string {
+	lines := strings.Split(body, "\n")
+	var out strings.Builder
+	fence := "" // the opening fence marker while inside a block
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if fence != "" {
+			if strings.HasPrefix(trimmed, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			fence = trimmed[:3]
+			continue
+		}
+		out.WriteString(stripInlineCode(line))
+		out.WriteByte('\n')
+	}
+	return out.String()
+}
+
+// stripInlineCode removes `…` spans from one line. An unmatched backtick is
+// literal text, so nothing after it is dropped on a guess.
+func stripInlineCode(line string) string {
+	var out strings.Builder
+	for {
+		start := strings.IndexByte(line, '`')
+		if start < 0 {
+			out.WriteString(line)
+			return out.String()
+		}
+		out.WriteString(line[:start])
+		rest := line[start+1:]
+		end := strings.IndexByte(rest, '`')
+		if end < 0 {
+			out.WriteString(line[start:])
+			return out.String()
+		}
+		line = rest[end+1:]
+		out.WriteByte(' ')
+	}
 }
