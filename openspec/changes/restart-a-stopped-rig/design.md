@@ -73,3 +73,10 @@ rig that stays down until the next `rig start`, which is bounded and visible in 
 The daemon-down arm is exempt: nothing a person did takes a daemon down, and the accepted spec already starts the rig
 on demand in that case. An unread ledger (`QuietStoppedRigs` errors) decides nothing this tick — the next tick asks
 again — because failing toward a start is failing toward overriding the operator.
+
+The **unread-roster arm** (D1) runs the same gate, and that is a deliberate narrowing of D1 as first written. A failed
+read cannot tell a quiet-stopped rig from one the operator drove down, and "the last known count was zero" is exactly
+the shape both share — so on an unread roster the app asks the ledger before it starts anything. The cost is that a rig
+whose stop the app never recorded stays down through a failed read too, which is the same answer it gets on a good
+read. `Rejected:` exempting the unread arm, which would have made a broken rig read the one path that overrides the
+operator.
