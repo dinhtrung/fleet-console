@@ -68,6 +68,12 @@ func (s *Store) DeleteProject(ctx context.Context, projectID int64) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	statements := []string{
+		// Both arms, because neither alone reaches every verdict. project_id
+		// catches the adopted verdict, which has no dispatch to join to
+		// (schemaV4). The dispatch arm catches a row whose project_id was never
+		// set — production sets both, but a verdict left with only its dispatch
+		// would otherwise fail the foreign key below and take the delete with it.
+		`DELETE FROM verdict WHERE project_id = ?`,
 		`DELETE FROM verdict WHERE dispatch_id IN (SELECT id FROM dispatch WHERE project_id = ?)`,
 		`DELETE FROM dispatch WHERE project_id = ?`,
 		`DELETE FROM item WHERE project_id = ?`,
