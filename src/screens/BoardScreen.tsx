@@ -101,9 +101,10 @@ function QuestionsSection({ questions }: { questions: BoardQuestion[] }) {
  *
  *  1. the last plan's recorded reason and detail (`plan_reason`, #428) — the durable answer, which
  *     survives the restart that erases a tick's log;
- *  2. the state-derived reason the row already carries (a stale verdict, a refused merge);
- *  3. "no plan has run since start" when the project has never been planned — the empty reason
- *     table then says nothing at all, and a blank cell would read as "nothing wrong".
+ *  2. "no plan has run since start" when the project has never been planned — this must come before
+ *     the row's own reason, because a queued row always carries `queued` and that would otherwise
+ *     keep the honest answer unreachable;
+ *  3. the state-derived reason the row already carries (a stale verdict, a refused merge).
  *
  *  A project that has been planned but carries no reason for this item says "moving": the last
  *  plan had nothing to say about it. */
@@ -118,10 +119,10 @@ function WhyCell({ item, planned }: { item: BoardItem; planned: boolean }) {
       </>
     );
   }
-  if (item.reason) return <>{item.reason}</>;
   if (!planned) {
     return <span className="text-ink-muted">no plan has run since start</span>;
   }
+  if (item.reason) return <>{item.reason}</>;
   return <>moving</>;
 }
 

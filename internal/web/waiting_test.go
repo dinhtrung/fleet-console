@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -276,4 +277,160 @@ func (h *waitingHarness) backdateEvents(t *testing.T, kind string, at time.Time)
 	if _, err := db.Exec(`UPDATE event SET at = ? WHERE kind = ?`, at.UTC().Format(time.RFC3339Nano), kind); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
+}
+
+// TestWaitingPanelListsALifecycleOnlySeat is the REJECT's blocking finding: a
+// seat can be `attention_required` with no attention blocks at all — #425's
+// decode is additive, so an older rig sends the lifecycle and nothing else. The
+// panel must list it, saying the rig gave no question, instead of rendering
+// "nobody is waiting" over a stopped fleet.
+func TestWaitingPanelListsALifecycleOnlySeat(t *testing.T) {
+	h := newWaitingHarness(t, `{"daemon":{"state":"running","reachable":true,"port":7433}}`)
+	h.seedSeats(t, []rig.Seat{{
+		Session: "dev-review@rig", Rig: "rig", Lifecycle: "attention_required",
+	}}, waitingNow.Add(-3*time.Minute))
+
+	panel := h.waiting(t)
+	if !panel.Known {
+		t.Fatalf("panel = %+v, want known", panel)
+	}
+	if len(panel.Seats) != 1 {
+		t.Fatalf("seats = %+v, want the lifecycle-only seat listed", panel.Seats)
+	}
+	seat := panel.Seats[0]
+	if seat.Seat != "dev-review@rig" || seat.Rig != "rig" {
+		t.Fatalf("seat = %+v, want the seat and its rig", seat)
+	}
+	if !seat.Asking || seat.Question != "" {
+		t.Fatalf("seat = %+v, want Asking with no text", seat)
+	}
+	if panel.UIURL != "http://127.0.0.1:7433" {
+		t.Fatalf("ui url = %q, want the link for a listed seat", panel.UIURL)
+	}
+}
+
+// TestWaitingPanelOneObligationOneRow: #427 fingerprints a wait by seat and
+// question, so two attention kinds carrying the same text are the same wait and
+// must not render twice.
+func TestWaitingPanelOneObligationOneRow(t *testing.T) {
+	h := newWaitingHarness(t, `{"daemon":{"state":"running","reachable":true,"port":7433}}`)
+	const question = "approve the harness launch"
+	h.seedSeats(t, []rig.Seat{{
+		Session: "dev-review@rig", Rig: "rig", Lifecycle: "attention_required",
+		Attention: []rig.SeatAttention{
+			{Seat: "dev-review@rig", Rig: "rig", Kind: rig.AttentionKindAttention, Question: question},
+			{Seat: "dev-review@rig", Rig: "rig", Kind: rig.AttentionKindArbitrated, Question: question},
+		},
+	}}, waitingNow.Add(-time.Minute))
+
+	panel := h.waiting(t)
+	if len(panel.Seats) != 1 {
+		t.Fatalf("seats = %+v, want one row for one obligation", panel.Seats)
+	}
+}
+
+// TestWaitingPanelAsksRigStatusOnce: /api/projects renders on every visit, so
+// two waiting projects must cost one `rig status`, not two.
+func TestWaitingPanelAsksRigStatusOnce(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	const twoProjects = `listen: 127.0.0.1:8787
+
+projects:
+  - key: one
+    name: one
+    forge: github
+    repo: o/one
+    rigs: [rig-a]
+    concurrency_cap: 1
+  - key: two
+    name: two
+    forge: github
+    repo: o/two
+    rigs: [rig-b]
+    concurrency_cap: 1
+`
+	if err := os.WriteFile(configPath, []byte(twoProjects), 0o644); err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	st, err := store.Open(ctx, filepath.Join(dir, "fleet.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+	for _, key := range []string{"one", "two"} {
+		if _, _, err := st.UpsertProject(ctx, store.UpsertInput{Project: store.ProjectInput{
+			Key: key, Name: key, ForgeKind: "github", ForgeProject: "o/" + key,
+			Rig: "rig-" + key, ConcurrencyCap: 1, Enabled: true,
+		}}); err != nil {
+			t.Fatalf("project %s: %v", key, err)
+		}
+	}
+	projects, err := st.Projects(ctx)
+	if err != nil {
+		t.Fatalf("projects: %v", err)
+	}
+	for _, p := range projects {
+		if err := st.PutSnapshot(ctx, p.ID, "rig_seats", []rig.Seat{{
+			Session: "dev-review@" + p.Rig, Rig: p.Rig, Lifecycle: "attention_required",
+		}}, waitingNow.Add(-time.Minute)); err != nil {
+			t.Fatalf("seats for %s: %v", p.Key, err)
+		}
+	}
+	runner := &countingStatusRunner{status: `{"daemon":{"state":"running","reachable":true,"port":7433}}`}
+	app, err := New(Config{
+		Token: testToken, Store: st, ConfigPath: configPath, Rig: rig.NewAdapter(runner),
+		Now: func() time.Time { return waitingNow },
+	})
+	if err != nil {
+		t.Fatalf("app: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	req.Header.Set(fiber.HeaderAuthorization, "Bearer "+testToken)
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("projects: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var answer struct {
+		Projects []struct {
+			Key     string       `json:"key"`
+			Waiting WaitingPanel `json:"waiting"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(body, &answer); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+	if len(answer.Projects) != 2 {
+		t.Fatalf("projects = %s, want the two from the config", body)
+	}
+	for _, project := range answer.Projects {
+		if !project.Waiting.Known || len(project.Waiting.Seats) != 1 {
+			t.Fatalf("panel = %+v, want both projects waiting", project.Waiting)
+		}
+		if project.Waiting.UIURL != "http://127.0.0.1:7433" {
+			t.Fatalf("ui url = %q, want the shared link", project.Waiting.UIURL)
+		}
+	}
+	if got := runner.calls.Load(); got != 1 {
+		t.Fatalf("rig status calls = %d, want 1 for the whole request", got)
+	}
+}
+
+// countingStatusRunner answers `rig status --json` and counts the calls.
+type countingStatusRunner struct {
+	status string
+	calls  atomic.Int64
+}
+
+func (r *countingStatusRunner) Run(_ context.Context, args ...string) ([]byte, error) {
+	if strings.Join(args, " ") != "status --json" {
+		return nil, errors.New("unexpected rig call: " + strings.Join(args, " "))
+	}
+	r.calls.Add(1)
+	return []byte(r.status), nil
 }

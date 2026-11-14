@@ -56,27 +56,38 @@ type WaitingPanel struct {
 //   - the read's health is the status block's rig_stale flag and the snapshot's
 //     presence — a missing snapshot is a rig the app has never read, which is
 //     unknown, not clear;
+//   - a seat counts as waiting when its lifecycle is `attention_required`, or
+//     when its node reports any attention block. The lifecycle is the minimum
+//     fact every rig reports (#425's decode is additive, so an older rig may
+//     send no blocks at all) and the blocks are the detail: a lifecycle-only
+//     seat is listed saying the rig gave no question. Reading only the blocks
+//     dropped such a seat and rendered "nobody is waiting" over a stopped fleet;
+//   - one obligation is one row: #427's fingerprint is seat + question, so two
+//     blocks with the same text on one seat are the same wait, not two;
 //   - the age comes from the ledger's own raise (`attention.raised`, #427) when
 //     it is there, so a question that has stood since before the last read is
 //     not reported as new. A standing raise is the newest raise newer than the
 //     newest resolution for the same seat; with no ledger answer the age falls
 //     back to the snapshot's stamp, which is the earliest instant this app can
-//     honestly claim to have seen it.
-//   - the link is the daemon's own UI address, read once per panel and only
-//     when something is waiting.
-func waitingPanel(ctx context.Context, st *store.Store, projectID int64, rigs *rig.Adapter, now time.Time) WaitingPanel {
-	panel := WaitingPanel{Seats: []WaitingSeat{}}
+//     honestly claim to have seen it;
+//   - the link is the daemon's own UI address, passed in by the caller so one
+//     /api/projects request asks `rig status` once however many projects wait.
+func waitingPanel(ctx context.Context, st *store.Store, projectID int64, uiURL string, now time.Time) WaitingPanel {
+	panel := WaitingPanel{Seats: []WaitingSeat{}, UIURL: uiURL}
 	status, err := st.MirrorStatus(ctx, projectID)
 	if err != nil {
+		panel.UIURL = ""
 		panel.Reason = err.Error()
 		return panel
 	}
 	payload, snapshotAt, err := st.GetSnapshot(ctx, projectID, "rig_seats")
 	if err != nil {
+		panel.UIURL = ""
 		panel.Reason = err.Error()
 		return panel
 	}
 	if status.RigStale {
+		panel.UIURL = ""
 		panel.Reason = strings.TrimSpace(status.RigError)
 		if panel.Reason == "" {
 			panel.Reason = "the rig read failed"
@@ -84,18 +95,33 @@ func waitingPanel(ctx context.Context, st *store.Store, projectID int64, rigs *r
 		return panel
 	}
 	if len(payload) == 0 {
+		panel.UIURL = ""
 		panel.Reason = "the rig has not been read yet"
 		return panel
 	}
 	var seats []rig.Seat
 	if err := json.Unmarshal(payload, &seats); err != nil {
+		panel.UIURL = ""
 		panel.Reason = err.Error()
 		return panel
 	}
 	seenAt := snapshotAt
 	panel.Known = true
+	// One obligation is one row: #427 fingerprints a wait by seat + question, so
+	// the kind is detail on the same wait rather than a second obligation.
+	emitted := make(map[string]bool)
 	for _, seat := range seats {
-		for _, attention := range seat.Attention {
+		waiting := len(seat.Attention) > 0 || seat.Lifecycle == "attention_required"
+		if !waiting {
+			continue
+		}
+		blocks := seat.Attention
+		if len(blocks) == 0 {
+			// The lifecycle is the only fact this rig reports: a real wait with
+			// no text to show.
+			blocks = []rig.SeatAttention{{Kind: rig.AttentionKindAttention}}
+		}
+		for _, attention := range blocks {
 			entry := WaitingSeat{
 				Seat: attention.Seat, Rig: attention.Rig, Kind: attention.Kind,
 				Question: strings.TrimSpace(attention.Question),
@@ -107,6 +133,11 @@ func waitingPanel(ctx context.Context, st *store.Store, projectID int64, rigs *r
 				entry.Rig = seat.Rig
 			}
 			entry.Asking = entry.Question == ""
+			fingerprint := entry.Seat + "\x00" + entry.Question
+			if emitted[fingerprint] {
+				continue
+			}
+			emitted[fingerprint] = true
 			since, ok := standingSince(ctx, st, entry.Seat)
 			if !ok {
 				since = seenAt
@@ -118,10 +149,8 @@ func waitingPanel(ctx context.Context, st *store.Store, projectID int64, rigs *r
 			panel.Seats = append(panel.Seats, entry)
 		}
 	}
-	if len(panel.Seats) > 0 && rigs != nil {
-		if report, err := rigs.Status(ctx); err == nil {
-			panel.UIURL = report.UIURL()
-		}
+	if len(panel.Seats) == 0 {
+		panel.UIURL = ""
 	}
 	return panel
 }
@@ -130,24 +159,52 @@ func waitingPanel(ctx context.Context, st *store.Store, projectID int64, rigs *r
 // (#427's `attention.raised`, newest raise newer than the newest resolution).
 // ok is false when the ledger holds no such raise — the caller then falls back
 // to its own observation instead of inventing a history.
+//
+// The subject filter is a prefix match in SQL, so the scan keeps looking past a
+// different seat whose name starts the same way (`dev-builder-1@rig` and
+// `dev-builder-10@rig`): taking only the first row would drop a real age on a
+// collision and report the read's stamp instead.
 func standingSince(ctx context.Context, st *store.Store, seat string) (time.Time, bool) {
-	raised, err := st.Events(ctx, store.EventFilter{Kind: "attention.raised", SubjectPrefix: seat, Limit: 1})
-	if err != nil || len(raised.Events) == 0 {
+	const scan = 20
+	raised, err := st.Events(ctx, store.EventFilter{Kind: "attention.raised", SubjectPrefix: seat, Limit: scan})
+	if err != nil {
 		return time.Time{}, false
 	}
-	newest := raised.Events[0]
-	// The subject is a prefix match; keep the exact seat only, so a raise for
-	// dev-builder-1@rig cannot age dev-builder-10@rig.
-	if newest.Subject != seat {
+	var newest *store.EventRow
+	for index := range raised.Events {
+		if raised.Events[index].Subject == seat {
+			newest = &raised.Events[index]
+			break
+		}
+	}
+	if newest == nil {
 		return time.Time{}, false
 	}
-	resolved, err := st.Events(ctx, store.EventFilter{Kind: "attention.resolved", SubjectPrefix: seat, Limit: 1})
-	if err == nil && len(resolved.Events) > 0 && resolved.Events[0].ID > newest.ID {
-		return time.Time{}, false
+	resolved, err := st.Events(ctx, store.EventFilter{Kind: "attention.resolved", SubjectPrefix: seat, Limit: scan})
+	if err == nil {
+		for index := range resolved.Events {
+			if resolved.Events[index].Subject == seat && resolved.Events[index].ID > newest.ID {
+				return time.Time{}, false
+			}
+		}
 	}
 	at, err := time.Parse(time.RFC3339Nano, newest.At)
 	if err != nil {
 		return time.Time{}, false
 	}
 	return at, true
+}
+
+// waitingUIURL answers the daemon's UI address, reading `rig status` only when
+// the caller does not already have one. The caller keeps the answer for the
+// rest of the request, so N waiting projects cost one CLI read, not N.
+func waitingUIURL(ctx context.Context, rigs *rig.Adapter, known string) string {
+	if known != "" || rigs == nil {
+		return known
+	}
+	report, err := rigs.Status(ctx)
+	if err != nil {
+		return ""
+	}
+	return report.UIURL()
 }

@@ -357,13 +357,15 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 		// makes an empty reason table readable (#429): after a plan it means
 		// "nothing was skipped", before one it means "nothing is known yet".
 		//
-		// The tick's own stamp is the primary witness and the reason rows are the
-		// fallback, not an equal partner: plan_reason is cleared by a project
-		// delete and by a project going disabled or onhold (#428), so a project
-		// that was planned and has since been paused keeps last_tick_at and loses
-		// its rows. Preferring the stamp keeps that case honest; the rows still
-		// answer for a tick whose status block this process has not read yet.
-		bp.Planned = projectStatus.LastTickAt != nil
+		// The witness is the forge stamp, not the tick stamp: the mirror writes
+		// last_forge_at only when both forge reads succeeded, and the plan runs on
+		// that same fresh read — whereas last_tick_at is written on every tick,
+		// stale ones included, and a tick whose read failed planned nothing. The
+		// reason rows are the fallback: they are cleared by a project delete and a
+		// project going disabled or onhold (#428), so a project that was planned
+		// and has since been paused keeps the stamp and loses its rows, and must
+		// still read as planned.
+		bp.Planned = projectStatus.LastForgeAt != nil
 		if !bp.Planned {
 			bp.Planned = len(planReasons) > 0
 		}

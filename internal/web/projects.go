@@ -326,14 +326,16 @@ func listProjects(st *store.Store, configPath string, rigs *rig.Adapter, clock f
 				projects = append(projects, view.render(row.Key))
 			}
 		}
-		// The waiting panel is one read of the project's own snapshots and, when
-		// something is waiting, one `rig status` for the UI address (#429). A
-		// project with no store row has no rig read yet, which the panel says in
-		// words instead of rendering as clear.
+		// The waiting panel reads each project's own snapshots; the UI address
+		// is one read for the whole request, not one per waiting project (#429):
+		// /api/projects renders on every visit, and a per-project CLI call would
+		// put the board's own traffic on the daemon. It is skipped entirely when
+		// no project has anything waiting.
 		now := time.Now().UTC()
 		if clock != nil {
 			now = clock().UTC()
 		}
+		uiURL := ""
 		for index := range projects {
 			row, ok := view.rows[projects[index].Key]
 			if !ok {
@@ -343,7 +345,15 @@ func listProjects(st *store.Store, configPath string, rigs *rig.Adapter, clock f
 				}
 				continue
 			}
-			projects[index].Waiting = waitingPanel(c.Context(), st, row.ID, rigs, now)
+			projects[index].Waiting = waitingPanel(c.Context(), st, row.ID, "", now)
+			if len(projects[index].Waiting.Seats) > 0 {
+				uiURL = waitingUIURL(c.Context(), rigs, uiURL)
+			}
+		}
+		for index := range projects {
+			if len(projects[index].Waiting.Seats) > 0 {
+				projects[index].Waiting.UIURL = uiURL
+			}
 		}
 		return c.JSON(ProjectsListResponse{Projects: projects})
 	}

@@ -130,10 +130,10 @@ func TestWhyColumnReadsTheRecordedPlanReason(t *testing.T) {
 func TestWhyColumnWithoutARecord(t *testing.T) {
 	ctx := context.Background()
 	h := newWhyHarness(t)
-	// A tick that skipped nothing: the status block exists, the plan_reason
-	// table is empty.
-	if err := h.st.PutSnapshot(ctx, h.pid, "status", map[string]any{}, time.Date(2026, 11, 14, 1, 1, 0, 0, time.UTC)); err != nil {
-		t.Fatalf("status: %v", err)
+	// A tick that skipped nothing: the forge read succeeded (so the plan ran) and
+	// the plan_reason table is empty.
+	if err := h.st.SetForgeStamp(ctx, h.pid, time.Date(2026, 11, 14, 1, 1, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("forge stamp: %v", err)
 	}
 
 	planned, reason, age := h.boardItemWhy(t)
@@ -189,19 +189,41 @@ func TestWhyColumnReasonRowsAreTheFallbackWitness(t *testing.T) {
 func TestWhyColumnPausedProjectKeepsTheStamp(t *testing.T) {
 	ctx := context.Background()
 	h := newWhyHarness(t)
-	if err := h.st.PutSnapshot(ctx, h.pid, "status", map[string]any{}, time.Date(2026, 11, 14, 1, 1, 0, 0, time.UTC)); err != nil {
-		t.Fatalf("status: %v", err)
+	if err := h.st.SetForgeStamp(ctx, h.pid, time.Date(2026, 11, 14, 1, 1, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("forge stamp: %v", err)
 	}
-	// The tick that planned this project has run, and its rows are gone (a
-	// pause clears them, #428).
+	// The tick that planned this project has run (a fresh forge read stamped it),
+	// and its rows are gone (a pause clears them, #428).
 	if err := h.st.ReplacePlanReasons(ctx, h.pid, nil); err != nil {
 		t.Fatalf("clear reasons: %v", err)
 	}
 	planned, reason, _ := h.boardItemWhy(t)
 	if !planned {
-		t.Fatalf("planned = false, want true from last_tick_at after the rows were cleared")
+		t.Fatalf("planned = false, want true from the forge stamp after the rows were cleared")
 	}
 	if reason != "" {
 		t.Fatalf("plan_reason = %q, want none recorded", reason)
+	}
+}
+
+// TestWhyColumnStaleTickIsNotAPlan: last_tick_at is written on every tick,
+// stale ones included, and a tick whose forge read failed planned nothing.
+// The forge stamp is the witness — it is written only when both reads
+// succeeded, which is the tick the plan actually ran on. So a project with a
+// stale tick and no fresh read is still "no plan has run since start".
+func TestWhyColumnStaleTickIsNotAPlan(t *testing.T) {
+	ctx := context.Background()
+	h := newWhyHarness(t)
+	if err := h.st.PutSnapshot(ctx, h.pid, "status", map[string]any{
+		"forge_stale": true, "forge_error": "gh: 401",
+	}, time.Date(2026, 11, 14, 1, 1, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	planned, reason, _ := h.boardItemWhy(t)
+	if planned {
+		t.Fatalf("planned = true, want false: a stale tick is not a plan")
+	}
+	if reason != "" {
+		t.Fatalf("plan_reason = %q, want none", reason)
 	}
 }
