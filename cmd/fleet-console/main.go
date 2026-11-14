@@ -785,6 +785,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 	// loop selects on the channel. Built before the loop so the web server holds the
 	// same one.
 	waker := mirror.NewWaker()
+	// Seat attention (#427): the rig's facts become one ledger obligation per
+	// (seat, question), raised and resolved by observed reads only. The notice is
+	// one journal line per change — the ledger is the durable record.
+	attention := &act.AttentionCoordinator{Store: db, Notify: func(notice act.AttentionNotice) {
+		fmt.Fprintf(stderr, "attention: %s\n", act.AttentionLine(notice))
+	}}
 
 	go (&mirror.Mirror{
 		Store: db, Rig: rig.NewAdapter(rigRunner),
@@ -877,6 +883,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 			// and its row exist (design D5). The facts come from the reads above:
 			// a project's fresh flag, its plan's Ready, and the rows and seats the
 			// tick already has, with no extra forge or rig call.
+			// A failed or stale rig read proves nothing about a seat (#427): it
+			// raises nothing and resolves nothing.
+			for _, project := range rows {
+				covered := project.Rigs
+				if len(covered) == 0 && project.Rig != "" {
+					covered = []string{project.Rig}
+				}
+				if err := attention.Observe(ctx, reads[project.ID].Seats, covered, !read.RigStale && !read.RigDown); err != nil {
+					fmt.Fprintf(stderr, "attention: %v\n", err)
+				}
+			}
 			lifecycleActions := lifecycle.Decide(lifecycleFacts(rows, reads, plans, eff), !read.RigStale, read.RigDown, quietStops, read.At)
 			lifecycleFailed := lifecycle.Start(ctx, lifecycleActions)
 			// The rig's roster and queue were read before the launch, so a rig that
