@@ -123,15 +123,6 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		Reviewer: in.Reviewer,
 	}
 
-	// A ready item that is not dispatched says why, once per (item, reason, head)
-	// — design D4 of the restart-a-stopped-rig change, half of #402. The plan's
-	// Skips were invisible: `skipped=0` in the journal counted merge refusals
-	// only, so a board full of ready items and a fleet that dispatched nothing
-	// printed "dispatches=0 skipped=0" for ninety minutes (#403's window). The
-	// ledger key keeps a perpetually-skipped item from printing every tick; a
-	// changed reason or a moved head is a new fact and prints again.
-	notePlanSkips(ctx, actions, &report, in.Plan.Skips, in.CRs)
-
 	// Verdict capture and the merge watchdog run before new dispatches: a merged
 	// task frees its seat, and the same tick must not re-dispatch it.
 	dispatches, err := in.Store.DispatchesForProject(ctx, in.Project.ID)
@@ -687,50 +678,6 @@ func noteMalformedVerdict(ctx context.Context, actions *Actions, item int, key, 
 	}
 	_, _ = actions.event(ctx, "act", "verdict.malformed", subject, detail)
 	return false
-}
-
-// notePlanSkips appends one `#<item> <reason> — <detail>` line per plan skip
-// that this (item, reason, head) has not already printed (design D4):
-// `decide.Result.Skips` is a plan refusal, and act printed none of them, so an
-// undispatched item was invisible in the journal. The ledger key is
-// `item=<n>; reason=<r>; head=<sha>;` — the head is the open change request's,
-// so a moved head asks again — and the row is best-effort like the other raises:
-// a ledger failure prints the line rather than swallowing it.
-func notePlanSkips(ctx context.Context, actions *Actions, report *TickReport, skips []decide.Skip, crs []forge.ChangeRequest) {
-	for _, skip := range skips {
-		head := ""
-		for _, cr := range crs {
-			closes := cr.ClosesItem
-			if closes == 0 {
-				closes = forge.ParseCloses(cr.Body)
-			}
-			if closes == skip.Number && !cr.Merged && strings.EqualFold(cr.State, "open") {
-				head = strings.ToLower(cr.HeadSHA)
-				break
-			}
-		}
-		key := fmt.Sprintf("item=%d; reason=%s; head=%s;", skip.Number, skip.Reason, head)
-		subject := fmt.Sprintf("#%d", skip.Number)
-		noted, err := actions.Store.HasEvent(ctx, "plan.skip", subject, key)
-		if err != nil {
-			// A ledger read that fails is doubt, not silence: print the line and
-			// let the next tick's read decide about the dedupe.
-			noted = false
-		}
-		if noted {
-			continue
-		}
-		line := fmt.Sprintf("#%d %s", skip.Number, skip.Reason)
-		if skip.Detail != "" {
-			line += " — " + skip.Detail
-		}
-		report.Skipped = append(report.Skipped, line)
-		detail := key
-		if skip.Detail != "" {
-			detail += " detail=" + skip.Detail
-		}
-		_, _ = actions.event(ctx, "act", "plan.skip", subject, detail)
-	}
 }
 
 // noteNoItemChangeRequest writes the once-per-(change request, head) audit row

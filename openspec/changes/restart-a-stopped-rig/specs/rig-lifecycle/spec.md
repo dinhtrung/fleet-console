@@ -31,11 +31,15 @@ Each tick SHALL log one line per rig it considered, naming the decision (start, 
 - **THEN** the line names `roster unknown` and the item count, not a bare `running=0`
 
 ### Requirement: A ready item that is not dispatched says why
-When the plan leaves a ready item undispatched, the tick SHALL write one line naming the item and the plan's reason, and SHALL NOT repeat it on every tick while the reason is unchanged.
+When the plan leaves a ready item undispatched for a reason the operator can act on, the tick SHALL write one line naming the item and the plan's reason, and SHALL record that (item, reason) once on the ledger rather than once per tick.
 
 #### Scenario: No free builder
 - **WHEN** every admitted seat is taken and an item is ready
-- **THEN** one line names the item and `no_free_builder`, and the next tick with the same state prints nothing
+- **THEN** the line names the item and `no_free_builder`, and the second tick over the same state adds no second ledger row
+
+#### Scenario: In-flight state stays quiet
+- **WHEN** the item is already dispatched or a live row holds it
+- **THEN** no line is written: that is ordinary in-flight state, not a refusal
 
 ### Requirement: A stopped rig with demand is started, but only if this app stopped it
 With a healthy daemon and no running seat, the lifecycle rule SHALL start a rig at most once per `StartBackoff` when a

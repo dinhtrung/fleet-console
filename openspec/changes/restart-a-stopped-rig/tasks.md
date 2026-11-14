@@ -23,11 +23,15 @@
 
 ## 3. A plan skip reaches the journal
 
-- [x] 3.1 `internal/act/tick.go`: print one `act-skip:` line per (item, reason, head) from `decide.Result.Skips`, reusing the ledger key that already rate-limits notices.
-- [x] 3.2 No repeat while the reason and head are unchanged; a new head or a new reason prints again.
-- [x] 3.3 Test: two ticks with `no_free_builder` → one line; reason changes → second line.
-      Shipped as `TestPlanSkipPrintsOncePerItemReasonAndHead`, which also covers the moved head and the ledger key
-      (`item=<n>; reason=<r>; head=<sha>;`, kind `plan.skip`).
+- [x] 3.1 `internal/act/tick.go`: skip lines from `decide.Result.Skips` reach the journal — **shipped by #402 on
+      main** (`internal/act/tick.go`, `routineSkip` + `noteDispatchSkip`, kind `dispatch.skip`), which landed while this
+      branch was open. This branch deliberately does not add a second surface: doing so printed every skip twice.
+- [x] 3.2 Dedupe: the ledger carries one `dispatch.skip` row per (item, reason) by #402's key. The *journal line*
+      repeats on each tick by design in that shipped surface (`TestTickNamesAPlanSkip` pins both halves), which is a
+      deliberate deviation from this task's "no repeat": #403's acceptance is that nothing reached the journal at all,
+      and the line-repeats-vs-once choice belongs to #402's owner. The head is not part of #402's key.
+- [x] 3.3 Test: #402's `TestTickNamesAPlanSkip` (line printed, in-flight item kept quiet, one ledger row across two
+      ticks) is the test for this task.
 
 ## 4. Docs and gate
 
