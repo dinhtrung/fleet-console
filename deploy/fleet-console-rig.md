@@ -150,6 +150,47 @@ Leave `auth.json`, `AGENTS.md`, `skills/` and `sessions/` alone, because OpenRig
 for n in settings.json mcp.json extensions npm; do ln -sfn "$DAEMON_HOME/.pi/agent/$n" "$PI_SEAT/$n"; done
 ```
 
+### GitHub access for the OMP builder
+
+OMP runs with its seat folder as `HOME` (`OMP_HOME="$RIG_HOME/state/omp/dev-builder-omp@fleet-console-rig"`, the folder
+above `$OMP_SEAT`). So `gh` and `git` there don't see the daemon user's `~/.config/gh`, `~/.ssh` or `~/.gitconfig`.
+Without one of the options below, the builder can commit but can't push its branch or open a PR. `gh auth status` in
+the seat reports "You are not logged into any GitHub hosts". The Claude, Pi and Codex seats use the daemon user's
+`HOME` and need nothing.
+
+This seat runs with full bypass, so whatever you give it, it can use without asking.
+
+**A: a dedicated, limited token (recommended).** Create a fine-grained GitHub token with access to this repository only,
+*Contents: read & write* and *Pull requests: read & write*, and an expiry. Then:
+
+```bash
+OMP_HOME="$RIG_HOME/state/omp/dev-builder-omp@fleet-console-rig"
+HOME="$OMP_HOME" gh auth login --with-token < /path/to/token-file     # then delete the file
+HOME="$OMP_HOME" gh auth setup-git                                     # git over HTTPS uses the same token
+HOME="$OMP_HOME" git config --global user.name  "<commit name>"
+HOME="$OMP_HOME" git config --global user.email "<commit email>"
+```
+
+**B: share the daemon user's own logins.** Quicker, but the seat gets that account's full GitHub access and SSH keys:
+
+```bash
+OMP_HOME="$RIG_HOME/state/omp/dev-builder-omp@fleet-console-rig"
+mkdir -p "$OMP_HOME/.config"
+ln -sfn "$DAEMON_HOME/.config/gh" "$OMP_HOME/.config/gh"
+ln -sfn "$DAEMON_HOME/.ssh"       "$OMP_HOME/.ssh"
+ln -sfn "$DAEMON_HOME/.gitconfig" "$OMP_HOME/.gitconfig"
+```
+
+Either way, check it from the seat's point of view. It takes effect on the builder's next command, with no restart:
+
+```bash
+HOME="$OMP_HOME" gh auth status                                # logged in
+HOME="$OMP_HOME" git -C "$REPO" ls-remote --heads origin main  # reaches origin
+```
+
+The setup lives in the seat folder, so it survives a restore or a fresh launch of this seat. A new rig name or a
+renamed seat gets an empty folder and needs it again.
+
 ## 5. Install and launch
 
 Preview first, then install. `--target` is where the unpacked spec lives. `--cwd` is the repository the seats
