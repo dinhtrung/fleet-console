@@ -4,8 +4,9 @@
 
 - [ ] 1.1 `internal/act/merge.go`: replace the `branchPrefix` prefix test in `MergeAdopted` with a comparison of the
       item number the branch carries (last segment up to the first `-`, digits only) against the item from the body.
-- [ ] 1.2 Branch carries the same number → proceed as today. Different number → refuse, naming both numbers. No number
-      → proceed and emit one warning naming the convention and the branch.
+- [ ] 1.2 Branch carries the same number → proceed as today. Different number naming an **open** item → refuse, naming
+      both numbers. Different number naming a **closed** item → merge, one warning saying it is re-homed. No number →
+      merge, one warning naming the convention.
 - [ ] 1.3 Keep the live-dispatch-on-another-branch refusal and the `Closes #n` requirement untouched.
 - [ ] 1.4 Delete `branchPrefix` if it has no other caller; if it does, leave it and say so in the PR body.
 
@@ -18,7 +19,8 @@
 
 - [ ] 3.1 `TestAdoptedMergeAcceptsABranchWithNoItem`: `fix/<slug>` + `Closes #450` → merged, one warning.
 - [ ] 3.2 `TestAdoptedMergeAcceptsFixPrefixedBranch`: `fix/450-…` → merged, no warning.
-- [ ] 3.3 `TestAdoptedMergeRefusesABranchNamingAnotherItem`: `fix/438-…` + `Closes #451` → refused, error names both.
+- [ ] 3.3 `TestAdoptedMergeRefusesABranchNamingAnotherOpenItem`: `fix/438-…`, #438 open, `Closes #451` → refused.
+- [ ] 3.3a `TestAdoptedMergeAcceptsABranchNamingAClosedItem`: `fix/438-…`, #438 closed, `Closes #451` → merged + warning.
 - [ ] 3.4 `TestAdoptedMergeFeatureBranchUnchanged`: `feature/450-…` → merged, no warning (today's behaviour).
 - [ ] 3.5 `TestAdoptedMergeStillRefusesLiveDispatchOnAnotherBranch`: unchanged refusal still fires.
 
