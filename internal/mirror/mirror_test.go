@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dinhtrung/fleet-console/internal/decide"
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
@@ -669,4 +670,57 @@ func TestRecoveredRosterKeepsTheBreadcrumb(t *testing.T) {
 	if payload, _, err := st.GetSnapshot(ctx, id, "rig_seats"); err != nil || len(payload) == 0 {
 		t.Fatalf("rig_seats = %s, %v; want the recovered roster written", payload, err)
 	}
+}
+
+// TestSnapshotNamesSeatsWaitingOnAHuman (#465): BuildSnapshot is where the
+// capacity line's fact comes from. A builder seat that is up but stopped on a
+// person has non-empty Attention, is not Running (so it is not a builder), and
+// must still be named — that is the difference between "seats are busy" and
+// "one seat waits on you".
+func TestSnapshotNamesSeatsWaitingOnAHuman(t *testing.T) {
+	now := time.Date(2026, 11, 14, 10, 0, 0, 0, time.UTC)
+	project := store.ProjectRow{
+		Key: "app", Name: "app", ForgeKind: "github", Enabled: true, ConcurrencyCap: 1,
+		RigTiers: []store.RigTier{{Name: "rig-a"}},
+	}
+	waiting := rig.Seat{
+		Session: "dev-builder-claude@rig-a", LogicalID: "dev.builder-claude", Rig: "rig-a",
+		Lifecycle: "attention_required",
+		Attention: []rig.SeatAttention{{
+			Seat: "dev-builder-claude@rig-a", Rig: "rig-a", Kind: rig.AttentionKindAttention, Question: "Approve the merge?",
+		}},
+	}
+	result := ProjectResult{
+		Items: []forge.Item{{Number: 5, Kind: forge.KindTask, State: forge.StateOpen, Title: "Five"}},
+		Seats: []rig.Seat{waiting},
+	}
+
+	snapshot := BuildSnapshot(project, result, nil, nil, nil, nil)
+	if len(snapshot.WaitingOnHuman) != 1 || snapshot.WaitingOnHuman[0] != waiting.Session {
+		t.Fatalf("waiting = %v, want the attention seat", snapshot.WaitingOnHuman)
+	}
+	plan := decide.PlanTick(snapshot, now)
+	skip := planSkipFor(plan, 5)
+	if skip.Reason != decide.ReasonNoFreeBuilder || !strings.Contains(skip.Detail, "(1 waiting on a human)") {
+		t.Fatalf("skip = %+v, want a no_free_builder naming the human", skip)
+	}
+
+	// The same seat on a rig this tick could not read proves nothing: no name,
+	// no invented count, and the detail says the rig went unread instead.
+	unread := result
+	unread.RigUnread = []string{"rig-a"}
+	plain := decide.PlanTick(BuildSnapshot(project, unread, nil, nil, nil, nil), now)
+	skip = planSkipFor(plain, 5)
+	if strings.Contains(skip.Detail, "waiting on a human") {
+		t.Fatalf("skip = %+v, want no human count from an unread rig", skip)
+	}
+}
+
+func planSkipFor(plan decide.Plan, item int) decide.Skip {
+	for _, skip := range plan.Skips {
+		if skip.Number == item {
+			return skip
+		}
+	}
+	return decide.Skip{}
 }

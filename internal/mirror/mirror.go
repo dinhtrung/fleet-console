@@ -582,6 +582,27 @@ func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []
 		}
 		snapshot.Builders = append(snapshot.Builders, seat.Session)
 	}
+	// WaitingOnHuman is the other half of capacity (#465): a builder seat that
+	// is up but stopped on a person holds a seat without working. The rig
+	// announces that through its attention facts (#425) — a waiting seat is not
+	// Running, which is why this loop does not require it. A rig whose seats this
+	// tick could not read proves nothing, so it contributes no names rather than
+	// an invented count; and a seat is named once even if two rig-lists carry it.
+	unreadable := make(map[string]bool, len(result.RigUnread))
+	for _, name := range result.RigUnread {
+		unreadable[name] = true
+	}
+	waiting := make(map[string]bool)
+	for _, seat := range result.Seats {
+		if len(seat.Attention) == 0 || !strings.Contains(seat.LogicalID, "build") {
+			continue
+		}
+		if unreadable[seat.Rig] || waiting[seat.Session] {
+			continue
+		}
+		waiting[seat.Session] = true
+		snapshot.WaitingOnHuman = append(snapshot.WaitingOnHuman, seat.Session)
+	}
 	for _, dispatch := range dispatches {
 		// An ended attempt is not a live duplicate: the item may be dispatched
 		// again on a later tick (D4 reconciliation ends it first).
