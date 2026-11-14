@@ -249,7 +249,7 @@ const laterHead = "def4567abc1234def4567abc1234def4567abc1"
 
 // supersededFixture is the #414 shape: a standing question about questionHead,
 // and a verdict on laterHead, which is the head the change request carries.
-func supersededFixture(t *testing.T, decision string) (*queueStub, TickInput) {
+func supersededQuestionFixture(t *testing.T, decision string) (*queueStub, TickInput) {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Date(2026, 11, 13, 18, 0, 0, 0, time.UTC)
@@ -276,7 +276,7 @@ func supersededFixture(t *testing.T, decision string) (*queueStub, TickInput) {
 // explains itself a month later.
 func TestVerdictQuestionClosesWhenALaterHeadCarriesAVerdict(t *testing.T) {
 	ctx := context.Background()
-	queue, in := supersededFixture(t, "reject")
+	queue, in := supersededQuestionFixture(t, "reject")
 	if _, err := RunTick(ctx, in); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestVerdictQuestionForTheCurrentHeadStaysOpen(t *testing.T) {
 // nothing more.
 func TestVerdictQuestionSupersededCloseIsIdempotent(t *testing.T) {
 	ctx := context.Background()
-	queue, in := supersededFixture(t, "accept")
+	queue, in := supersededQuestionFixture(t, "accept")
 	if _, err := RunTick(ctx, in); err != nil {
 		t.Fatalf("tick 1: %v", err)
 	}
