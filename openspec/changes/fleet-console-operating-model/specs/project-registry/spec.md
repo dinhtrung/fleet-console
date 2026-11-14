@@ -37,7 +37,7 @@ project that reappears SHALL be re-enabled with its `onhold` value intact.
 - **WHEN** `--prune` is asked for a project with an open dispatch
 - **THEN** it is refused, naming the row, and nothing is deleted
 
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Capacity comes from the rig
 
