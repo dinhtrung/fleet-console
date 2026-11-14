@@ -330,8 +330,14 @@ var (
 )
 
 // ParseCloses extracts the item number a change request closes, if the body says so.
+//
+// Code is not prose (#455): a body that quotes the convention — `Closes #450` in
+// a sentence explaining the rule, or a fenced example — states nothing about
+// the item. Fenced blocks and inline code spans are removed before matching;
+// line position is deliberately not required, because "this closes #12."
+// mid-sentence is an honest body and the forge accepts it.
 func ParseCloses(body string) int {
-	match := closesPattern.FindStringSubmatch(body)
+	match := closesPattern.FindStringSubmatch(withoutCode(body))
 	if match == nil {
 		return 0
 	}
@@ -361,4 +367,104 @@ func DocsOnly(paths []string) bool {
 		}
 	}
 	return true
+}
+
+// withoutCode removes fenced blocks (``` or ~~~) and inline code spans from a
+// body, so a keyword quoted as code never reads as a statement (#455). It
+// follows the markdown rules that matter here rather than approximating them:
+// a fence opens with a run of three or more of one marker character (an info
+// string may follow) and closes only on a run of the same character at least as
+// long with nothing else on the line, so a "```go" line inside a block — or a
+// three-backtick line inside a four-backtick block — is content, not a close.
+// A fence left open runs to the end of the body.
+func withoutCode(body string) string {
+	lines := strings.Split(body, "\n")
+	var out strings.Builder
+	var fenceMarker byte
+	fenceLen := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if fenceLen > 0 {
+			if closesFence(trimmed, fenceMarker, fenceLen) {
+				fenceLen = 0
+			}
+			continue
+		}
+		if marker, length, ok := opensFence(trimmed); ok {
+			fenceMarker, fenceLen = marker, length
+			continue
+		}
+		out.WriteString(stripInlineCode(line))
+		out.WriteByte('\n')
+	}
+	return out.String()
+}
+
+// opensFence reports whether a trimmed line starts a fenced block: a run of
+// three or more backticks or tildes, optionally followed by an info string.
+func opensFence(trimmed string) (marker byte, length int, ok bool) {
+	if trimmed == "" || (trimmed[0] != '`' && trimmed[0] != '~') {
+		return 0, 0, false
+	}
+	marker = trimmed[0]
+	for length < len(trimmed) && trimmed[length] == marker {
+		length++
+	}
+	if length < 3 {
+		return 0, 0, false
+	}
+	return marker, length, true
+}
+
+// closesFence reports whether a trimmed line closes a block opened with
+// fenceLen of fenceMarker: at least as many of the same character, and nothing
+// else on the line.
+func closesFence(trimmed string, marker byte, fenceLen int) bool {
+	length := 0
+	for length < len(trimmed) && trimmed[length] == marker {
+		length++
+	}
+	return length >= fenceLen && length == len(trimmed)
+}
+
+// stripInlineCode removes `…` spans from one line, matching runs exactly as
+// markdown does: a run of N backticks opens a span and only a run of exactly N
+// closes it, so a shorter run inside stays literal content. An opening run with
+// no exact match is literal text and scanning continues after it.
+func stripInlineCode(line string) string {
+	var out strings.Builder
+	for i := 0; i < len(line); {
+		if line[i] != '`' {
+			out.WriteByte(line[i])
+			i++
+			continue
+		}
+		runStart := i
+		for i < len(line) && line[i] == '`' {
+			i++
+		}
+		runLen := i - runStart
+		match := -1
+		for j := i; j < len(line); {
+			if line[j] != '`' {
+				j++
+				continue
+			}
+			start := j
+			for j < len(line) && line[j] == '`' {
+				j++
+			}
+			if j-start == runLen {
+				match = start
+				break
+			}
+		}
+		if match < 0 {
+			out.WriteString(line[runStart:i])
+			continue
+		}
+		out.WriteByte(' ')
+		i = match + runLen
+	}
+	return out.String()
 }
