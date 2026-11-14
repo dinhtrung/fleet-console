@@ -21,7 +21,9 @@
 
 - [ ] 3.1 `events_keep_days` in settings (default 90, `0` disables) with the same validation path as the other
       allowlisted settings.
-- [ ] 3.2 `internal/act/housekeep.go`: a retention step deleting in batches of 500, keeping every row whose item has a
+- [ ] 3.2 BLOCKED by #430: the guard matches `project:<key>` but the summary writes `project <key>`, so a summary row
+      for a live project is pruned. Fix the shape before ticking.
+      `internal/act/housekeep.go`: a retention step deleting in batches of 500, keeping every row whose item has a
       live dispatch or whose project has an unresolved queue row, writing one `housekeeping.retention` event per run
       with `scanned`, `deleted`, `kept_live`.
 - [ ] 3.3 Dry-run by default, like the other steps.
