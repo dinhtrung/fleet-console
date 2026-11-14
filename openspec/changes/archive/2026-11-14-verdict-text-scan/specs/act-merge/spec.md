@@ -56,10 +56,13 @@ row to the project's operator destination, and the gate SHALL NOT merge on it.
 - **WHEN** the row cannot be created for the configured seat
 - **THEN** the question is created once for `human@kernel` instead
 
-### Requirement: A verdict about another commit asks the same seat
-A verdict whose sha is not the head SHALL NOT merge and SHALL NOT be moved to the head on its own; the tick SHALL
-ask the operator destination to accept at the head, reject, or re-review.
+### Requirement: A verdict about another commit never moves to the head on its own
+A verdict whose sha is not the head SHALL NOT merge and SHALL NOT be moved to the head. When the sha is not in the
+head's history the tick SHALL ask the operator destination to accept at the head, reject, or re-review; when it is an
+ancestor of the head, the stale verdict is the reviewer's question (see `review-verdict`) and the tick SHALL NOT open
+an operator question.
 
 #### Scenario: An acceptance of the parent commit
 - **WHEN** the newest note is `ACCEPT <parent>` and the head is `<head>`
-- **THEN** no verdict is stored for the head and one question row names both shas
+- **THEN** no verdict is stored for the head and no operator question is raised; the reviewer is asked once per head
+  through the review path

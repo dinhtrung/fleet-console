@@ -45,5 +45,5 @@
 
 - [ ] 5.1 `go build ./... && go vet ./... && go test ./...` green except the two known environment failures
       (`culture.TestGuardRefusesSymlink` on a symlinked home, `mirror.TestLoopWakeRunsTickBeforeTimerAndResetsCadence`).
-- [ ] 5.2 `openspec validate --all --strict` green.
-- [ ] 5.3 PR to `main` with this change set; the merge gate of this repo is a hand merge until 4.3 is done.
+- [x] 5.2 `openspec validate --all --strict` green.
+- [x] 5.3 PR to `main` with this change set; the merge gate of this repo is a hand merge until 4.3 is done.
