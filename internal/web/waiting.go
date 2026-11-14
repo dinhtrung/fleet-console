@@ -111,8 +111,7 @@ func waitingPanel(ctx context.Context, st *store.Store, projectID int64, uiURL s
 	// the kind is detail on the same wait rather than a second obligation.
 	emitted := make(map[string]bool)
 	for _, seat := range seats {
-		waiting := len(seat.Attention) > 0 || seat.Lifecycle == "attention_required"
-		if !waiting {
+		if !seat.WaitingOnHuman() {
 			continue
 		}
 		blocks := seat.Attention

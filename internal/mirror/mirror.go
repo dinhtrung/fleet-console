@@ -594,7 +594,7 @@ func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []
 	}
 	waiting := make(map[string]bool)
 	for _, seat := range result.Seats {
-		if len(seat.Attention) == 0 || !strings.Contains(seat.LogicalID, "build") {
+		if !seat.WaitingOnHuman() || !strings.Contains(seat.LogicalID, "build") {
 			continue
 		}
 		if unreadable[seat.Rig] || waiting[seat.Session] {

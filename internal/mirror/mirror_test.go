@@ -705,6 +705,24 @@ func TestSnapshotNamesSeatsWaitingOnAHuman(t *testing.T) {
 		t.Fatalf("skip = %+v, want a no_free_builder naming the human", skip)
 	}
 
+	// A rig that reports only the lifecycle — an older build sending no blocks —
+	// is still a seat waiting on a person; the waiting panel lists it, and the
+	// capacity line must not disagree (#465 follow-up).
+	lifecycleOnly := waiting
+	lifecycleOnly.Attention = nil
+	lifecycleResult := ProjectResult{
+		Items: []forge.Item{{Number: 5, Kind: forge.KindTask, State: forge.StateOpen, Title: "Five"}},
+		Seats: []rig.Seat{
+			lifecycleOnly,
+			// An ordinary non-running seat (recovered, exited) waits on nobody.
+			{Session: "dev-builder-omp@rig-a", LogicalID: "dev.builder-omp", Rig: "rig-a", Lifecycle: "recoverable"},
+		},
+	}
+	lifecyclePlan := decide.PlanTick(BuildSnapshot(project, lifecycleResult, nil, nil, nil, nil), now)
+	if skip := planSkipFor(lifecyclePlan, 5); !strings.Contains(skip.Detail, "(1 waiting on a human)") {
+		t.Fatalf("skip = %+v, want the lifecycle-only seat named once", skip)
+	}
+
 	// The same seat on a rig this tick could not read proves nothing: no name,
 	// no invented count, and the detail says the rig went unread instead.
 	unread := result
