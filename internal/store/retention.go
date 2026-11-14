@@ -74,30 +74,39 @@ func (s *Store) PruneEvents(ctx context.Context, cutoff time.Time, batch int, ap
 		}
 
 		var deleteIDs []any
+		kept := 0
 		for _, row := range page {
 			counts.Scanned++
 			cursor = row.id
 			if keepForLiveWork(row.subject, liveItems, guardedItems, guardedProjects) {
 				counts.KeptLive++
+				kept++
 				continue
 			}
 			if apply {
 				deleteIDs = append(deleteIDs, row.id)
 			}
 		}
-		if apply && len(deleteIDs) > 0 {
-			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(deleteIDs)), ",")
-			args := make([]any, 0, len(deleteIDs))
-			args = append(args, deleteIDs...)
-			res, err := s.db.ExecContext(ctx, `DELETE FROM event WHERE id IN (`+placeholders+`)`, args...)
-			if err != nil {
-				return counts, fmt.Errorf("store: prune events: %w", err)
-			}
-			removed, _ := res.RowsAffected()
-			counts.Deleted += int(removed)
-		} else if !apply {
-			counts.Deleted += len(page) - counts.KeptLive
+		if !apply {
+			// A dry run counts this page's uncounted rows. Subtracting the running
+			// KeptLive would discount every page after the first by the live rows an
+			// earlier page kept, so a run over 1,200 old rows losing two live ones
+			// reported 1,196 instead of 1,200 (#466).
+			counts.Deleted += len(page) - kept
+			continue
 		}
+		if len(deleteIDs) == 0 {
+			continue
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(deleteIDs)), ",")
+		args := make([]any, 0, len(deleteIDs))
+		args = append(args, deleteIDs...)
+		res, err := s.db.ExecContext(ctx, `DELETE FROM event WHERE id IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return counts, fmt.Errorf("store: prune events: %w", err)
+		}
+		removed, _ := res.RowsAffected()
+		counts.Deleted += int(removed)
 	}
 	return counts, nil
 }
