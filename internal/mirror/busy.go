@@ -51,8 +51,15 @@ func Busy(read TickResult) (bool, string) {
 		}
 	}
 	if read.RigStale || read.RigError != "" {
+		// A recovered roster is not stale — every rig answered in the end — but
+		// the tick still saw a broken read, and backing off would hide the next
+		// one. Naming the recovery keeps the reason honest instead of calling a
+		// whole roster "failed".
 		reason := "rig read stale"
-		if read.RigError != "" {
+		switch {
+		case read.RigError != "" && !read.RigStale:
+			reason = "rig read recovered per rig: " + read.RigError
+		case read.RigError != "":
 			reason = "rig read failed: " + read.RigError
 		}
 		return true, reason

@@ -585,3 +585,88 @@ func TestEveryRigUnreadMakesTheProjectUnknown(t *testing.T) {
 		t.Fatalf("rig stamp = %v, %v; want none", status.LastRigAt, err)
 	}
 }
+
+// TestNoDeclaredRigsKeepsTheRosterStale is the review's first note on #447: a
+// failed fleet-wide read with no rig declared anywhere had nothing to decompose,
+// and the empty set of per-rig errors then read as a clean read — so a project
+// that admits every seat planned against zero seats and said "no free builder".
+// A decomposition that asked nobody answers nothing.
+func TestNoDeclaredRigsKeepsTheRosterStale(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	id, err := st.CreateProject(ctx, store.ProjectInput{
+		Key: "app", Name: "app", ForgeKind: "github", ForgeProject: "o/app",
+		ConcurrencyCap: 2, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	runner := runnerFunc(func(_ context.Context, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "ps" {
+			return nil, errors.New("rig ps: exit 1: no daemon")
+		}
+		return []byte("[]"), nil
+	})
+	m := &Mirror{Store: st, Rig: rig.NewAdapter(runner)}
+	read, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: forge.NewFake(forge.KindGitHub)}})
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if !read.RigStale {
+		t.Fatal("rig stale = false, want true: nothing was read, so nothing is known")
+	}
+	pr := read.Projects["app"]
+	if !pr.RigUnknown {
+		t.Fatalf("project unknown = false, want true: a project that admits every seat is unknown exactly when the roster read failed")
+	}
+	if reason := func() string { _, r := Busy(read); return r }(); !strings.Contains(reason, "rig read failed") {
+		t.Fatalf("busy reason = %q, want the rig read named", reason)
+	}
+}
+
+// TestRecoveredRosterKeepsTheBreadcrumb is the review's second note on #447: the
+// fleet-wide read can fail and every rig still answer. The roster is whole, so
+// RigStale stays false — but the failed read is worth remembering, and the
+// cadence must not call a whole roster failed when it was rebuilt.
+func TestRecoveredRosterKeepsTheBreadcrumb(t *testing.T) {
+	ctx := context.Background()
+	st, id := twoRigFixture(t)
+	runner := runnerFunc(func(_ context.Context, args ...string) ([]byte, error) {
+		if len(args) == 0 || args[0] != "ps" {
+			return []byte("[]"), nil
+		}
+		if args[1] == "--nodes" && len(args) > 2 && args[2] == "-A" {
+			return nil, errors.New("rig ps --nodes -A: exit 1: node listing timed out")
+		}
+		rigName := args[len(args)-1]
+		return []byte("[" + seatNode(rigName, "build") + "]"), nil
+	})
+	m := &Mirror{Store: st, Rig: rig.NewAdapter(runner)}
+	read, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: forge.NewFake(forge.KindGitHub), Rigs: []string{"rig-a", "rig-b"}}})
+	if err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if read.RigStale {
+		t.Fatal("rig stale = true, want false: every rig answered on its own")
+	}
+	if read.RigError == "" {
+		t.Fatal("rig error = empty, want the failed fleet-wide read kept as a breadcrumb")
+	}
+	if len(read.RigUnread) != 0 {
+		t.Fatalf("unread = %v, want none", read.RigUnread)
+	}
+	pr := read.Projects["app"]
+	if len(pr.Seats) != 2 || pr.RigUnknown || len(pr.RigWarnings) != 0 {
+		t.Fatalf("project seats=%d unknown=%v warnings=%v, want both rigs' seats and no complaint", len(pr.Seats), pr.RigUnknown, pr.RigWarnings)
+	}
+	busy, reason := Busy(read)
+	if !busy {
+		t.Fatal("busy = false, want true: a read broke this tick")
+	}
+	if !strings.Contains(reason, "recovered per rig") {
+		t.Fatalf("busy reason = %q, want the recovery named rather than a whole roster called failed", reason)
+	}
+	if payload, _, err := st.GetSnapshot(ctx, id, "rig_seats"); err != nil || len(payload) == 0 {
+		t.Fatalf("rig_seats = %s, %v; want the recovered roster written", payload, err)
+	}
+}

@@ -169,9 +169,15 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 			// that answer keep their seats, and only the blind ones are reported.
 			// A deployment with no declared rig admits every seat, so there is
 			// no list to decompose and the failure stays the whole roster's.
-			perRig, perRigErrs := m.seatsPerRig(ctx, declaredRigs(projects))
+			declared := declaredRigs(projects)
+			perRig, perRigErrs := m.seatsPerRig(ctx, declared)
 			seats, rigErrors = perRig, perRigErrs
-			seatsRead = len(rigErrors) == 0
+			// A decomposition that asked nobody answers nothing. With no rig
+			// declared there is no list to recover, so the failed fleet-wide
+			// read is still the whole roster's — without this arm the empty set
+			// of errors reads as a clean read and the project plans against zero
+			// seats, which is the claim #438 removes (found in review).
+			seatsRead = len(declared) > 0 && len(rigErrors) == 0
 			if result.RigError == "" {
 				result.RigError = err.Error()
 			}
@@ -191,12 +197,18 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 	// RigStale means "the roster is not whole": the queue read failed, or a rig
 	// the projects declare could not be read. A decomposition that recovered
 	// every rig leaves it false, because the fleet is known — assembled from
-	// parts is still known.
+	// parts is still known. RigError is a breadcrumb, not a staleness claim: it
+	// keeps the first failed read even after a full recovery, so the status
+	// snapshot can say "a read broke and this is what it said" while RigStale
+	// alone answers whether the roster is whole.
 	result.RigUnread = sortedRigNames(rigErrors)
 	// A mirror with no rig adapter reads no roster, which is not a failure: the
 	// rosters are empty because nothing asked, not because something went blind.
 	rosterFailed := m.Rig != nil && !seatsRead
-	if result.QueueStale || len(rigErrors) > 0 {
+	// rosterFailed also covers a failed read that had nothing to decompose (no
+	// rig declared): nothing answered, so the roster is not whole even though no
+	// rig can be named as unread.
+	if result.QueueStale || rosterFailed || len(rigErrors) > 0 {
 		result.RigStale = true
 	}
 
