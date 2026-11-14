@@ -36,3 +36,15 @@ visible in `--print-config`.
 #### Scenario: An epic of independent chores
 - **WHEN** a project sets `epic_serial: false`
 - **THEN** every eligible sibling is dispatched as before, and the setting is shown by `--print-config`
+
+#### Scenario: A silent holder
+- **WHEN** the holding child has a live dispatch whose seat has gone silent for hours
+- **THEN** the epic stays held, and the silent-dispatch question tells a human rather than a second builder starting
+
+#### Scenario: A draft change request
+- **WHEN** the holding child's change request is open, unmerged and still a draft
+- **THEN** the next sibling is not dispatched
+
+#### Scenario: Two siblings already in flight when the rule lands
+- **WHEN** an epic already has two children dispatched before this rule is deployed
+- **THEN** neither dispatch is cancelled, and no third child is dispatched until both land

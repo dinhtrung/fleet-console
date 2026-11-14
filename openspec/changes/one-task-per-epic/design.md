@@ -46,8 +46,21 @@ which is exactly what happened today: five children of #424 carry a label a huma
 Default is `true`. An epic that was written as a plan is serialized; a project that knows better says so in its file.
 
 ## D6. What does not change
-
 - `onhold` keeps its meaning: a child carrying it is skipped with `parent_onhold`/`onhold` as today.
 - A sibling on `onhold` does not hold the epic: it is not in flight.
 - The concurrency cap still applies; this rule only removes candidates, never adds seats.
 - A child whose parent is not an open epic keeps its existing skip.
+
+## Decisions (grilled 2026-11-14)
+
+1. **A stalled holder keeps the epic.** A live dispatch whose seat goes silent is not released by this rule; the
+   silent-dispatch question already tells a human, and auto-releasing risks two builders in one epic — the failure the
+   change exists to prevent. *Carried by:* "One child of an epic is in flight at a time" (scenario: a silent holder).
+2. **A draft or red change request still holds.** `decide.Branch` carries only `HasOpenCR`/`HasMergedCR`; draft and CI
+   state are not in the snapshot and are not added. An open unmerged CR is unlanded work whatever its draft state.
+   *Carried by:* the same requirement (scenario: a draft CR).
+3. **Siblings in flight at deploy are grandfathered.** The rule refuses new dispatches; it never cancels a running one.
+   #428 and #429 keep running when this lands. *Carried by:* the same requirement (scenario: two already in flight).
+4. **Merged or closed both free the epic.** A closed unmerged CR is abandoned work: `HasOpenCR` goes false, the next
+   sibling is eligible, and its dispatch creates a fresh branch. *Carried by:* the same requirement (scenario: a
+   closed CR).
