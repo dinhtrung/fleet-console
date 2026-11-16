@@ -179,6 +179,48 @@ func TestGitLabItems(t *testing.T) {
 	}
 }
 
+// TestGitLabItemsReadsTheEpicLabel is #479: the spec's "an item labelled as an
+// epic is an epic on the first read" was only implemented by the GitHub adapter.
+// A GitLab epic whose tasks are linked by relation rather than hierarchy reports
+// an empty child list, so the hierarchy read cannot tell it from a task and the
+// planner dispatched the whole epic. The label is the one fact that can, and the
+// hierarchy read still runs here and reports nothing (#101/#102 above cover the
+// children arm).
+func TestGitLabItemsReadsTheEpicLabel(t *testing.T) {
+	runner := &fixtureRunner{
+		root: "testdata",
+		exact: map[string]string{
+			"glab api projects/horisen%2Fmnp%2Fengine%2Ftraffic-simulator-v2/issues?state=opened&per_page=100&page=1": "gitlab/issues-epic-label.json",
+		},
+		fallback: []fallbackFile{{contains: "graphql", file: "gitlab/work-items-epic-label.json"}},
+	}
+	adapter := NewGitLab("horisen/mnp/engine/traffic-simulator-v2", "", runner, &Budget{Max: 100})
+	items, err := adapter.Items(context.Background(), Timeout{})
+	if err != nil {
+		t.Fatalf("Items: %v", err)
+	}
+	byNumber := map[int]Item{}
+	for _, item := range items {
+		byNumber[item.Number] = item
+	}
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want the 2 fixture issues", len(items))
+	}
+	if got := byNumber[201].Kind; got != KindEpic {
+		t.Fatalf("#201 kind = %q, want epic: it carries %s and the hierarchy reports no children", got, EpicLabel)
+	}
+	if byNumber[201].Parent != nil {
+		t.Fatalf("#201 parent = %d, want none", *byNumber[201].Parent)
+	}
+	if got := byNumber[202].Kind; got != KindTask {
+		t.Fatalf("#202 kind = %q, want task: no epic label and no children", got)
+	}
+	if len(runner.calls) != 3 {
+		// issues list, one hierarchy read, one related-links read for the task.
+		t.Fatalf("calls = %v, want the list, one graphql read and one links read", runner.calls)
+	}
+}
+
 func TestGitLabChangeRequestsSkipsDetailsForMerged(t *testing.T) {
 	runner := gitlabFixtures()
 	runner.fallback = append(runner.fallback,

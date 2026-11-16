@@ -1,0 +1,8 @@
+{"data":{"project":{"workItems":{"nodes":[
+ {"iid":"201","state":"OPEN","title":"epic: billing rewrite","workItemType":{"name":"Issue"},
+  "widgets":[{"type":"HIERARCHY","parent":null,"children":{"nodes":[]}},
+             {"type":"LABELS","labels":{"nodes":[{"title":"priority::normal"},{"title":"type::epic"}]}}]},
+ {"iid":"202","state":"OPEN","title":"feat(billing): read an invoice","workItemType":{"name":"Task"},
+  "widgets":[{"type":"HIERARCHY","parent":null,"children":{"nodes":[]}},
+             {"type":"LABELS","labels":{"nodes":[{"title":"area::billing"},{"title":"priority::normal"},{"title":"type::feature"}]}}]}
+]}}}}
