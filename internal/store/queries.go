@@ -28,6 +28,10 @@ type ProjectRow struct {
 	// Empty is off; the config block is the resolver's fallback.
 	RelayMode string
 	RelaySeat string
+	// EpicBranches is the project's epic-integration-branch opt-in (#484).
+	// DB-owned: the board toggles it, a config apply writes it only when the
+	// file names the key.
+	EpicBranches bool
 }
 
 // ItemRow is one mirrored forge item.
@@ -91,7 +95,8 @@ type EventRow struct {
 func (s *Store) Projects(ctx context.Context) ([]ProjectRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, key, name, forge_kind, forge_project, default_branch, rig, rigs_json, rig_template,
-		       concurrency_cap, enabled, onhold, COALESCE(gate_cmd, ''), labels_json, relay_mode, relay_seat
+		       concurrency_cap, enabled, onhold, COALESCE(gate_cmd, ''), labels_json, relay_mode, relay_seat,
+		       epic_branches
 		FROM project ORDER BY key`)
 	if err != nil {
 		return nil, fmt.Errorf("store: projects: %w", err)
@@ -100,16 +105,16 @@ func (s *Store) Projects(ctx context.Context) ([]ProjectRow, error) {
 	var out []ProjectRow
 	for rows.Next() {
 		var p ProjectRow
-		var enabled, onhold int
+		var enabled, onhold, epicBranches int
 		var rigsJSON string
 		if err := rows.Scan(&p.ID, &p.Key, &p.Name, &p.ForgeKind, &p.ForgeProject, &p.DefaultBranch, &p.Rig,
 			&rigsJSON, &p.RigTemplate, &p.ConcurrencyCap, &enabled, &onhold, &p.GateCmd, &p.LabelsJSON,
-			&p.RelayMode, &p.RelaySeat); err != nil {
+			&p.RelayMode, &p.RelaySeat, &epicBranches); err != nil {
 			return nil, fmt.Errorf("store: projects: %w", err)
 		}
 		p.Rigs = decodeRigs(rigsJSON, p.Rig)
 		p.RigTiers = decodeRigTiers(rigsJSON, p.Rig)
-		p.Enabled, p.OnHold = enabled != 0, onhold != 0
+		p.Enabled, p.OnHold, p.EpicBranches = enabled != 0, onhold != 0, epicBranches != 0
 		out = append(out, p)
 	}
 	return out, rows.Err()

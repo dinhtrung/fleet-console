@@ -7,11 +7,11 @@ import (
 
 // schemaVersion is the number of migrations in migrations. A database at this
 // user_version is current.
-const schemaVersion = 6
+const schemaVersion = 7
 
 // migrations are applied in order; migrations[i] moves user_version from i to
 // i+1. Never edit an applied migration; append a new one.
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6}
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7}
 
 // schemaV1 is design §6 verbatim. Do not add the queue_row, decision, lease or
 // task tables here: that state belongs to the rig.
@@ -135,6 +135,14 @@ CREATE TABLE plan_reason (
   tick_at TEXT NOT NULL,
   PRIMARY KEY (project_id, item_number)
 );
+`
+
+// schemaV7 gives the project its epic-integration-branch opt-in (#484, design
+// D1). The value is DB-owned like onhold: the row is what the board toggles,
+// and a config apply only writes it when the file names the key. Default 0 is
+// today's behaviour — an epic's children target the default branch.
+const schemaV7 = `
+ALTER TABLE project ADD COLUMN epic_branches INTEGER NOT NULL DEFAULT 0;
 `
 
 func (s *Store) migrate(ctx context.Context) error {

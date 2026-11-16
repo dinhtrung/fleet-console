@@ -883,3 +883,43 @@ func TestEpicSerial(t *testing.T) {
 		t.Fatalf("--print-config does not show the setting:\n%s", printed)
 	}
 }
+
+// TestEpicBranches (#484, design D1): the epic-integration-branch opt-in is off
+// when the key is absent, on only when the file says true, and --print-config
+// shows the value the caller threads into dispatch. An absent key stays nil so
+// an --apply-config leaves an existing row's value alone.
+func TestEpicBranches(t *testing.T) {
+	dir := t.TempDir()
+	load := func(body string) *Effective {
+		t.Helper()
+		path := writeConfig(t, t.TempDir(), body)
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		return eff
+	}
+	project := "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n"
+
+	off := load(project)
+	if off.EpicBranchesFor("a") {
+		t.Fatal("absent epic_branches must default to false")
+	}
+	if off.EpicBranchesFor("missing") {
+		t.Fatal("an unknown project must default to off")
+	}
+	if entry := findProjectByKey(off.Projects, "a"); entry == nil || entry.EpicBranches != nil {
+		t.Fatal("an absent key must stay nil so an apply leaves the row alone")
+	}
+	on := load(project + "    epic_branches: true\n")
+	if !on.EpicBranchesFor("a") {
+		t.Fatal("epic_branches: true must opt the project in")
+	}
+	printed, err := on.Print()
+	if err != nil {
+		t.Fatalf("print: %v", err)
+	}
+	if !strings.Contains(string(printed), "epic_branches: true") {
+		t.Fatalf("--print-config does not show the setting:\n%s", printed)
+	}
+}
