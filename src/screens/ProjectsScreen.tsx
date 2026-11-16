@@ -842,7 +842,7 @@ export function ProjectsScreen() {
               />
               <Checkbox
                 label="Land each epic on its own branch"
-                hint="Tasks target epic/<n>-slug; you merge the epic's PR after review."
+                hint="Tasks target epic/<n>-slug; you merge the epic's PR after review — see docs/epic-branches.md."
                 checked={draft.epic_branches}
                 onChange={(next) => change("epic_branches", next)}
               />

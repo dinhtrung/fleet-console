@@ -114,8 +114,15 @@
 
 ## 7. Docs and gates
 
-- [ ] 7.1 Document the option and the operator's job in `docs/` (what the toggle does, what the epic PR contains,
+- [x] 7.1 Document the option and the operator's job in `docs/` (what the toggle does, what the epic PR contains,
   what a wrong-base refusal means, what to do when the branch conflicts). Evidence: the page and a link from the
   project form's hint.
-- [ ] 7.2 Run `go test ./...`, `go vet ./...`, `npm run typecheck`, `npm run lint`, `npm run build`,
+  **Done (PR #498):** `docs/epic-branches.md` is the runbook — the toggle and the `epic::direct` escape, the first
+  dispatch, the epic change request's contents, `wrong_base` and retargeting, behind/conflicted branches, the edge
+  cases the reviews found, and what it does not do. Linked from `README.md`'s config section and referenced from the
+  project form's toggle hint (`see docs/epic-branches.md` — a text pointer, because the board does not serve repo
+  docs and a hardcoded forge URL would be wrong for a self-hosted tool).
+- [x] 7.2 Run `go test ./...`, `go vet ./...`, `npm run typecheck`, `npm run lint`, `npm run build`,
   `openspec validate --all --strict`; paste real output in the PR. Evidence: the commands and exit codes.
+  **Done (PR #498):** all six exit 0; `openspec validate --all --strict` is 35 passed, 0 failed. Output pasted in the
+  PR body. `TestEpicBranchesEndToEndTrace` supplies the end-to-end trace.
