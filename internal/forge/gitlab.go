@@ -345,6 +345,7 @@ type glMergeRequest struct {
 	Draft              bool   `json:"draft"`
 	MergeStatus        string `json:"merge_status"`
 	DetailedMergeState string `json:"detailed_merge_status"`
+	TargetBranch       string `json:"target_branch"`
 	Description        string `json:"description"`
 	WebURL             string `json:"web_url"`
 }
@@ -378,6 +379,7 @@ func (g *GitLab) ChangeRequestsFor(ctx context.Context, accepted map[string]stru
 				// conflict, ci_stale, discussions_pending and so on. It is the
 				// word the repair path quotes.
 				MergeState: mr.DetailedMergeState,
+				Base:       mr.TargetBranch,
 				Body:       mr.Description, ClosesItem: ParseCloses(mr.Description), Title: mr.Title,
 				URL: mr.WebURL,
 			}
@@ -645,6 +647,47 @@ func (g *GitLab) Ready(ctx context.Context, number int) error {
 // Merge merges a change request only if its head is still sha.
 func (g *GitLab) Merge(ctx context.Context, number int, sha string) error {
 	_, err := g.cli.write(ctx, "merge", "mr", "merge", fmt.Sprint(number), "--sha", sha, "--yes", "--repo", g.project)
+	return err
+}
+
+// EnsureBranch creates a branch by name from ref. GitLab's branch API takes a
+// branch name or a commit sha in `ref`, so both spellings cost one call. An
+// existing branch is not an error — the forge already has the ref we need.
+func (g *GitLab) EnsureBranch(ctx context.Context, name, fromRef string) error {
+	_, err := g.cli.write(ctx, "create_branch", "api", "--method", "POST",
+		fmt.Sprintf("projects/%s/repository/branches", g.enc),
+		"-f", "branch="+name, "-f", "ref="+fromRef)
+	if err != nil && branchAlreadyExists(err) {
+		return nil
+	}
+	return err
+}
+
+// OpenChangeRequest opens a merge request with an explicit target branch, so it
+// never silently targets the default branch.
+func (g *GitLab) OpenChangeRequest(ctx context.Context, in OpenChangeRequestInput) (ChangeRequest, error) {
+	args := []string{"mr", "create", "--target-branch", in.Base, "--source-branch", in.Head,
+		"--title", in.Title, "--description", in.Body, "--repo", g.project}
+	if in.Draft {
+		args = append(args, "--draft")
+	}
+	out, err := g.cli.write(ctx, "create_pr", args...)
+	if err != nil {
+		return ChangeRequest{}, err
+	}
+	number, url := createdChangeRequest(string(out))
+	return ChangeRequest{
+		Number: number, State: StateOpen, Branch: in.Head, Base: in.Base,
+		Title: in.Title, Body: in.Body, Draft: in.Draft, URL: url,
+	}, nil
+}
+
+// UpdateBranch asks GitLab to rebase the merge request's head branch onto its
+// target. A conflict is GitLab's answer and surfaces as an error the caller
+// reports, never a retry.
+func (g *GitLab) UpdateBranch(ctx context.Context, number int) error {
+	_, err := g.cli.write(ctx, "update_branch", "api", "--method", "PUT",
+		fmt.Sprintf("projects/%s/merge_requests/%d/rebase", g.enc, number))
 	return err
 }
 

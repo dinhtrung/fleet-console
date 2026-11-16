@@ -20,14 +20,21 @@
 
 ## 3. Forge
 
-- [ ] 3.1 Add `Base string` to `forge.ChangeRequest` (`internal/forge/forge.go:132-160`), parse GitHub `base.ref`
+- [x] 3.1 Add `Base string` to `forge.ChangeRequest` (`internal/forge/forge.go:132-160`), parse GitHub `base.ref`
   and GitLab `target_branch`, and update the fixtures. Evidence: `go test ./internal/forge -run TestGitHubChangeRequests`,
   the GitLab counterpart, and one fixture line showing `"base": {"ref": "epic/476-…"}` / `"target_branch"`.
-- [ ] 3.2 Add the three writes to the `Forge` interface and both adapters plus `fake`: create a branch from a ref,
+  **Done (PR #493):** `ChangeRequest.Base` is read from `base.ref` / `target_branch`; the GitHub and GitLab fixtures
+  carry `epic/476-new-project-dialog-fit`, and `TestGitHubChangeRequests` and
+  `TestGitLabChangeRequestsSkipsDetailsForMerged` assert `Base` equals it.
+- [x] 3.2 Add the three writes to the `Forge` interface and both adapters plus `fake`: create a branch from a ref,
   open a change request with an explicit base, update a branch from its base. Evidence:
   `go test ./internal/forge` with the fake asserting each argv (`gh api --method POST …/git/refs`,
   `gh pr create --base`, `glab api --method POST …/repository/branches`, `glab mr create --target-branch`,
   `gh api --method PUT …/update-branch`, `glab api --method PUT …/rebase`).
+  **Done (PR #493):** `EnsureBranch`, `OpenChangeRequest` and `UpdateBranch` are on the interface, both adapters and
+  the fake; `TestEpicBranchWriteArgv` records and asserts all six argv (pasted in the PR body), and
+  `TestEnsureBranchTreatsExistingAsSuccess` covers the existing-branch and server-error arms. The interface guard
+  walks all 15 methods.
 
 ## 4. Dispatch
 

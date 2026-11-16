@@ -23,8 +23,17 @@ type Fake struct {
 	MarkerErr error
 	ReadyErr  error
 	MergeErr  error
-	Accepted  map[string]struct{}
-	Writes    []Write
+	// BranchErr, OpenCRErr and UpdateBranchErr fail one epic-branch write while
+	// the others succeed, so a caller can test each arm on its own.
+	BranchErr       error
+	OpenCRErr       error
+	UpdateBranchErr error
+	// NextChangeRequestNumber is the number OpenChangeRequest returns and
+	// records. Zero answers 1, so a test that does not care reads a stable
+	// number rather than an accident of call order.
+	NextChangeRequestNumber int
+	Accepted                map[string]struct{}
+	Writes                  []Write
 	// NotesAsked and CRNotesAsked record the numbers each reader was asked
 	// about, in order. A verdict lives on the change request, so CRNotesAsked is
 	// where a test proves the gate read the right conversation.
@@ -60,7 +69,9 @@ type postedNote struct {
 
 // Write is one recorded mutation.
 type Write struct {
-	Op     string // marker | comment | close | merge
+	// Op is marker | ready | comment | close | merge | ensure_branch | open_cr |
+	// update_branch.
+	Op     string
 	Number int
 	Value  string
 }
@@ -226,6 +237,53 @@ func (f *Fake) Merge(_ context.Context, number int, sha string) error {
 		return f.MergeErr
 	}
 	f.Writes = append(f.Writes, Write{Op: "merge", Number: number, Value: sha})
+	return nil
+}
+
+// EnsureBranch records a branch write. The value carries both the branch and the
+// ref it was cut from, so a test can assert what the caller asked for.
+func (f *Fake) EnsureBranch(_ context.Context, name, fromRef string) error {
+	if f.WriteErr != nil {
+		return f.WriteErr
+	}
+	if f.BranchErr != nil {
+		return f.BranchErr
+	}
+	f.Writes = append(f.Writes, Write{Op: "ensure_branch", Value: name + " from " + fromRef})
+	return nil
+}
+
+// OpenChangeRequest records an open write, folds the new request into
+// RequestsValue so a later read sees it, and answers the configured number.
+func (f *Fake) OpenChangeRequest(_ context.Context, in OpenChangeRequestInput) (ChangeRequest, error) {
+	if f.WriteErr != nil {
+		return ChangeRequest{}, f.WriteErr
+	}
+	if f.OpenCRErr != nil {
+		return ChangeRequest{}, f.OpenCRErr
+	}
+	number := f.NextChangeRequestNumber
+	if number == 0 {
+		number = 1
+	}
+	cr := ChangeRequest{
+		Number: number, State: StateOpen, Branch: in.Head, Base: in.Base,
+		Title: in.Title, Body: in.Body, Draft: in.Draft,
+	}
+	f.RequestsValue = append(f.RequestsValue, cr)
+	f.Writes = append(f.Writes, Write{Op: "open_cr", Number: number, Value: in.Base})
+	return cr, nil
+}
+
+// UpdateBranch records an update-branch write.
+func (f *Fake) UpdateBranch(_ context.Context, number int) error {
+	if f.WriteErr != nil {
+		return f.WriteErr
+	}
+	if f.UpdateBranchErr != nil {
+		return f.UpdateBranchErr
+	}
+	f.Writes = append(f.Writes, Write{Op: "update_branch", Number: number})
 	return nil
 }
 
