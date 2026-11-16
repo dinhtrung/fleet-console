@@ -6,7 +6,7 @@
  *  a boolean, a login command the operator runs on the box, and nothing else. */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Plus, RefreshCw, Terminal } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Copy, Plus, RefreshCw, Terminal } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   getPreflight,
@@ -277,10 +277,16 @@ export function DraftPreflight({ input, enabled }: { input: CreateProjectInput; 
   });
   const runtimes = useQuery({ queryKey: ["runtimes"], queryFn: getRuntimes });
 
+  // The panel is four checks — each a badge, a verbatim detail, a fix sentence and a command — plus
+  // the runtime row. Rendered whole under the form it pushed the form's own controls below the fold,
+  // so it starts as one summary line and expands on demand. Disclosure only: the query above runs
+  // whether the details are open or closed, and toggling asks the server for nothing.
+  const [showDetails, setShowDetails] = useState(false);
+  const failing = draft.data ? draft.data.checks.filter((check) => check.state !== "ok") : [];
 
   return (
     <div className="border-t border-rule bg-ground/40">
-      <div className="flex flex-wrap items-baseline gap-2 px-3 pt-2">
+      <div className="flex flex-wrap items-baseline gap-2 px-3 py-2">
         <span className="label text-ink-muted">Checked before it exists</span>
         {draft.isFetching ? <ElapsedChecking /> : null}
         {draft.data ? (
@@ -288,8 +294,32 @@ export function DraftPreflight({ input, enabled }: { input: CreateProjectInput; 
             {draft.data.ready ? "would be ready" : "would not be ready"}
           </Badge>
         ) : null}
+        {draft.data ? (
+          failing.length > 0 ? (
+            <span className="text-[0.6875rem] text-ink-muted">
+              {failing.length} {failing.length === 1 ? "check needs" : "checks need"} attention:{" "}
+              <span className="font-mono text-ink">{failing.map((check) => check.id).join(", ")}</span>
+            </span>
+          ) : (
+            <span className="text-[0.6875rem] text-ink-muted">every check passes</span>
+          )
+        ) : null}
+        {draft.data ? (
+          <Button
+            variant="quiet"
+            size="sm"
+            className="ml-auto"
+            aria-expanded={showDetails}
+            icon={
+              showDetails ? <ChevronUp size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />
+            }
+            onClick={() => setShowDetails((open) => !open)}
+          >
+            {showDetails ? "Hide details" : "Show details"}
+          </Button>
+        ) : null}
       </div>
-      {draft.data ? (
+      {draft.data && showDetails ? (
         <>
           <ul>
             {draft.data.checks.map((check) => (
@@ -302,11 +332,12 @@ export function DraftPreflight({ input, enabled }: { input: CreateProjectInput; 
             onRecheck={() => void draft.refetch()}
           />
         </>
-      ) : (
+      ) : null}
+      {!draft.data ? (
         <p className="px-3 py-2 text-[0.6875rem] text-ink-muted">
           Fill in the key, repo and path and the checks run here, before anything is written.
         </p>
-      )}
+      ) : null}
     </div>
   );
 }
