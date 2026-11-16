@@ -53,9 +53,12 @@ type Actions struct {
 	// that predates the field keeps today's destination.
 	Reviewer string
 	// EpicBranches is the project's epic-integration-branch opt-in (#484), read
-	// once per tick from the effective config. False is today's behaviour: every
+	// once per tick from the project row. False is today's behaviour: every
 	// item's branch is cut from the default branch.
 	EpicBranches bool
+	// DefaultBranch is the branch a non-epic item's change request must target
+	// when the epic-branch check runs. Empty is "main".
+	DefaultBranch string
 }
 
 // epicDirectLabel opts one epic out of the project toggle (design D1): its

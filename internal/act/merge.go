@@ -147,6 +147,9 @@ func (a *Actions) Merge(ctx context.Context, dispatchID int64, item int) (*Merge
 	if request == nil {
 		return nil, fmt.Errorf("refusing merge: no change request closes #%d", item)
 	}
+	if err := refuseEpicHead(*request); err != nil {
+		return nil, err
+	}
 	if !forge.SameSHA(verdict.SHA, request.HeadSHA) {
 		return nil, fmt.Errorf("refusing merge: verdict sha %s does not match head %s", verdict.SHA, request.HeadSHA)
 	}
@@ -161,6 +164,11 @@ func (a *Actions) Merge(ctx context.Context, dispatchID int64, item int) (*Merge
 	}
 	if closes := forge.ParseCloses(request.Body); closes != item {
 		return nil, fmt.Errorf("refusing merge: body does not close #%d", item)
+	}
+	// The base check (#484, design D4) runs before anything mutates the change
+	// request, so a wrong-targeted request is never readied.
+	if err := a.checkBase(ctx, item, *request); err != nil {
+		return nil, err
 	}
 
 	// A draft pull request cannot be merged: GitHub answers `Pull request is still a
@@ -361,6 +369,104 @@ func (a *Actions) noteBranch(ctx context.Context, item int, request forge.Change
 	}
 }
 
+// epicBranchNumber reads the epic number a branch names: epic/<n>-anything. It
+// is the reader half of design D2's prefix rule, so a retitled epic keeps the
+// same branch (the writer names it once, from the title it had then).
+func epicBranchNumber(branch string) (int, bool) {
+	if !strings.HasPrefix(branch, "epic/") {
+		return 0, false
+	}
+	return branchItem(branch)
+}
+
+// refuseEpicHead refuses to merge the epic's own delivery (#484, design D4): a
+// head branch named epic/<n>- is the epic's, whatever its body or labels say.
+// The operator merges it, after T6 opens it.
+func refuseEpicHead(request forge.ChangeRequest) error {
+	if number, ok := epicBranchNumber(request.Branch); ok {
+		return fmt.Errorf(
+			"refusing merge: change request #%d is the epic delivery on %s (epic #%d); the gate never merges an epic, the operator does",
+			request.Number, request.Branch, number)
+	}
+	return nil
+}
+
+// baseRule is the base one item's change request must target (#484, design D4).
+// A non-empty prefix means an epic branch, matched by prefix so a retitle does
+// not void it; otherwise exact is the project's default branch. An empty rule is
+// "no constraint", which is the toggle-off case.
+type baseRule struct {
+	prefix string
+	exact  string
+	want   string
+}
+
+// baseRuleFor derives the expected base from the item's parent and the project
+// toggle. Toggle off is today's behaviour and constrains nothing; toggle on
+// constrains every item — a child of an open epic to epic/<n>-, anything else to
+// the default branch. A mirror that cannot name an open epic parent falls back
+// to the default branch, which refuses rather than merges to a guessed base.
+func (a *Actions) baseRuleFor(ctx context.Context, item int) baseRule {
+	if !a.EpicBranches || a.Store == nil {
+		return baseRule{}
+	}
+	fallback := baseRule{exact: a.defaultBranchName(), want: a.defaultBranchName()}
+	row, err := a.Store.Item(ctx, a.ProjectID, item)
+	if err != nil || row == nil || row.ParentNumber == nil {
+		return fallback
+	}
+	parent, err := a.Store.Item(ctx, a.ProjectID, *row.ParentNumber)
+	if err != nil || parent == nil || parent.Kind != string(forge.KindEpic) || parent.State != forge.StateOpen {
+		return fallback
+	}
+	prefix := fmt.Sprintf("epic/%d-", parent.Number)
+	return baseRule{prefix: prefix, want: prefix + "…"}
+}
+
+func (a *Actions) defaultBranchName() string {
+	if a.DefaultBranch != "" {
+		return a.DefaultBranch
+	}
+	return "main"
+}
+
+// checkBase refuses a change request that targets the wrong branch (#484,
+// design D4). The base is compared by prefix for a child of an opted-in epic and
+// exactly for anything else; an unconstrained rule (toggle off) permits today's
+// behaviour, and an empty base never counts as a match.
+func (a *Actions) checkBase(ctx context.Context, item int, request forge.ChangeRequest) error {
+	rule := a.baseRuleFor(ctx, item)
+	switch {
+	case rule.prefix == "" && rule.exact == "":
+		return nil
+	case rule.prefix != "" && strings.HasPrefix(request.Base, rule.prefix):
+		return nil
+	case rule.prefix == "" && request.Base == rule.exact:
+		return nil
+	}
+	a.noteWrongBase(ctx, item, request, rule.want)
+	return fmt.Errorf("refusing merge: wrong_base: change request targets %s, expected %s", request.Base, rule.want)
+}
+
+// noteWrongBase leaves one comment on the item telling the operator to retarget,
+// deduped per (item, head, base) through the ledger so a stuck change request is
+// one note rather than one per tick. Best-effort like noteBranch: a failed
+// comment never turns the refusal into a merge.
+func (a *Actions) noteWrongBase(ctx context.Context, item int, request forge.ChangeRequest, want string) {
+	subject := fmt.Sprintf("#%d", item)
+	key := "base=" + request.Base + ";head=" + request.HeadSHA + ";"
+	if noted, err := a.Store.HasEvent(ctx, "change_request.wrong_base", subject, key); err != nil || noted {
+		return
+	}
+	text := fmt.Sprintf(
+		"This change request targets %q, but this project's epic-branch rule expects %q. Retarget the change request's base branch to %s; the next tick merges it once the verdict names the head.",
+		request.Base, want, want)
+	if err := a.Forge.Comment(ctx, item, text); err != nil {
+		return
+	}
+	_, _ = a.event(ctx, "act", "change_request.wrong_base", subject, key+" "+text)
+}
+
 // MergeAdopted merges a change request the app never dispatched. It enforces the
 // same four facts as Merge — mergeable, `Closes #<item>`, green checks, ACCEPT at
 // the head sha — plus two guards adoption alone needs: a live dispatch on another
@@ -373,6 +479,12 @@ func (a *Actions) noteBranch(ctx context.Context, item int, request forge.Change
 func (a *Actions) MergeAdopted(ctx context.Context, projectID int64, item int, request forge.ChangeRequest) (*MergeResult, error) {
 	if a.Store == nil || a.Forge == nil {
 		return nil, fmt.Errorf("merge adopted: store and forge are required")
+	}
+	// Adoption is the other way a change request reaches the gate, so the epic
+	// guard belongs here too: a head named epic/<n>- is never merged, whether or
+	// not a dispatch exists (#484, design D4).
+	if err := refuseEpicHead(request); err != nil {
+		return nil, err
 	}
 	// A live dispatch on a *different* branch is the dangerous case: two branches
 	// close one item, and which work survives is a human decision, so this refuses
@@ -445,6 +557,9 @@ func (a *Actions) MergeAdopted(ctx context.Context, projectID int64, item int, r
 	}
 	if closes := forge.ParseCloses(request.Body); closes != item {
 		return nil, fmt.Errorf("refusing merge: body does not close #%d", item)
+	}
+	if err := a.checkBase(ctx, item, request); err != nil {
+		return nil, err
 	}
 
 	// The trail is written before the merge, because it is the only record of why

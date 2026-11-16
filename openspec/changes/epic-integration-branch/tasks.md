@@ -65,11 +65,20 @@
 
 ## 5. Merge gate
 
-- [ ] 5.1 Refuse a task change request whose `Base` is not its epic branch, with the reason string from 1.2 and a
+- [x] 5.1 Refuse a task change request whose `Base` is not its epic branch, with the reason string from 1.2 and a
   note on the item (`internal/act/merge.go:106`, `internal/act/review.go`). Evidence: a test where the CR targets
   `main` and the merge does not happen; the note text is asserted.
-- [ ] 5.2 Guard the epic's own change request: a head branch matching `epic/<n>-` is never merged by the gate.
+  **Done (PR #496):** `checkBase` runs on both merge paths before any mutation; the reason is
+  `wrong_base: change request targets <got>, expected <want>` (the epic branch matched by prefix `epic/<n>-`), and
+  `noteWrongBase` leaves one deduped item comment telling the operator to retarget.
+  `TestMergeRefusesAChildWhoseBaseIsNotItsEpicBranch` asserts the reason, the note and that no merge happened. The
+  base check runs only for an opted-in project, so a toggle-off project merges exactly as before.
+- [x] 5.2 Guard the epic's own change request: a head branch matching `epic/<n>-` is never merged by the gate.
   Evidence: a test with an accepted epic CR that stays unmerged and a skip line naming the branch.
+  **Done (PR #496):** `refuseEpicHead` runs first on both `Merge` and `MergeAdopted`, so the dispatch path and the
+  no-dispatch adoption path both refuse with
+  `refusing merge: change request #N is the epic delivery on <branch> (epic #n); the gate never merges an epic, the operator does`.
+  `TestGateNeverMergesTheEpicDelivery` covers both paths and asserts neither merged.
 
 ## 6. Completion and rollup
 
