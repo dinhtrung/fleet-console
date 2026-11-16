@@ -673,7 +673,7 @@ export function ProjectsScreen() {
           if (!next) closeDialog();
         }}
       >
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>
               {created ? "Project created" : editing ? `Edit ${editing.name}` : "New project"}
@@ -683,10 +683,15 @@ export function ProjectsScreen() {
                 ? "The project is written and on the board. Below is what the service could not check yet."
                 : editing
                   ? "The same fields the create form validates, written back over the entry in config.yaml. The service validates the same rules and names the field it refuses."
-                  : "Every field here is a field in config.yaml. The service validates the same rules and names the field it refuses."}
+                  : "Every field maps to config.yaml, and the service validates the key, forge, repo, rigs and runtime — naming the field it refuses."}
             </DialogDescription>
           </DialogHeader>
 
+          {/* The body is the one scrolling region: the header and footer are their own grid rows
+              and stay put, and `min-h-0` lets this row shrink so the popup, not the page, owns the
+              scroll. The live panel lives inside it, so expanding the panel scrolls the body rather
+              than pushing the footer off-screen. */}
+          <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
           {created ? (
             <div className="flex flex-col gap-2">
               <p className="text-body text-ink">
@@ -851,6 +856,11 @@ export function ProjectsScreen() {
               ) : null}
             </form>
           )}
+          {/* The live panel: it runs against the draft, and creation stays enabled whatever it
+              says. Refusing to write a half-configured project is how the registry starts lying
+              about what exists. */}
+          {!created && !editing && draft.key.trim() ? <DraftPreflight input={draftInput(draft)} enabled /> : null}
+          </div>
 
           <DialogFooter>
             {created ? (
@@ -868,10 +878,6 @@ export function ProjectsScreen() {
               </>
             )}
           </DialogFooter>
-          {/* The live panel: it runs against the draft, and creation stays enabled whatever it
-              says. Refusing to write a half-configured project is how the registry starts lying
-              about what exists. */}
-          {!created && !editing && draft.key.trim() ? <DraftPreflight input={draftInput(draft)} enabled /> : null}
         </DialogContent>
       </Dialog>
 
