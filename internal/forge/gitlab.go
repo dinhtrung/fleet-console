@@ -78,10 +78,18 @@ func (g *GitLab) Items(ctx context.Context, timeout Timeout) ([]Item, error) {
 		if !strings.EqualFold(issue.State, "opened") {
 			state = "closed"
 		}
-		byNumber[issue.IID] = &Item{
+		item := &Item{
 			Number: issue.IID, Kind: KindTask, State: state, Title: issue.Title,
 			Body: issue.Description, Labels: issue.Labels, URL: issue.WebURL,
 		}
+		if hasEpicLabel(issue.Labels) {
+			// The same rule as GitHub (github.go:74): the label is the only fact
+			// that says "container" before the first child is linked, and a GitLab
+			// epic whose tasks are linked by relation rather than hierarchy would
+			// otherwise be dispatched as a task.
+			item.Kind = KindEpic
+		}
+		byNumber[issue.IID] = item
 		numbers = append(numbers, issue.IID)
 	}
 

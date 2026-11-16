@@ -162,11 +162,19 @@ func TestGitLabItems(t *testing.T) {
 	for _, item := range items {
 		byNumber[item.Number] = item
 	}
-	if len(items) != 4 {
-		t.Fatalf("items = %d, want 4", len(items))
+	if len(items) != 5 {
+		t.Fatalf("items = %d, want 5", len(items))
 	}
 	if byNumber[101].Kind != KindEpic || byNumber[102].Kind != KindEpic {
 		t.Fatalf("#101/#102 = %+v/%+v, want epics", byNumber[101], byNumber[102])
+	}
+	// #112 carries type::epic and has no hierarchy children: the label alone must
+	// classify it, or the planner dispatches the whole epic (github.go:74 rule).
+	if byNumber[112].Kind != KindEpic {
+		t.Fatalf("#112 = %+v, want an epic from the label alone", byNumber[112])
+	}
+	if byNumber[110].Kind != KindTask {
+		t.Fatalf("#110 = %+v, want a task (no epic label, no children)", byNumber[110])
 	}
 	if byNumber[110].Parent == nil || *byNumber[110].Parent != 111 {
 		t.Fatalf("#110 parent = %v, want 111", byNumber[110].Parent)
