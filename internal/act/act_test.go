@@ -42,10 +42,16 @@ type fakeGit struct {
 	worktrees int
 	reused    bool
 	err       error
-	// worktreePaths and branches record what the dispatcher asked for, so a test can assert the
-	// worktree layout and the branch without running git.
+	// worktreePaths, branches and bases record what the dispatcher asked for, so a test can
+	// assert the worktree layout, the branch and the commit it was cut from without running git.
 	worktreePaths []string
 	branches      []string
+	bases         []string
+	// refSHAs answers RefSHA by ref; refErr fails every resolve (the branch-disappeared arm),
+	// and refsAsked records the refs the dispatch read (#484).
+	refSHAs   map[string]string
+	refErr    error
+	refsAsked []string
 	// ancestors is the set of shas this repository says are ancestors of a
 	// head, keyed "<ancestor> <head>"; ancestorErr answers the check with a
 	// failure instead (superseded-verdict, D2: the caller must ask).
@@ -63,11 +69,23 @@ func (g *fakeGit) BaseSHA(context.Context) (string, error) {
 	}
 	return "base-sha", nil
 }
-func (g *fakeGit) WorktreeAddOrReuse(_ context.Context, worktree, branch, _ string) (bool, error) {
+func (g *fakeGit) WorktreeAddOrReuse(_ context.Context, worktree, branch, base string) (bool, error) {
 	g.worktrees++
 	g.worktreePaths = append(g.worktreePaths, worktree)
 	g.branches = append(g.branches, branch)
+	g.bases = append(g.bases, base)
 	return g.reused, g.err
+}
+
+func (g *fakeGit) RefSHA(_ context.Context, ref string) (string, error) {
+	g.refsAsked = append(g.refsAsked, ref)
+	if g.refErr != nil {
+		return "", g.refErr
+	}
+	if sha, ok := g.refSHAs[ref]; ok {
+		return sha, nil
+	}
+	return "", fmt.Errorf("git rev-parse %s: unknown revision", ref)
 }
 
 func (g *fakeGit) IsAncestor(_ context.Context, ancestor, descendant string) (bool, error) {

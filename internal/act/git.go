@@ -15,6 +15,10 @@ import (
 type Git interface {
 	Fetch(ctx context.Context) error
 	BaseSHA(ctx context.Context) (string, error)
+	// RefSHA resolves one commit-ish (e.g. "origin/epic/476-x") to a full sha.
+	// An unknown ref is an error: the caller must never read "no answer" as
+	// "the default branch", which is the silent fallback epic branches forbid.
+	RefSHA(ctx context.Context, ref string) (string, error)
 	// WorktreeAddOrReuse reuses an existing worktree, adopts an existing branch, or
 	// creates both. It never deletes anything.
 	WorktreeAddOrReuse(ctx context.Context, worktree, branch, base string) (reused bool, err error)
@@ -56,6 +60,18 @@ func (g ExecGit) BaseSHA(ctx context.Context) (string, error) {
 		branch = "main"
 	}
 	out, err := g.run(ctx, "rev-parse", "origin/"+branch)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// RefSHA resolves one commit-ish, after a fetch, to a full sha.
+func (g ExecGit) RefSHA(ctx context.Context, ref string) (string, error) {
+	if strings.TrimSpace(ref) == "" {
+		return "", fmt.Errorf("git rev-parse: a ref is required")
+	}
+	out, err := g.run(ctx, "rev-parse", ref)
 	if err != nil {
 		return "", err
 	}

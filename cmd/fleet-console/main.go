@@ -953,6 +953,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 					LifecycleFailed: lifecycleFailed, RelayMode: relayMode, RelaySeat: relaySeat,
 					RunningSeats: runningSeats(projectRead.Seats),
 					Reviewer:     eff.ReviewerFor(projectKey),
+					// The epic-integration-branch opt-in (#484), DB-owned like
+					// onhold: the row answers first, and a file's key reaches it
+					// through --apply-config / the boot pass.
+					EpicBranches: project.EpicBranches,
 					// A raised decision reaches the phone from here: the tick
 					// knows the row exists, and the notifier owns the transport.
 					// The note goes on the item first when decision_notes is on, so
