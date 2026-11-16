@@ -32,8 +32,8 @@ type Fake struct {
 	// records. Zero answers 1, so a test that does not care reads a stable
 	// number rather than an accident of call order.
 	NextChangeRequestNumber int
-	Accepted  map[string]struct{}
-	Writes    []Write
+	Accepted                map[string]struct{}
+	Writes                  []Write
 	// NotesAsked and CRNotesAsked record the numbers each reader was asked
 	// about, in order. A verdict lives on the change request, so CRNotesAsked is
 	// where a test proves the gate read the right conversation.

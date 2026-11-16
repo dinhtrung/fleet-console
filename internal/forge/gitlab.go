@@ -369,9 +369,9 @@ func (g *GitLab) ChangeRequestsFor(ctx context.Context, accepted map[string]stru
 				// detailed_merge_status names why: cannot_be_merged for a
 				// conflict, ci_stale, discussions_pending and so on. It is the
 				// word the repair path quotes.
-				MergeState:  mr.DetailedMergeState,
-				Base:        mr.TargetBranch,
-				Body:        mr.Description, ClosesItem: ParseCloses(mr.Description), Title: mr.Title,
+				MergeState: mr.DetailedMergeState,
+				Base:       mr.TargetBranch,
+				Body:       mr.Description, ClosesItem: ParseCloses(mr.Description), Title: mr.Title,
 				URL: mr.WebURL,
 			}
 			if mrNeedsDetails(mr, request.ClosesItem, accepted) {
