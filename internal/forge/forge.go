@@ -5,8 +5,10 @@
 // the gh/glab CLI stores only — the app never reads, stores or logs a token. Reads are
 // bounded by a per-tick request budget; a 401, a rate limit or a 5xx surfaces as
 // ErrStale so the project is marked stale rather than rendered as an empty board,
-// while a 403 is a distinct ErrForbidden naming the operation. The only mutations
-// are the four writes on Forge.
+// while a 403 is a distinct ErrForbidden naming the operation. The mutations are
+// the writes on Forge: the marker label, a comment, closing an item, merging a
+// change request, and the three epic-branch writes (ensure a branch, open a
+// change request, update a branch).
 package forge
 
 import (
@@ -135,6 +137,11 @@ type ChangeRequest struct {
 	Merged  bool   `json:"merged"` // the change landed
 	HeadSHA string `json:"head_sha"`
 	Branch  string `json:"branch,omitempty"` // the head's branch name, e.g. feature/138-...
+	// Base is the branch this change request targets (epic-integration-branch
+	// #484, design D3): GitHub's base.ref, GitLab's target_branch. The merge
+	// gate compares it to the child's epic branch; empty means the forge
+	// reported none, which never counts as a match.
+	Base string `json:"base,omitempty"`
 	// Title is the forge's own title, for the no-item diagnostic only
 	// (stale-verdict-visibility #314): it names an item mentioned elsewhere
 	// and nothing else. Merge, MergeAdopted, CaptureVerdict and decide never
@@ -219,8 +226,20 @@ type CandidateReader interface {
 	ChangeRequestsFor(ctx context.Context, accepted map[string]struct{}) ([]ChangeRequest, error)
 }
 
-// Forge is the whole interface the app has to a forge. Exactly four writes: the marker
-// label, a comment, closing an item, and merging a change request at a sha.
+// OpenChangeRequestInput is one change request to open. Base is required: a
+// change request opened without it targets the forge's default branch, which is
+// exactly the behaviour the epic-branch option exists to change (design D3).
+type OpenChangeRequestInput struct {
+	Head  string
+	Base  string
+	Title string
+	Body  string
+	Draft bool
+}
+
+// Forge is the whole interface the app has to a forge. The writes: the marker
+// label, a comment, closing an item, merging a change request at a sha, and the
+// three epic-branch writes below.
 //
 // Notes and CRNotes are two calls on purpose. On GitHub both read the same
 // issue-comment stream, but under different numbers: a pull request has its own
@@ -262,6 +281,19 @@ type Forge interface {
 	// the integrator, not to a seat.
 	Ready(ctx context.Context, number int) error
 	Merge(ctx context.Context, number int, sha string) error
+	// EnsureBranch creates branch name pointing at fromRef. An existing branch is
+	// not an error: whether this tick created it or a previous one did, the forge
+	// now has the ref we need. fromRef is a commit sha or a branch the forge can
+	// resolve; a branch ref costs one extra read on GitHub, whose refs API takes
+	// a sha.
+	EnsureBranch(ctx context.Context, name, fromRef string) error
+	// OpenChangeRequest opens one change request with an explicit base and
+	// returns it with the forge's number and URL.
+	OpenChangeRequest(ctx context.Context, in OpenChangeRequestInput) (ChangeRequest, error)
+	// UpdateBranch asks the forge to update a change request's head branch from
+	// its base (GitHub update-branch, GitLab rebase). A conflict is the forge's
+	// answer and surfaces as an error the caller reports, not a retry.
+	UpdateBranch(ctx context.Context, number int) error
 }
 
 // normalizeState maps a payload's state name onto the two states the app acts on.
@@ -274,6 +306,32 @@ func normalizeState(number int, raw string) (string, error) {
 		return state, nil
 	}
 	return "", fmt.Errorf("forge: item #%d reported state %q, which is neither open nor closed", number, raw)
+}
+
+// branchAlreadyExists reports whether a create-branch refusal is the forge
+// saying the ref is already there. EnsureBranch treats it as success: the caller
+// wants the branch to exist, not to have been the one that created it.
+func branchAlreadyExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already exists")
+}
+
+// createdChangeRequest reads the number and URL a forge prints when it opens a
+// change request. Both CLIs print the change request's URL on one line; an
+// answer that carries no URL is a number 0, which the caller must treat as "the
+// forge did not say", never as a created request.
+func createdChangeRequest(out string) (int, string) {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	line := strings.TrimSpace(lines[len(lines)-1])
+	number := 0
+	if idx := strings.LastIndex(line, "/"); idx >= 0 {
+		if parsed, err := strconv.Atoi(line[idx+1:]); err == nil {
+			number = parsed
+		}
+	}
+	return number, line
 }
 
 // Timeout scales one project's read deadline with the work in it:

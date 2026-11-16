@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -294,6 +296,9 @@ type ghPull struct {
 		SHA string `json:"sha"`
 		Ref string `json:"ref"`
 	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
 }
 
 // ChangeRequests reads open pull requests, their changed files and the head's checks.
@@ -322,7 +327,7 @@ func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 			// checks and its mergeable flag are dead weight the tick must not pay for.
 			requests = append(requests, ChangeRequest{
 				Number: pull.Number, State: pull.State, Merged: pull.MergedAt != nil,
-				HeadSHA: pull.Head.SHA, Branch: pull.Head.Ref, Draft: pull.Draft, Body: pull.Body,
+				HeadSHA: pull.Head.SHA, Branch: pull.Head.Ref, Base: pull.Base.Ref, Draft: pull.Draft, Body: pull.Body,
 				Title:      pull.Title,
 				ClosesItem: ParseCloses(pull.Body), URL: pull.HTMLURL,
 			})
@@ -363,7 +368,7 @@ func (g *GitHub) ChangeRequests(ctx context.Context) ([]ChangeRequest, error) {
 		}
 		requests = append(requests, ChangeRequest{
 			Number: pull.Number, State: pull.State, Merged: pull.MergedAt != nil,
-			HeadSHA: pull.Head.SHA, Branch: pull.Head.Ref, Draft: pull.Draft,
+			HeadSHA: pull.Head.SHA, Branch: pull.Head.Ref, Base: pull.Base.Ref, Draft: pull.Draft,
 			Mergeable: mergeable, MergeState: state, Title: pull.Title,
 			Body: pull.Body, ClosesItem: ParseCloses(pull.Body),
 			Checks: checks, DocsOnly: DocsOnly(paths), URL: pull.HTMLURL,
@@ -551,4 +556,96 @@ func (g *GitHub) Merge(ctx context.Context, number int, sha string) error {
 	_, err := g.cli.write(ctx, "merge", "pr", "merge", fmt.Sprint(number), "--squash",
 		"--match-head-commit", sha, "-R", g.slug)
 	return err
+}
+
+// CommitRef is the spelling GitHub's refs API takes: a full 40-hex commit id.
+var commitRef = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
+
+// EnsureBranch creates refs/heads/<name> pointing at fromRef. The refs API takes
+// a commit sha, so a branch name is resolved with one read first; a caller
+// holding the base sha (the dispatch does) pays nothing extra. An existing
+// branch is not an error — the forge already has the ref we need.
+func (g *GitHub) EnsureBranch(ctx context.Context, name, fromRef string) error {
+	sha := fromRef
+	if !commitRef.MatchString(fromRef) {
+		raw, err := g.cli.api(ctx, fmt.Sprintf("repos/%s/git/ref/heads/%s", g.slug, fromRef))
+		if err != nil {
+			return err
+		}
+		var ref struct {
+			Object struct {
+				SHA string `json:"sha"`
+			} `json:"object"`
+		}
+		if err := json.Unmarshal(raw, &ref); err != nil {
+			return fmt.Errorf("forge: decode GitHub ref %q: %w", fromRef, err)
+		}
+		if ref.Object.SHA == "" {
+			return fmt.Errorf("forge: GitHub ref %q answered no sha", fromRef)
+		}
+		sha = ref.Object.SHA
+	}
+	_, err := g.cli.write(ctx, "create_branch", "api", "--method", "POST",
+		fmt.Sprintf("repos/%s/git/refs", g.slug),
+		"-f", "ref=refs/heads/"+name, "-f", "sha="+sha)
+	if err != nil && branchAlreadyExists(err) {
+		return nil
+	}
+	return err
+}
+
+// OpenChangeRequest opens a pull request with an explicit base, so it never
+// silently targets the default branch. The body goes through a temp file
+// (--body-file) because it can carry a whole child list, longer than an argv
+// safely holds; the file is removed once the verb returns.
+func (g *GitHub) OpenChangeRequest(ctx context.Context, in OpenChangeRequestInput) (ChangeRequest, error) {
+	path, cleanup, err := writeBodyFile(in.Body)
+	if err != nil {
+		return ChangeRequest{}, err
+	}
+	defer cleanup()
+	args := []string{"pr", "create", "--base", in.Base, "--head", in.Head,
+		"--title", in.Title, "--body-file", path, "-R", g.slug}
+	if in.Draft {
+		args = append(args, "--draft")
+	}
+	out, err := g.cli.write(ctx, "create_pr", args...)
+	if err != nil {
+		return ChangeRequest{}, err
+	}
+	number, url := createdChangeRequest(string(out))
+	return ChangeRequest{
+		Number: number, State: StateOpen, Branch: in.Head, Base: in.Base,
+		Title: in.Title, Body: in.Body, Draft: in.Draft, URL: url,
+	}, nil
+}
+
+// UpdateBranch asks GitHub to update the pull request's head branch from its
+// base. It is the read-only-by-default drift repair (design D7): a conflict is
+// GitHub's answer and surfaces as an error the caller reports.
+func (g *GitHub) UpdateBranch(ctx context.Context, number int) error {
+	_, err := g.cli.write(ctx, "update_branch", "api", "--method", "PUT",
+		fmt.Sprintf("repos/%s/pulls/%d/update-branch", g.slug, number))
+	return err
+}
+
+// writeBodyFile writes one change request body to a temp file and returns its
+// path with the cleanup that removes it.
+func writeBodyFile(body string) (string, func(), error) {
+	file, err := os.CreateTemp("", "fleet-console-change-request-*.md")
+	if err != nil {
+		return "", nil, fmt.Errorf("forge: write change request body: %w", err)
+	}
+	name := file.Name()
+	cleanup := func() { _ = os.Remove(name) }
+	if _, err := file.WriteString(body); err != nil {
+		file.Close()
+		cleanup()
+		return "", nil, fmt.Errorf("forge: write change request body: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("forge: write change request body: %w", err)
+	}
+	return name, cleanup, nil
 }

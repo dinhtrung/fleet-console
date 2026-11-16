@@ -119,6 +119,10 @@ func TestGitHubChangeRequests(t *testing.T) {
 	if cr.Number != 14 || cr.HeadSHA != "a21e0626300f54f2c062bbb8026fe67bbdf47c3d" {
 		t.Fatalf("cr = %+v, want PR #14 at its head", cr)
 	}
+	// Base is read from GitHub's base.ref (#486, design D3).
+	if cr.Base != "epic/476-new-project-dialog-fit" {
+		t.Fatalf("base = %q, want the fixture's epic branch", cr.Base)
+	}
 	if cr.ClosesItem != 3 {
 		t.Fatalf("closes = %d, want 3", cr.ClosesItem)
 	}
@@ -212,6 +216,10 @@ func TestGitLabChangeRequestsSkipsDetailsForMerged(t *testing.T) {
 	}
 	if merged.HeadSHA != "7170c3375aea1ee41f140ed3f3e4e8748679c2d6" {
 		t.Fatalf("head = %q", merged.HeadSHA)
+	}
+	// Base is read from GitLab's target_branch (#486, design D3).
+	if merged.Base != "epic/476-new-project-dialog-fit" {
+		t.Fatalf("base = %q, want the fixture's epic branch", merged.Base)
 	}
 	if merged.DocsOnly || merged.Checks != nil {
 		t.Fatalf("merged MR details = docs_only %v checks %+v, want none", merged.DocsOnly, merged.Checks)
