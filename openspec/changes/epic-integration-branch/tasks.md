@@ -82,17 +82,33 @@
 
 ## 6. Completion and rollup
 
-- [ ] 6.1 Extend the branch mirror to parse `epic/<n>-` alongside `feature/<n>-` (`internal/act/merge.go:313-334`),
+- [x] 6.1 Extend the branch mirror to parse `epic/<n>-` alongside `feature/<n>-` (`internal/act/merge.go:313-334`),
   so the tick can see the epic branch's open/merged change request. Evidence: a branch-parsing table test with both
   prefixes.
-- [ ] 6.2 When every child is closed and the epic branch is ahead, open exactly one epic request with the child
+  **Done (PR #497):** `branchItem` reads `feature/<n>-` and `epic/<n>-` alike; `epicBranchNumber` is the epic-only
+  view and `openEpicDelivery` finds the epic's open request (never a merged/closed one, never a feature branch).
+  `TestBranchParsingReadsBothPrefixes` is the table test; `TestOpenEpicDeliveryFindsTheDelivery` covers the filter.
+- [x] 6.2 When every child is closed and the epic branch is ahead, open exactly one epic request with the child
   list, `Not merged` section and `Closes #<epic>`; reuse an open one. Evidence: a test asserting one call, the body
   lines, and zero calls on the second tick.
-- [ ] 6.3 Hold Rollup and Sweep while the epic request is open: skip with `integration branch open`
+  **Done (PR #497):** `completeEpic` opens one non-draft `epic/<n>-` → default request titled `Epic #n: <title>`,
+  the body listing every child under `Merged`/`Not merged` and carrying `Closes #<epic>`. Both the sweep and the
+  rollup path reach it; a `completed` map keeps one per tick and the open delivery holds later ticks.
+  `TestCompletionOpensOneEpicRequest` asserts one call, the body lines and zero on the second tick;
+  `TestRollupPathCompletesOnLastChild` covers the merge path.
+- [x] 6.3 Hold Rollup and Sweep while the epic request is open: skip with `integration branch open`
   (`internal/act/rollup.go:59-90`, `internal/act/sweep.go:30-60`). Evidence: tests for both functions and the tick
   line.
-- [ ] 6.4 Ask the forge to update the epic branch before opening the request; report a conflict and still open the
+  **Done (PR #497):** `Rollup` and `Sweep` take the delivery and return
+  `integration branch open: <branch> has change request #<n>` — not quiet, so the tick's line names both.
+  `TestRollupAndSweepHoldOnAnOpenDelivery` covers both; the second-tick assertion in
+  `TestCompletionOpensOneEpicRequest` checks the tick's skip line.
+- [x] 6.4 Ask the forge to update the epic branch before opening the request; report a conflict and still open the
   request. Evidence: a fake returning a conflict and the test's skip/notice line.
+  **Done (PR #497):** after opening, when the default has commits the epic branch lacks, `completeEpic` asks
+  `Forge.UpdateBranch`; a refusal records `epic branch is behind and cannot be updated` and the request stays open.
+  The forge's update is per change request, so it runs with the request as its handle — the outcome (reported, never
+  forced) is D7's. `TestCompletionConflictStillOpens` quotes the notice.
 
 ## 7. Docs and gates
 

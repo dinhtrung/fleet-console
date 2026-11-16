@@ -22,8 +22,8 @@ func ensuredEpicBranch(writes []forge.Write) bool {
 	return false
 }
 
-// epicBranchName is slug("Epic forty eight") under epic/<n>- (#484, design D2).
-const epicBranchName = "epic/21-epic-forty-eight"
+// epicBranchFixtureName is slug("Epic forty eight") under epic/<n>- (#484, design D2).
+const epicBranchFixtureName = "epic/21-epic-forty-eight"
 
 func epicParent(number int, labels ...string) *forge.Item {
 	return &forge.Item{Number: number, Kind: forge.KindEpic, State: forge.StateOpen, Title: "Epic forty eight", Labels: labels}
@@ -55,7 +55,7 @@ func TestDispatchEpicChildCutsFromEpicHead(t *testing.T) {
 	ctx := context.Background()
 	st := newStore(t)
 	pid := newProject(t, st)
-	git := &fakeGit{refSHAs: map[string]string{"origin/" + epicBranchName: "default-head"}}
+	git := &fakeGit{refSHAs: map[string]string{"origin/" + epicBranchFixtureName: "default-head"}}
 	fake := forge.NewFake(forge.KindGitHub)
 	actions := epicActions(st, git, fake, true)
 	root := t.TempDir()
@@ -68,7 +68,7 @@ func TestDispatchEpicChildCutsFromEpicHead(t *testing.T) {
 		t.Fatalf("first dispatch: %v", err)
 	}
 	// The branch was ensured from the default head and the worktree cut there.
-	if !hasWrite(fake.Writes, "ensure_branch", 0, epicBranchName+" from "+"base-sha") {
+	if !hasWrite(fake.Writes, "ensure_branch", 0, epicBranchFixtureName+" from "+"base-sha") {
 		t.Fatalf("ensure calls = %+v, want the epic branch from the default head", fake.Writes)
 	}
 	if first.BaseSHA != "default-head" || git.bases[0] != "default-head" {
@@ -76,14 +76,14 @@ func TestDispatchEpicChildCutsFromEpicHead(t *testing.T) {
 			first.BaseSHA, git.bases[0])
 	}
 	brief := readBrief(t, first.BriefPath)
-	if !strings.Contains(brief, "PR base: "+epicBranchName) {
+	if !strings.Contains(brief, "PR base: "+epicBranchFixtureName) {
 		t.Fatalf("the brief does not name the epic base:\n%s", brief)
 	}
 	t.Logf("first child brief (Publish head):\n%s", brief[strings.Index(brief, "## Publish"):strings.Index(brief, "## The work")])
 
 	// The first child's work merged into the epic branch: the next child must cut
 	// from that head, not the default.
-	git.refSHAs["origin/"+epicBranchName] = "epic-head-2"
+	git.refSHAs["origin/"+epicBranchFixtureName] = "epic-head-2"
 	second, err := actions.Dispatch(ctx, DispatchInput{
 		ProjectID: pid, ProjectKey: "app", Item: epicChild(23, 21), Parent: epicParent(21),
 		Seat: "seat@rig", WorktreeRoot: root,
@@ -171,7 +171,7 @@ func TestDispatchRefusesWhenEpicBranchCannotBeCreated(t *testing.T) {
 	if err == nil {
 		t.Fatal("a failed EnsureBranch must refuse the dispatch")
 	}
-	for _, want := range []string{"epic branch " + epicBranchName + " could not be created", "Resource not accessible"} {
+	for _, want := range []string{"epic branch " + epicBranchFixtureName + " could not be created", "Resource not accessible"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q does not carry %q", err.Error(), want)
 		}
@@ -192,7 +192,7 @@ func TestDispatchRefusesWhenEpicBranchCannotBeRead(t *testing.T) {
 	ctx := context.Background()
 	st := newStore(t)
 	pid := newProject(t, st)
-	git := &fakeGit{refErr: errors.New("git rev-parse origin/" + epicBranchName + ": exit status 128: unknown revision")}
+	git := &fakeGit{refErr: errors.New("git rev-parse origin/" + epicBranchFixtureName + ": exit status 128: unknown revision")}
 	fake := forge.NewFake(forge.KindGitHub)
 	actions := epicActions(st, git, fake, true)
 
@@ -203,7 +203,7 @@ func TestDispatchRefusesWhenEpicBranchCannotBeRead(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unreadable epic branch must refuse the dispatch")
 	}
-	for _, want := range []string{"epic branch " + epicBranchName + " could not be read after ensuring it", "refusing to recreate"} {
+	for _, want := range []string{"epic branch " + epicBranchFixtureName + " could not be read after ensuring it", "refusing to recreate"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q does not carry %q", err.Error(), want)
 		}

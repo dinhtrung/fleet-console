@@ -128,7 +128,7 @@ func TestSweep(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			decision := Sweep(tc.candidate, tc.items)
+			decision := Sweep(tc.candidate, tc.items, nil)
 			if decision.Kind != tc.wantKind {
 				t.Fatalf("kind = %q, want %q (reason %q)", decision.Kind, tc.wantKind, decision.Reason)
 			}
@@ -162,8 +162,8 @@ func TestSweepIsPure(t *testing.T) {
 	before := make([]forge.Item, len(items))
 	copy(before, items)
 
-	first := Sweep(epicRow(84, forge.StateOpen), items)
-	second := Sweep(epicRow(84, forge.StateOpen), items)
+	first := Sweep(epicRow(84, forge.StateOpen), items, nil)
+	second := Sweep(epicRow(84, forge.StateOpen), items, nil)
 
 	// The scenario promises the same kind, reason, child count, open list and quiet
 	// flag. DeepEqual covers all five in one assertion; comparing fields by hand is

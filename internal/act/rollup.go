@@ -41,6 +41,32 @@ type Decision struct {
 // ShouldClose reports whether the caller must close the epic.
 func (d Decision) ShouldClose() bool { return d.Kind == RollupClose }
 
+// EpicDelivery is the epic's own open change request (#484, design D5): while it
+// is open the epic is not finished, whatever its children say, because the work
+// is waiting on the operator to merge the delivery.
+type EpicDelivery struct {
+	Branch string
+	Number int
+}
+
+// HoldReason is the skip reason the rollup and the sweep both quote while an
+// epic's delivery is open. It names the branch and the change request, so the
+// tick's line says exactly what the epic is waiting on.
+func (d *EpicDelivery) HoldReason() string {
+	if d == nil {
+		return ""
+	}
+	return fmt.Sprintf("integration branch open: %s has change request #%d", d.Branch, d.Number)
+}
+
+// holdDecision is the skip both decisions answer while a delivery is open.
+func holdDecision(epic int, delivery *EpicDelivery) (Decision, bool) {
+	if delivery == nil {
+		return Decision{}, false
+	}
+	return Decision{Kind: RollupSkip, Epic: epic, Reason: delivery.HoldReason()}, true
+}
+
 // Rollup decides whether a merged item completes its parent epic. It is pure: no
 // forge, no store, no clock, so the same snapshot always gives the same verdict.
 //
@@ -53,7 +79,7 @@ func (d Decision) ShouldClose() bool { return d.Kind == RollupClose }
 // is not an epic, an epic that is already closed needs nothing, and only then is
 // the children question asked. Every skip names its cause, because the tick
 // prints the reason and an unexplained skip is indistinguishable from a bug.
-func Rollup(parent *int, items []forge.Item) (Decision, error) {
+func Rollup(parent *int, items []forge.Item, delivery *EpicDelivery) (Decision, error) {
 	if parent == nil {
 		return Decision{Kind: RollupSkip, Reason: "no parent"}, nil
 	}
@@ -71,6 +97,11 @@ func Rollup(parent *int, items []forge.Item) (Decision, error) {
 	}
 	if !strings.EqualFold(epic.State, forge.StateOpen) {
 		return Decision{Kind: RollupSkip, Epic: epicNumber, Reason: "epic already closed"}, nil
+	}
+	// An open delivery holds the epic open (#484, design D5): its work is waiting
+	// on the operator, so "every child closed" is not "the epic is finished".
+	if decision, held := holdDecision(epicNumber, delivery); held {
+		return decision, nil
 	}
 
 	var open []int
