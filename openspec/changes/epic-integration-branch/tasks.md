@@ -10,13 +10,19 @@
 
 ## 2. Config and surface
 
-- [ ] 2.1 Add `EpicBranches bool \`yaml:"epic_branches"\`` to `config.Project`
+- [x] 2.1 Add `EpicBranches bool \`yaml:"epic_branches"\`` to `config.Project`
   (`internal/config/config.go:40-90`), validate nothing new, thread it through `store.UpsertProject` and the
   project read (`internal/store/upsert.go`, `internal/store/mirror.go`) in the same shape as `epic_serial`.
   Evidence: a config with `epic_branches: true` round-trips through `--apply-config` and `GET /api/projects`.
-- [ ] 2.2 Add the checkbox to the project form next to `epic_serial` (`src/screens/ProjectsScreen.tsx`) and to the
+  **Done (PR #492 + #487):** #492 landed the field (as `*bool`, so an absent key leaves the row alone) and proved
+  the `--apply-config` half against SQLite; #487 wired the same value through the board's API and proved the read
+  half — `TestProjectEpicBranchesRoundTrip` shows `"epic_branches":true` on `GET /api/projects` after a create.
+- [x] 2.2 Add the checkbox to the project form next to `epic_serial` (`src/screens/ProjectsScreen.tsx`) and to the
   edit draft, defaulting off. Evidence: screenshot of the create dialog with the field, and a create that persists
   it.
+  **Done (PR #487):** the "Land each epic on its own branch" checkbox sits beside the epic_serial one, defaults off,
+  and `draftFromProject` carries it back into the edit dialog; the create-dialog screenshot is in the PR body, and
+  `TestProjectEpicBranchesRoundTrip` proves a create persists `true` (file and row) and an edit clears it.
 
 ## 3. Forge
 

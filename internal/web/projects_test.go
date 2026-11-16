@@ -1562,3 +1562,64 @@ func TestProjectEpicSerialRoundTrip(t *testing.T) {
 		t.Fatalf("a rename erased the escape hatch:\n%s", h.bytes(t))
 	}
 }
+
+// TestProjectEpicBranchesRoundTrip (#484, T2): epic_branches is DB-owned. A
+// create that sets it must persist to the file and the row, GET /api/projects
+// must answer it, and a board edit that turns it off must clear the row — which
+// is why the file carries the explicit false for the reload to see.
+func TestProjectEpicBranchesRoundTrip(t *testing.T) {
+	h := newProjectsHarness(t, nil)
+
+	// rig-a-2 is the harness config's free rig (rig-a belongs to existing-1).
+	create := `{"key":"epic-proj","name":"Epic project","forge":"github","repo":"org/epic",
+	 "default_branch":"main","rigs":["rig-a-2"],"concurrency_cap":2,"epic_branches":true,
+	 "paths":{"main":"./checkouts/epic","worktrees":"./wt"}}`
+	resp, body := h.post(t, create)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201 (%s)", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(h.bytes(t)), "epic_branches: true") {
+		t.Fatalf("the file does not carry epic_branches: true:\n%s", h.bytes(t))
+	}
+
+	// GET /api/projects answers the value the create persisted.
+	_, listBody := h.get(t, "/api/projects")
+	var list ProjectsListResponse
+	if err := json.Unmarshal(listBody, &list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	found := false
+	for index := range list.Projects {
+		if list.Projects[index].Key == "epic-proj" {
+			found = true
+			if !list.Projects[index].EpicBranches {
+				t.Fatalf("GET /api/projects epic_branches = false, want true:\n%s", listBody)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("GET /api/projects lost the created project:\n%s", listBody)
+	}
+	t.Logf("GET /api/projects: %s", listBody)
+
+	// A board edit that turns it off must clear the row, not leave it on.
+	off := false
+	resp, body = h.do(t, http.MethodPut, "/api/projects/epic-proj",
+		editBody("epic-proj", func(r *ProjectRequest) { r.EpicBranches = &off; r.Rigs = []string{"rig-a-2"} }))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit status = %d, want 200 (%s)", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(h.bytes(t)), "epic_branches: false") {
+		t.Fatalf("the file does not state the turn-off:\n%s", h.bytes(t))
+	}
+	_, listBody = h.get(t, "/api/projects")
+	if err := json.Unmarshal(listBody, &list); err != nil {
+		t.Fatalf("decode list after edit: %v", err)
+	}
+	for index := range list.Projects {
+		if list.Projects[index].Key == "epic-proj" && list.Projects[index].EpicBranches {
+			t.Fatalf("a board edit left epic_branches on:\n%s", listBody)
+		}
+	}
+	t.Logf("after the edit-off, GET /api/projects epic-proj: epic_branches=false")
+}
