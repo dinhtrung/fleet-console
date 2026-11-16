@@ -238,15 +238,6 @@ func (g *GitHub) SubIssues(ctx context.Context, number int) ([]Item, error) {
 	return items, nil
 }
 
-func hasEpicLabel(labels []string) bool {
-	for _, label := range labels {
-		if label == EpicLabel {
-			return true
-		}
-	}
-	return false
-}
-
 func (g *GitHub) subIssues(ctx context.Context, number int) ([]ghChild, error) {
 	path := fmt.Sprintf("repos/%s/issues/%d/sub_issues", g.slug, number)
 	raw, err := g.cli.api(ctx, path)

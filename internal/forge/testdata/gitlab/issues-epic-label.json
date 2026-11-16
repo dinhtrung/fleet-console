@@ -1,0 +1,22 @@
+[
+ {
+  "id": 9001,
+  "iid": 201,
+  "project_id": 591,
+  "title": "epic: billing rewrite",
+  "description": "Tracking issue for the billing rewrite. The tasks are linked by relation, not hierarchy.",
+  "state": "opened",
+  "labels": ["priority::normal", "type::epic"],
+  "web_url": "https://gitlab.example/horisen/mnp/engine/traffic-simulator-v2/-/issues/201"
+ },
+ {
+  "id": 9002,
+  "iid": 202,
+  "project_id": 591,
+  "title": "feat(billing): read an invoice",
+  "description": "One task, no children.",
+  "state": "opened",
+  "labels": ["area::billing", "priority::normal", "type::feature"],
+  "web_url": "https://gitlab.example/horisen/mnp/engine/traffic-simulator-v2/-/issues/202"
+ }
+]

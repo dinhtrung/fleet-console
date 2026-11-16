@@ -42,6 +42,18 @@ const (
 // on a tick in that window dispatches the epic as a task.
 const EpicLabel = "type::epic"
 
+// hasEpicLabel is the label rule both adapters read. It lives beside EpicLabel
+// because neither forge can express "this is a container" any other way before
+// the first child exists (#479).
+func hasEpicLabel(labels []string) bool {
+	for _, label := range labels {
+		if label == EpicLabel {
+			return true
+		}
+	}
+	return false
+}
+
 // State is the forge's item state.
 const (
 	StateOpen   = "open"
