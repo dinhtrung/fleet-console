@@ -79,6 +79,57 @@ func TestUpsertPreservesOnHoldUnlessSynced(t *testing.T) {
 	}
 }
 
+// TestEpicBranchesSync (#484, design D1): epic_branches is DB-owned. An apply
+// that names the key writes the row; an apply that omits it leaves the row
+// alone, so a later config edit cannot erase a value the board set.
+func TestEpicBranchesSync(t *testing.T) {
+	ctx := context.Background()
+	st := upsertStore(t)
+	in := baseUpsert()
+
+	// A project that never named the key is off.
+	if _, _, err := st.UpsertProject(ctx, in); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	projects, _ := st.Projects(ctx)
+	if projects[0].EpicBranches {
+		t.Fatalf("a project that never named epic_branches is on: %+v", projects[0])
+	}
+
+	// Naming the key writes it.
+	in.Project.EpicBranches = true
+	in.SyncEpicBranches = true
+	if result, _, err := st.UpsertProject(ctx, in); err != nil || result != UpsertUpdated {
+		t.Fatalf("sync on = %s, %v; want updated", result, err)
+	}
+	projects, _ = st.Projects(ctx)
+	if !projects[0].EpicBranches {
+		t.Fatalf("SyncEpicBranches did not write the row: %+v", projects[0])
+	}
+
+	// Omitting the key leaves the value alone.
+	in.Project.Name = "renamed"
+	in.Project.EpicBranches = false
+	in.SyncEpicBranches = false
+	if _, _, err := st.UpsertProject(ctx, in); err != nil {
+		t.Fatalf("update without sync: %v", err)
+	}
+	projects, _ = st.Projects(ctx)
+	if !projects[0].EpicBranches {
+		t.Fatal("an apply without the key cleared epic_branches")
+	}
+
+	// An explicit false does clear it.
+	in.SyncEpicBranches = true
+	if _, _, err := st.UpsertProject(ctx, in); err != nil {
+		t.Fatalf("sync off: %v", err)
+	}
+	projects, _ = st.Projects(ctx)
+	if projects[0].EpicBranches {
+		t.Fatal("epic_branches: false did not clear the row")
+	}
+}
+
 func TestUpsertUpdatesRepoAndKeepsRemovedProjects(t *testing.T) {
 	ctx := context.Background()
 	st := upsertStore(t)

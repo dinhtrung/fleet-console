@@ -280,6 +280,10 @@ type ProjectInput struct {
 	// SyncRelay path writes them; CreateProject writes whatever the input names.
 	RelayMode string
 	RelaySeat string
+	// EpicBranches is the epic-integration-branch opt-in (#484). Only
+	// UpsertProject's SyncEpicBranches path writes it on an existing row;
+	// CreateProject writes whatever the input names (absent is false).
+	EpicBranches bool
 }
 
 // CreateProject inserts a project row and returns its id.
@@ -301,11 +305,11 @@ func (s *Store) CreateProject(ctx context.Context, in ProjectInput) (int64, erro
 	}
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO project (key, name, forge_kind, forge_project, default_branch, rig, rigs_json, rig_template,
-		                     concurrency_cap, enabled, onhold, gate_cmd, relay_mode, relay_seat)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                     concurrency_cap, enabled, onhold, gate_cmd, relay_mode, relay_seat, epic_branches)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		in.Key, in.Name, in.ForgeKind, in.ForgeProject, in.DefaultBranch, firstRig, rigsJSON, in.RigTemplate,
 		in.ConcurrencyCap, boolInt(in.Enabled), boolInt(in.OnHold), nullString(in.GateCmd),
-		in.RelayMode, in.RelaySeat)
+		in.RelayMode, in.RelaySeat, boolInt(in.EpicBranches))
 	if err != nil {
 		return 0, fmt.Errorf("store: create project: %w", err)
 	}

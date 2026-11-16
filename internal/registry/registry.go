@@ -80,16 +80,23 @@ func ApplyOne(ctx context.Context, db *store.Store, project config.Project, sync
 	if project.VerdictRelay != nil {
 		relayMode, relaySeat, syncRelay = project.VerdictRelay.Mode, project.VerdictRelay.Seat, true
 	}
+	// epic_branches is DB-owned the same way (#484): only a file that names the
+	// key writes the row, so an apply of a file that dropped it does not clear a
+	// value the board set. Absent is false on a create.
+	epicBranches, syncEpicBranches := false, false
+	if project.EpicBranches != nil {
+		epicBranches, syncEpicBranches = *project.EpicBranches, true
+	}
 	result, _, err := db.UpsertProject(ctx, store.UpsertInput{
 		Project: store.ProjectInput{
 			Key: project.Key, Name: name, ForgeKind: project.Forge, ForgeProject: project.Repo,
 			DefaultBranch: project.DefaultBranch, Rig: project.Rig, Rigs: project.Rigs.Names(), RigTiers: rigTiers(project.Rigs), RigTemplate: project.RigTemplate,
 			ConcurrencyCap: project.ConcurrencyCap, Enabled: true, OnHold: onhold, GateCmd: project.GateCmd,
-			RelayMode: relayMode, RelaySeat: relaySeat,
+			RelayMode: relayMode, RelaySeat: relaySeat, EpicBranches: epicBranches,
 		},
 		LabelsJSON: string(labels), RepoKey: "main",
 		RepoPath: project.Paths.Main, WorktreeRoot: project.Paths.Worktrees,
-		SyncOnHold: syncOnHold, SyncRelay: syncRelay,
+		SyncOnHold: syncOnHold, SyncRelay: syncRelay, SyncEpicBranches: syncEpicBranches,
 	})
 	return result, err
 }

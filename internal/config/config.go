@@ -81,6 +81,13 @@ type Project struct {
 	// change request. Default true; false restores parallel siblings for epics
 	// that are genuinely independent lists.
 	EpicSerial *bool `yaml:"epic_serial,omitempty"`
+	// EpicBranches is the epic-integration-branch opt-in (#484, design D1): the
+	// project's epics integrate on epic/<n>-<slug> and their children target that
+	// branch instead of the default. Absent is false (today's behaviour). It is a
+	// pointer for the same reason onhold is: absent must leave the row alone, so
+	// an --apply-config of a file that never named it cannot erase a value the
+	// board set.
+	EpicBranches *bool `yaml:"epic_branches,omitempty"`
 	Paths      struct {
 		Main      string `yaml:"main"`
 		Worktrees string `yaml:"worktrees"`
@@ -772,6 +779,18 @@ func (e *Effective) EpicSerialFor(projectKey string) bool {
 		return true
 	}
 	return *project.EpicSerial
+}
+
+// EpicBranchesFor reports whether a project integrates its epics on their own
+// branch (#484, design D1). Unset is false: an epic lands on the default branch
+// as it always has, and a project that wants an epic reviewed as one change
+// request says so in its file.
+func (e *Effective) EpicBranchesFor(projectKey string) bool {
+	project := findProjectByKey(e.Projects, projectKey)
+	if project == nil || project.EpicBranches == nil {
+		return false
+	}
+	return *project.EpicBranches
 }
 
 // ReviewerFor resolves a project's reviewer member prefix (#384). Unset is
