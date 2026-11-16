@@ -178,6 +178,13 @@ database. `--apply-config` is idempotent: the second run prints `unchanged`.
 A project removed from `projects:` is disabled (paused on the board) rather than
 forgotten; `--prune` deletes it only once it has no live dispatch.
 
+A project can opt into **epic integration branches** with `epic_branches: true`:
+its epics then integrate on their own `epic/<n>-<slug>` branch and land as one
+change request you review and merge, instead of merging children onto the default
+branch one at a time. The operator's runbook — turning the toggle on, what the
+epic change request contains, what `wrong_base` means, and what to do when the
+branch is behind or conflicted — is [docs/epic-branches.md](docs/epic-branches.md).
+
 ### Two-phase dispatch
 
 Dispatch writes the app's dispatch row first (`state = pending`), creates the rig
