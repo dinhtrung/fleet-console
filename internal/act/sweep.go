@@ -27,7 +27,7 @@ import (
 // epic is not this step's subject. An epic already closed needs nothing, and
 // saying so on every tick would bury the ticks that did something — so that skip
 // and the non-epic one are Quiet. Only then is the children question asked.
-func Sweep(epic forge.Item, items []forge.Item) Decision {
+func Sweep(epic forge.Item, items []forge.Item, delivery *EpicDelivery) Decision {
 	if epic.Kind != forge.KindEpic {
 		return Decision{Kind: RollupSkip, Epic: epic.Number, Reason: "not an epic", Quiet: true}
 	}
@@ -36,6 +36,12 @@ func Sweep(epic forge.Item, items []forge.Item) Decision {
 		// Idempotence lives here: a sweep runs every tick, so "already closed" is
 		// the ordinary second sighting, not an anomaly.
 		return Decision{Kind: RollupSkip, Epic: epicNumber, Reason: "epic already closed", Quiet: true}
+	}
+	// An open delivery holds the epic open (#484, design D5). Not Quiet: the epic
+	// is finished building and waiting on a person, which is news, not the
+	// ordinary state of an unfinished epic.
+	if decision, held := holdDecision(epicNumber, delivery); held {
+		return decision
 	}
 
 	var open []int

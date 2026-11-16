@@ -116,7 +116,7 @@ func TestRollup(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			decision, err := Rollup(tc.parent, tc.items)
+			decision, err := Rollup(tc.parent, tc.items, nil)
 			if err != nil {
 				t.Fatalf("Rollup returned %v, want nil", err)
 			}
@@ -150,8 +150,8 @@ func TestRollupIsPure(t *testing.T) {
 	before := make([]forge.Item, len(items))
 	copy(before, items)
 
-	first, _ := Rollup(intp(64), items)
-	second, _ := Rollup(intp(64), items)
+	first, _ := Rollup(intp(64), items, nil)
+	second, _ := Rollup(intp(64), items, nil)
 
 	if first.Kind != second.Kind || first.Reason != second.Reason {
 		t.Fatalf("two calls differ: %+v vs %+v", first, second)
@@ -170,12 +170,12 @@ func TestRollupIsPure(t *testing.T) {
 // TestRollupReasonReadsAsASentence: "1 sub-issue" not "1 sub-issues", because the
 // tick prints this line and a wrong plural makes the number look unreliable.
 func TestRollupReasonReadsAsASentence(t *testing.T) {
-	one, _ := Rollup(intp(64), epic(64, forge.StateOpen, child(62, 64, forge.StateOpen)))
+	one, _ := Rollup(intp(64), epic(64, forge.StateOpen, child(62, 64, forge.StateOpen)), nil)
 	if one.Reason != "1 sub-issue still open (#62)" {
 		t.Fatalf("reason = %q", one.Reason)
 	}
 	two, _ := Rollup(intp(64), epic(64, forge.StateOpen,
-		child(62, 64, forge.StateOpen), child(63, 64, forge.StateOpen)))
+		child(62, 64, forge.StateOpen), child(63, 64, forge.StateOpen)), nil)
 	if two.Reason != "2 sub-issues still open (#62, #63)" {
 		t.Fatalf("reason = %q", two.Reason)
 	}

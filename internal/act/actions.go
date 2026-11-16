@@ -280,12 +280,25 @@ func (a *Actions) epicBranchFor(in DispatchInput) string {
 	if parent.Number != *in.Item.Parent || parent.Kind != forge.KindEpic || parent.State != forge.StateOpen {
 		return ""
 	}
-	for _, label := range parent.Labels {
-		if label == epicDirectLabel {
-			return ""
-		}
+	if epicDirected(parent) {
+		return ""
 	}
 	return fmt.Sprintf("epic/%d-%s", parent.Number, slug(parent.Title))
+}
+
+// epicDirected reports whether one epic carries the epic::direct escape (#484,
+// design D1): its children keep targeting the default branch, and it is never
+// delivered on a branch. Dispatch and completion share this one predicate.
+func epicDirected(epic *forge.Item) bool {
+	if epic == nil {
+		return false
+	}
+	for _, label := range epic.Labels {
+		if label == epicDirectLabel {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveRow answers a parked row.

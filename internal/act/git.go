@@ -19,6 +19,11 @@ type Git interface {
 	// An unknown ref is an error: the caller must never read "no answer" as
 	// "the default branch", which is the silent fallback epic branches forbid.
 	RefSHA(ctx context.Context, ref string) (string, error)
+	// BranchesMatching lists the remote-tracking branch short names (e.g.
+	// "origin/epic/476-x") matching an fnmatch pattern, after a fetch. It is how
+	// a reader finds an epic branch by the epic/<n>- prefix, so a retitled epic
+	// keeps the branch it already has (design D2).
+	BranchesMatching(ctx context.Context, pattern string) ([]string, error)
 	// WorktreeAddOrReuse reuses an existing worktree, adopts an existing branch, or
 	// creates both. It never deletes anything.
 	WorktreeAddOrReuse(ctx context.Context, worktree, branch, base string) (reused bool, err error)
@@ -76,6 +81,26 @@ func (g ExecGit) RefSHA(ctx context.Context, ref string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// BranchesMatching lists the remote-tracking branch short names matching one
+// fnmatch pattern. It reads the refs a previous Fetch wrote, so it spends no
+// network call of its own.
+func (g ExecGit) BranchesMatching(ctx context.Context, pattern string) ([]string, error) {
+	if strings.TrimSpace(pattern) == "" {
+		return nil, fmt.Errorf("git for-each-ref: a pattern is required")
+	}
+	out, err := g.run(ctx, "for-each-ref", "--format=%(refname:short)", pattern)
+	if err != nil {
+		return nil, err
+	}
+	var branches []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			branches = append(branches, line)
+		}
+	}
+	return branches, nil
 }
 
 // IsAncestor asks the repository whether one commit is an ancestor of another.

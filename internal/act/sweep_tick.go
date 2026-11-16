@@ -26,7 +26,7 @@ import (
 // the epic open (closing on a short read would close an epic over work nobody
 // looked at), and a comment or close that errors leaves it open too, so the next
 // tick's sweep sees the same conditions and tries again. No dedupe table.
-func (a *Actions) sweepEpics(ctx context.Context, in TickInput, report *TickReport, closed map[int]bool) {
+func (a *Actions) sweepEpics(ctx context.Context, in TickInput, report *TickReport, closed, completed map[int]bool) {
 	for index := range in.Items {
 		epic := in.Items[index]
 		if epic.Kind != forge.KindEpic {
@@ -38,6 +38,15 @@ func (a *Actions) sweepEpics(ctx context.Context, in TickInput, report *TickRepo
 		if closed[epic.Number] {
 			continue
 		}
+		// An open delivery holds the epic (#484, design D5), and is known before any
+		// read, so the sweep spends no sub-issue read on it.
+		if delivery := openEpicDelivery(in.CRs, epic.Number); delivery != nil {
+			decision := Sweep(epic, nil, delivery)
+			if !decision.Quiet {
+				report.Skipped = append(report.Skipped, fmt.Sprintf("#%d sweep: %s", decision.Epic, decision.Reason))
+			}
+			continue
+		}
 		report.SweepReads++
 		children, err := a.Forge.SubIssues(ctx, epic.Number)
 		if err != nil {
@@ -45,7 +54,7 @@ func (a *Actions) sweepEpics(ctx context.Context, in TickInput, report *TickRepo
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d sweep: %v", epic.Number, err))
 			continue
 		}
-		decision := Sweep(epic, children)
+		decision := Sweep(epic, children, nil)
 		if !decision.ShouldClose() {
 			// Quiet marks the skips that are the ordinary state of an unfinished
 			// epic. Only the considered declines reach the journal, so a sweep
@@ -54,6 +63,13 @@ func (a *Actions) sweepEpics(ctx context.Context, in TickInput, report *TickRepo
 			if !decision.Quiet {
 				report.Skipped = append(report.Skipped, fmt.Sprintf("#%d sweep: %s", decision.Epic, decision.Reason))
 			}
+			continue
+		}
+		// An opted-in epic is delivered, not closed (#484, design D5): the sweep
+		// opens the epic's change request on its own branch and leaves the epic open
+		// for the operator. The read above is the child list the body names.
+		if a.EpicBranches && !epicDirected(&epic) {
+			a.completeEpic(ctx, in, report, completed, decision.Epic, children)
 			continue
 		}
 		// Post the comment once per epic, not once per tick. The comment goes first

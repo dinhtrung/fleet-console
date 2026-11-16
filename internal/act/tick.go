@@ -86,6 +86,9 @@ type TickReport struct {
 	BlockedMerges []BlockedMerge
 	// Epics lists the epics this tick closed by rollup or by the sweep, once each.
 	Epics []EpicRollup
+	// Completions lists the epics this tick delivered: the change request opened on
+	// an opted-in epic's own branch once every child closed (#484, design D5).
+	Completions []EpicCompletion
 	// SweepReads is the number of forge sub-issue reads the sweep spent this tick:
 	// one per open epic, which is the bound the design asks to keep visible. It is
 	// separate from the forge's own budget so a reader can tell the sweep's share.
@@ -147,6 +150,9 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		}
 	}
 	rolled := make(map[int]bool)
+	// completed carries the epics this tick already delivered a change request for,
+	// so a merge and the later sweep over the same epic open one, not two (#484).
+	completed := make(map[int]bool)
 	for _, request := range in.CRs {
 		if request.Merged {
 			continue
@@ -354,7 +360,7 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		// The rollup runs after the merge and against the same snapshot the plan
 		// used: no extra forge read. `rolled` is shared across the loop so two
 		// merged siblings produce one close.
-		actions.rollupAfterMerge(ctx, in, &report, rolled, item, merged)
+		actions.rollupAfterMerge(ctx, in, &report, rolled, completed, item, merged)
 		// The merge landed; a gap means part of its audit trail did not. It is
 		// reported on the same channel as a skip so the tick log names it, but it
 		// is not a skip: `merged` above is already recorded.
@@ -367,7 +373,7 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	// earlier tick whose close never landed has no merge to hang its rollup on.
 	// It shares `rolled` with the merge loop, so an epic the rollup just closed is
 	// not closed twice.
-	actions.sweepEpics(ctx, in, &report, rolled)
+	actions.sweepEpics(ctx, in, &report, rolled, completed)
 	// The repair rows are reconciled after the merge loop (#340, design D4):
 	// the loop above may have just ended a row's premise — the head it
 	// conflicts with merged, the item closed — and a stale ask is the queue

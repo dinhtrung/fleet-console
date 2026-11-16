@@ -28,11 +28,16 @@ func (a *Actions) rollupAfterMerge(
 	in TickInput,
 	report *TickReport,
 	closed map[int]bool,
+	completed map[int]bool,
 	item int,
 	merged *MergeResult,
 ) {
 	parentOf := a.parentFor(ctx, in, item)
-	decision, err := Rollup(parentOf, in.Items)
+	var delivery *EpicDelivery
+	if parentOf != nil {
+		delivery = openEpicDelivery(in.CRs, *parentOf)
+	}
+	decision, err := Rollup(parentOf, in.Items, delivery)
 	if err != nil {
 		report.Skipped = append(report.Skipped, fmt.Sprintf("#%d rollup: %v", item, err))
 		return
@@ -48,6 +53,13 @@ func (a *Actions) rollupAfterMerge(
 		return
 	}
 	if closed[decision.Epic] {
+		return
+	}
+	// An opted-in epic is delivered, not closed (#484, design D5): the last child
+	// merging opens the epic's change request and leaves the epic open for the
+	// operator to merge. A project that did not opt in keeps today's close.
+	if a.EpicBranches && !epicDirected(itemFor(in.Items, decision.Epic)) {
+		a.completeEpic(ctx, in, report, completed, decision.Epic, nil)
 		return
 	}
 
