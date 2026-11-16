@@ -124,7 +124,7 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	actions := &Actions{
 		Store: in.Store, Forge: in.Forge, Rig: in.Rig, Git: in.Git, Now: in.Now,
 		ProjectID: in.Project.ID, ProjectKey: in.Project.Key, WorktreeRoot: in.WorktreeRoot,
-		Reviewer: in.Reviewer, EpicBranches: in.EpicBranches,
+		Reviewer: in.Reviewer, EpicBranches: in.EpicBranches, DefaultBranch: in.Project.DefaultBranch,
 	}
 
 	// Verdict capture and the merge watchdog run before new dispatches: a merged
