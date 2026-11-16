@@ -58,7 +58,7 @@ func (a *Actions) rollupAfterMerge(
 	// An opted-in epic is delivered, not closed (#484, design D5): the last child
 	// merging opens the epic's change request and leaves the epic open for the
 	// operator to merge. A project that did not opt in keeps today's close.
-	if a.EpicBranches {
+	if a.EpicBranches && !epicDirected(itemFor(in.Items, decision.Epic)) {
 		a.completeEpic(ctx, in, report, completed, decision.Epic, nil)
 		return
 	}

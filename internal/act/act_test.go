@@ -52,6 +52,10 @@ type fakeGit struct {
 	refSHAs   map[string]string
 	refErr    error
 	refsAsked []string
+	// matchingBranches is what BranchesMatching answers (the pattern is the
+	// caller's business); matchErr fails the list.
+	matchingBranches []string
+	matchErr         error
 	// ancestors is the set of shas this repository says are ancestors of a
 	// head, keyed "<ancestor> <head>"; ancestorErr answers the check with a
 	// failure instead (superseded-verdict, D2: the caller must ask).
@@ -75,6 +79,13 @@ func (g *fakeGit) WorktreeAddOrReuse(_ context.Context, worktree, branch, base s
 	g.branches = append(g.branches, branch)
 	g.bases = append(g.bases, base)
 	return g.reused, g.err
+}
+
+func (g *fakeGit) BranchesMatching(_ context.Context, _ string) ([]string, error) {
+	if g.matchErr != nil {
+		return nil, g.matchErr
+	}
+	return append([]string(nil), g.matchingBranches...), nil
 }
 
 func (g *fakeGit) RefSHA(_ context.Context, ref string) (string, error) {

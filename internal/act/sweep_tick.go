@@ -68,7 +68,7 @@ func (a *Actions) sweepEpics(ctx context.Context, in TickInput, report *TickRepo
 		// An opted-in epic is delivered, not closed (#484, design D5): the sweep
 		// opens the epic's change request on its own branch and leaves the epic open
 		// for the operator. The read above is the child list the body names.
-		if a.EpicBranches {
+		if a.EpicBranches && !epicDirected(&epic) {
 			a.completeEpic(ctx, in, report, completed, decision.Epic, children)
 			continue
 		}

@@ -35,12 +35,33 @@ func openEpicDelivery(requests []forge.ChangeRequest, epic int) *EpicDelivery {
 	return nil
 }
 
-// epicBranchName is the branch an epic's children target and its delivery opens
-// from (#484, design D2). It is derived from the epic's number and current title;
-// the gate reads it back by the epic/<n>- prefix, so a later retitle cannot
-// orphan a branch that already exists.
-func epicBranchName(epic int, title string) string {
-	return fmt.Sprintf("epic/%d-%s", epic, slug(title))
+// epicBranchByPrefix resolves the epic's branch by the epic/<n>- prefix after a
+// fetch (#484, design D2: "resolved by prefix"). Re-deriving the name from the
+// current title would wedge delivery the moment the epic is retitled between
+// dispatches; the prefix finds the branch that already exists. No match means
+// there is nothing to deliver; several matches are named rather than guessed.
+func (a *Actions) epicBranchByPrefix(ctx context.Context, epic int) (branch string, found bool, err error) {
+	matches, err := a.Git.BranchesMatching(ctx, fmt.Sprintf("refs/remotes/origin/epic/%d-*", epic))
+	if err != nil {
+		return "", false, fmt.Errorf("list epic branches: %w", err)
+	}
+	var names []string
+	for _, match := range matches {
+		name := strings.TrimPrefix(match, "origin/")
+		if number, ok := epicBranchNumber(name); ok && number == epic {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	switch len(names) {
+	case 0:
+		return "", false, nil
+	case 1:
+		return names[0], true, nil
+	default:
+		return "", false, fmt.Errorf("epic #%d has more than one branch (%s); refusing to guess which to deliver",
+			epic, strings.Join(names, ", "))
+	}
 }
 
 // childMerged reports whether a child closed with a merged change request. The
@@ -102,11 +123,17 @@ func (a *Actions) completeEpic(ctx context.Context, in TickInput, report *TickRe
 	if completed[epic] {
 		return
 	}
-	title := ""
-	if item := itemFor(in.Items, epic); item != nil {
-		title = item.Title
+	epicItem := itemFor(in.Items, epic)
+	// The epic::direct escape opts the epic out entirely (design D1): its children
+	// landed on the default branch, so there is no branch delivery to open and the
+	// caller closes the epic the ordinary way.
+	if epicDirected(epicItem) {
+		return
 	}
-	branch := epicBranchName(epic, title)
+	title := ""
+	if epicItem != nil {
+		title = epicItem.Title
+	}
 
 	skip := func(format string, args ...any) {
 		report.Skipped = append(report.Skipped, fmt.Sprintf("#%d completion: ", epic)+fmt.Sprintf(format, args...))
@@ -115,6 +142,14 @@ func (a *Actions) completeEpic(ctx context.Context, in TickInput, report *TickRe
 	if err := a.Git.Fetch(ctx); err != nil {
 		skip("fetch: %v", err)
 		return
+	}
+	branch, found, err := a.epicBranchByPrefix(ctx, epic)
+	if err != nil {
+		skip("%v", err)
+		return
+	}
+	if !found {
+		return // no epic branch: nothing has been built on one
 	}
 	defaultSHA, err := a.Git.BaseSHA(ctx)
 	if err != nil {

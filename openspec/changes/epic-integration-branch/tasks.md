@@ -95,7 +95,9 @@
   the body listing every child under `Merged`/`Not merged` and carrying `Closes #<epic>`. Both the sweep and the
   rollup path reach it; a `completed` map keeps one per tick and the open delivery holds later ticks.
   `TestCompletionOpensOneEpicRequest` asserts one call, the body lines and zero on the second tick;
-  `TestRollupPathCompletesOnLastChild` covers the merge path.
+  `TestRollupPathCompletesOnLastChild` covers the merge path. The branch is resolved by the `epic/<n>-` prefix
+  after a fetch, so a retitle cannot wedge delivery (two matches are named, not guessed), and an `epic::direct`
+  epic is closed the ordinary way instead of delivered.
 - [x] 6.3 Hold Rollup and Sweep while the epic request is open: skip with `integration branch open`
   (`internal/act/rollup.go:59-90`, `internal/act/sweep.go:30-60`). Evidence: tests for both functions and the tick
   line.

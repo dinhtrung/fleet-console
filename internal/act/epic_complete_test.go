@@ -110,8 +110,9 @@ func completionWorld(t *testing.T) (*Actions, TickInput, *forge.Fake, *fakeGit, 
 	}
 	fake := &forge.Fake{SubIssuesValue: map[int][]forge.Item{21: children}}
 	git := &fakeGit{
-		refSHAs:   map[string]string{"origin/epic/21-epic-forty-eight": "epic-head"},
-		ancestors: map[string]bool{"base-sha epic-head": true}, // up to date, no drift
+		matchingBranches: []string{"origin/epic/21-epic-forty-eight"},
+		refSHAs:          map[string]string{"origin/epic/21-epic-forty-eight": "epic-head"},
+		ancestors:        map[string]bool{"base-sha epic-head": true}, // up to date, no drift
 	}
 	actions := &Actions{
 		Store: db, Forge: fake, Git: git, ProjectID: pid,
@@ -221,6 +222,73 @@ func TestRollupPathCompletesOnLastChild(t *testing.T) {
 		if write.Op == "close" && write.Number == 21 {
 			t.Fatalf("the rollup path closed the epic instead of delivering it: %+v", fake.Writes)
 		}
+	}
+}
+
+// TestCompletionResolvesTheBranchByPrefixAfterARetitle (#490, design D2): the
+// delivery branch is found by epic/<n>-, not rebuilt from the current title, so
+// a retitle between dispatches does not wedge completion.
+func TestCompletionResolvesTheBranchByPrefixAfterARetitle(t *testing.T) {
+	ctx := context.Background()
+	actions, in, fake, git, _ := completionWorld(t)
+	// The epic now reads "Epic forty eight" but its branch was cut as "old-title".
+	git.matchingBranches = []string{"origin/epic/21-old-title"}
+	git.refSHAs = map[string]string{"origin/epic/21-old-title": "epic-head"}
+	report := &TickReport{}
+	actions.sweepEpics(ctx, in, report, map[int]bool{}, map[int]bool{})
+
+	if len(fake.RequestsValue) != 1 {
+		t.Fatalf("a retitled epic delivered %d requests, want one: %v", len(fake.RequestsValue), report.Skipped)
+	}
+	if got := fake.RequestsValue[0].Branch; got != "epic/21-old-title" {
+		t.Fatalf("delivery head = %q, want the existing prefix-resolved branch", got)
+	}
+}
+
+// TestCompletionRefusesToGuessBetweenTwoBranches (#490, design D2): more than one
+// epic/<n>- branch is named, not guessed.
+func TestCompletionRefusesToGuessBetweenTwoBranches(t *testing.T) {
+	ctx := context.Background()
+	actions, in, fake, git, _ := completionWorld(t)
+	git.matchingBranches = []string{"origin/epic/21-a-title", "origin/epic/21-b-title"}
+	report := &TickReport{}
+	actions.sweepEpics(ctx, in, report, map[int]bool{}, map[int]bool{})
+
+	if len(fake.RequestsValue) != 0 {
+		t.Fatalf("two epic branches still opened a delivery: %v", fake.RequestsValue)
+	}
+	found := false
+	for _, line := range report.Skipped {
+		if strings.Contains(line, "more than one branch") &&
+			strings.Contains(line, "epic/21-a-title") && strings.Contains(line, "epic/21-b-title") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the ambiguity is not named: %v", report.Skipped)
+	}
+}
+
+// TestEpicDirectIsClosedNotDelivered (#490, design D1): the per-epic escape opts
+// the epic out of branch delivery entirely — it closes the ordinary way.
+func TestEpicDirectIsClosedNotDelivered(t *testing.T) {
+	ctx := context.Background()
+	actions, in, fake, _, _ := completionWorld(t)
+	in.Items[0].Labels = []string{epicDirectLabel}
+	report := &TickReport{}
+	actions.sweepEpics(ctx, in, report, map[int]bool{}, map[int]bool{})
+
+	if len(fake.RequestsValue) != 0 {
+		t.Fatalf("an epic::direct epic was delivered on a branch: %v", fake.RequestsValue)
+	}
+	closed := false
+	for _, write := range fake.Writes {
+		if write.Op == "close" && write.Number == 21 {
+			closed = true
+		}
+	}
+	if !closed {
+		t.Fatalf("an epic::direct epic was neither delivered nor closed: %v", fake.Writes)
 	}
 }
 
