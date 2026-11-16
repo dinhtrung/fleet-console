@@ -64,23 +64,29 @@ refusing merge: wrong_base: change request targets <got>, expected <want>
 ```
 
 and leaves one comment on the item telling you to retarget. Retarget the change request's base branch to the expected
-one (the epic branch, or `main`); the next tick merges it once the verdict still names the head. A wrong-targeted
+one (the epic branch, or `main`); the next tick merges it once the verdict names the current head. A wrong-targeted
 request is never marked ready.
 
 ## When the branch is behind or conflicted
 
-Before delivery, when the default branch has commits the epic branch lacks, the app asks the forge to update the epic
-branch from the default (GitHub *update-branch*, GitLab *rebase*). If the forge refuses — a conflict — the tick records
+When the app opens the epic change request and the default branch has commits the epic branch lacks, it then asks the
+forge to update the epic branch from the default (GitHub *update-branch*, GitLab *rebase*). The forge's update acts on
+a change request, so it runs **after** the request exists, using it as the handle — the request is opened either way.
+If the forge refuses — a conflict — the tick records
 
 ```
 epic branch is behind and cannot be updated: <reason>
 ```
 
-and **still opens** the request so you can see the diff. The app never force-pushes. Resolve the conflict on the epic
-branch and update it yourself; the request follows the branch.
+and the request stays open so you can see the diff. The app never force-pushes. Resolve the conflict on the epic branch
+and update it yourself; the request follows the branch.
 
 ## Edge cases you may meet
 
+- **The toggle turned on after an epic's children had already landed on the default branch** leaves that epic with no
+  `epic/<n>-` branch. Completion finds nothing to deliver, so it does nothing and journals nothing: the epic stays open
+  and no request appears. There is no automatic recovery — close such an epic by hand (its work is already on the
+  default), and turn the toggle on before an epic's first child is dispatched.
 - **Retitling an epic between dispatches** changes the name a later dispatch would create, so the epic can end up with
   two `epic/<n>-` branches and earlier merged work on the first. Delivery resolves the branch by the `epic/<n>-` prefix;
   if it finds two, it refuses to guess and names both. Do not retitle an epic while its children are in flight.
