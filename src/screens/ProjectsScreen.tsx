@@ -35,6 +35,7 @@ import {
   DialogTitle,
   EmptyState,
   ErrorState,
+  FieldRow,
   LoadingRows,
   Panel,
   PanelHead,
@@ -91,6 +92,7 @@ type Draft = {
   paths_worktrees: string;
   reviewer: string;
   epic_serial: boolean;
+  epic_branches: boolean;
 };
 
 /** The error key each draft field owns. Only the two path fields differ, but they must be spelled
@@ -111,6 +113,7 @@ const ERROR_KEY: Record<keyof Draft, string> = {
   paths_worktrees: "paths.worktrees",
   reviewer: "reviewer",
   epic_serial: "epic_serial",
+  epic_branches: "epic_branches",
 };
 
 const BLANK: Draft = {
@@ -128,6 +131,7 @@ const BLANK: Draft = {
   paths_worktrees: "",
   reviewer: "",
   epic_serial: true,
+  epic_branches: false,
 };
 
 /** The draft as the wire shape. Submit and the live panel both use this, so the checks run against
@@ -152,6 +156,7 @@ function draftInput(draft: Draft): CreateProjectInput {
     },
     reviewer: draft.reviewer.trim(),
     epic_serial: draft.epic_serial,
+    epic_branches: draft.epic_branches,
   };
 }
 
@@ -191,6 +196,7 @@ function draftFromProject(project: Project): Draft {
     runtime: project.runtime ?? "omp",
     reviewer: project.reviewer ?? "",
     epic_serial: project.epic_serial ?? true,
+    epic_branches: project.epic_branches ?? false,
     paths_main: project.paths?.main ?? "",
     paths_worktrees: project.paths?.worktrees ?? "",
   };
@@ -520,6 +526,20 @@ export function ProjectsScreen() {
                 Close
               </Button>
             </div>
+            {/* The project's own settings, read-only: the table carries the identity columns, and
+                this is where an operator sees the rules a project is behaving under — including
+                whether its epics land on their own branch. */}
+            <div className="mb-3 grid gap-x-4 border-t border-rule pt-2 sm:grid-cols-2">
+              <FieldRow label="Default branch">{inspecting.default_branch}</FieldRow>
+              <FieldRow label="Runtime">{inspecting.runtime ?? "omp"}</FieldRow>
+              <FieldRow label="Reviewer">{inspecting.reviewer || "dev-review"}</FieldRow>
+              <FieldRow label="One child of an epic at a time">
+                {inspecting.epic_serial === false ? "Off" : "On"}
+              </FieldRow>
+              <FieldRow label="Land each epic on its own branch">
+                {inspecting.epic_branches ? "On" : "Off"}
+              </FieldRow>
+            </div>
             <div className="mb-3">
               <WaitingOnAHuman panel={inspecting.waiting} projectName={inspecting.name} />
             </div>
@@ -819,6 +839,12 @@ export function ProjectsScreen() {
                 hint="Uncheck to let an epic's siblings run in parallel (epic_serial: false)."
                 checked={draft.epic_serial}
                 onChange={(next) => change("epic_serial", next)}
+              />
+              <Checkbox
+                label="Land each epic on its own branch"
+                hint="Tasks target epic/<n>-slug; you merge the epic's PR after review."
+                checked={draft.epic_branches}
+                onChange={(next) => change("epic_branches", next)}
               />
               <TextInput
                 label="Reviewer"

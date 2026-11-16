@@ -630,6 +630,12 @@ type Project struct {
 	// EpicSerial is the one-child-per-epic rule (#443). Omitted when true (the
 	// default); an explicit false is written, because that is a statement.
 	EpicSerial *bool `yaml:"epic_serial,omitempty"`
+	// EpicBranches is the epic-integration-branch opt-in (#484). A whole-definition
+	// write states it whenever the client did, so an explicit false is written too:
+	// the value is DB-owned, and the reload must see a statement to clear the row
+	// (the same reason the relay block is always written). Omitted only when the
+	// client named nothing, which leaves a hand-edited file's key alone.
+	EpicBranches *bool `yaml:"epic_branches,omitempty"`
 	// VerdictRelay is the verdict relay block (#375). A whole-definition write
 	// must carry it, or a board edit would silently drop a block the operator
 	// set — the API writes the same pair it reads.

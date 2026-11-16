@@ -73,7 +73,11 @@ type ProjectRequest struct {
 	// EpicSerial is the one-child-per-epic rule (#443); nil means the default
 	// (true). The whole-definition PUT carries it, or an edit would drop it.
 	EpicSerial *bool `json:"epic_serial"`
-	Paths      struct {
+	// EpicBranches is the epic-integration-branch opt-in (#484); nil means the
+	// client named nothing. The whole-definition PUT carries it, so an edit can
+	// both turn it on and turn it off.
+	EpicBranches *bool `json:"epic_branches"`
+	Paths        struct {
 		Main      string `json:"main"`
 		Worktrees string `json:"worktrees"`
 	} `json:"paths"`
@@ -117,7 +121,10 @@ type ProjectResponse struct {
 	// EpicSerial is the one-child-per-epic rule (#443); nil means the default
 	// (true). The whole-definition PUT carries it, or an edit would drop it.
 	EpicSerial *bool `json:"epic_serial"`
-	Paths      struct {
+	// EpicBranches is the epic-integration-branch opt-in (#484), the effective
+	// value: the DB-owned row answers first, the file's key when there is no row.
+	EpicBranches bool `json:"epic_branches"`
+	Paths        struct {
 		Main      string `json:"main"`
 		Worktrees string `json:"worktrees"`
 	} `json:"paths"`
@@ -262,6 +269,9 @@ func (v *mergedView) render(key string) ProjectResponse {
 	if row != nil {
 		out.Enabled = row.Enabled
 		out.OnHold = row.OnHold
+		// epic_branches is DB-owned like the relay (#484): the row is what the
+		// board toggles, so it is what the board shows even when the file agrees.
+		out.EpicBranches = row.EpicBranches
 		// The row answers first, exactly as RelayFor does (#375): a store-only
 		// relay is what the tick uses, so it is what the board shows.
 		if row.RelayMode != "" {
@@ -296,6 +306,7 @@ func renderRow(row *store.ProjectRow, count store.ProjectCount, source string) P
 		RelaySeat:      row.RelaySeat,
 		Reviewer:       config.DefaultReviewer,
 		EpicSerial:     epicSerialPtr(true),
+		EpicBranches:   row.EpicBranches,
 	}
 	if out.Rigs == nil {
 		out.Rigs = []string{}
@@ -735,6 +746,7 @@ func requestProject(req ProjectRequest) config.Project {
 		VerdictRelay:   relayFromRequest(req.RelayMode, req.RelaySeat),
 		Reviewer:       req.Reviewer,
 		EpicSerial:     req.EpicSerial,
+		EpicBranches:   req.EpicBranches,
 	}
 	project.Paths.Main = req.Paths.Main
 	project.Paths.Worktrees = req.Paths.Worktrees
@@ -783,6 +795,12 @@ func writtenProject(project config.Project) configfile.Project {
 	if project.EpicSerial != nil && !*project.EpicSerial {
 		written.EpicSerial = project.EpicSerial
 	}
+	// epic_branches is DB-owned, so a whole-definition write states it whenever
+	// the client did — including an explicit false, which is how a board edit
+	// clears the row (the reload must see a statement, not an absent key).
+	if project.EpicBranches != nil {
+		written.EpicBranches = project.EpicBranches
+	}
 	written.Paths.Main = project.Paths.Main
 	written.Paths.Worktrees = project.Paths.Worktrees
 	return written
@@ -819,6 +837,7 @@ func projectDiff(oldEntry, newEntry config.Project) (changed, identity []string)
 	add("culture_file", false, oldEntry.CultureFile == newEntry.CultureFile)
 	add("reviewer", false, oldEntry.Reviewer == newEntry.Reviewer)
 	add("epic_serial", false, epicSerialOf(oldEntry) == epicSerialOf(newEntry))
+	add("epic_branches", false, epicBranchesOf(oldEntry) == epicBranchesOf(newEntry))
 	add("relay_mode", false, relayOf(oldEntry).Mode == relayOf(newEntry).Mode)
 	add("relay_seat", false, relayOf(oldEntry).Seat == relayOf(newEntry).Seat)
 	add("paths.main", true, oldEntry.Paths.Main == newEntry.Paths.Main)
@@ -992,6 +1011,7 @@ func projectResponse(project config.Project, source string) ProjectResponse {
 	}
 	out.Reviewer = project.Reviewer
 	out.EpicSerial = project.EpicSerial
+	out.EpicBranches = epicBranchesOf(project)
 	out.Paths.Main = project.Paths.Main
 	out.Paths.Worktrees = project.Paths.Worktrees
 	return out
@@ -1004,3 +1024,9 @@ func epicSerialOf(project config.Project) bool {
 }
 
 func epicSerialPtr(value bool) *bool { return &value }
+
+// epicBranchesOf reads the epic-branch opt-in as a value: nil is the default
+// (false), so an absent key and an explicit false compare equal.
+func epicBranchesOf(project config.Project) bool {
+	return project.EpicBranches != nil && *project.EpicBranches
+}

@@ -229,6 +229,9 @@ export interface Project {
   /** One child of an epic at a time (#443). Absent means true; false is the escape hatch and must
    *  survive a save from this dialog, so it is carried, not defaulted away. */
   epic_serial?: boolean;
+  /** Land each epic on its own branch (#484). Absent means false; the value is DB-owned, so the
+   *  board shows what the row holds and a save carries it back. */
+  epic_branches?: boolean;
   /** The "waiting on a human" panel (#429). `known: false` is an unread rig, never a clear one,
    *  and `seats` is every seat on the project's rigs that has stopped on a person. */
   waiting: WaitingPanel;
@@ -331,6 +334,8 @@ export interface CreateProjectInput {
   reviewer?: string;
   /** Carried so a whole-definition save never clears it (#443); true is the default. */
   epic_serial?: boolean;
+  /** Carried so a whole-definition save states it (#484); false is the default. */
+  epic_branches?: boolean;
 }
 
 export interface CreateProjectResponse {
