@@ -52,7 +52,15 @@ type Actions struct {
 	// caller from the config. Empty is decide.DefaultReviewer, so every caller
 	// that predates the field keeps today's destination.
 	Reviewer string
+	// EpicBranches is the project's epic-integration-branch opt-in (#484), read
+	// once per tick from the effective config. False is today's behaviour: every
+	// item's branch is cut from the default branch.
+	EpicBranches bool
 }
+
+// epicDirectLabel opts one epic out of the project toggle (design D1): its
+// children keep targeting the default branch.
+const epicDirectLabel = "epic::direct"
 
 func (a *Actions) now() time.Time {
 	if a.Now != nil {
@@ -73,6 +81,11 @@ type DispatchInput struct {
 	Seat         string
 	WorktreeRoot string
 	Slug         string
+	// Parent is the item's parent row from the same snapshot, when it has one.
+	// Dispatch reads its kind, state and labels to decide the base; a nil parent
+	// (an unparented item, or a parent the open list does not carry) keeps the
+	// default base.
+	Parent *forge.Item
 }
 
 // DispatchResult is the dispatch evidence.
@@ -115,7 +128,7 @@ Base sha: %s
 
 ## Publish
 
-The merge gate finds the item only through "Closes #<item>" in the pull request's body: a body that only references
+%sThe merge gate finds the item only through "Closes #<item>" in the pull request's body: a body that only references
 the item (Refs, Part of, a title mention) is invisible to it, and that change request is never merged, undrafted or
 recorded. If this attempt cannot finish the item, do not open a change request that only references it — hand off
 with the candidate sha, the commands and exactly what remains, so the item can be split and each part gets its own
@@ -159,6 +172,27 @@ func (a *Actions) Dispatch(ctx context.Context, in DispatchInput) (*DispatchResu
 	if err != nil {
 		return nil, err
 	}
+	// The epic base (design D2): a child of an opted-in epic is cut from the
+	// epic's branch, not the default. The branch is ensured through the forge
+	// (the service has no push credentials) and its head resolved after a fetch.
+	// A failure stops the dispatch — never a silent fallback to the default
+	// branch, which is the behaviour the toggle exists to prevent.
+	epicBranch := a.epicBranchFor(in)
+	if epicBranch != "" {
+		if err := a.Forge.EnsureBranch(ctx, epicBranch, base); err != nil {
+			return nil, fmt.Errorf("dispatch: epic branch %s could not be created: %w", epicBranch, err)
+		}
+		if err := a.Git.Fetch(ctx); err != nil {
+			return nil, err
+		}
+		head, err := a.Git.RefSHA(ctx, "origin/"+epicBranch)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"dispatch: epic branch %s could not be read after ensuring it (%v); refusing to recreate it, "+
+					"which would drop work already merged into it", epicBranch, err)
+		}
+		base = head
+	}
 	slugValue := in.Slug
 	if slugValue == "" {
 		slugValue = slug(in.Item.Title)
@@ -179,9 +213,16 @@ func (a *Actions) Dispatch(ctx context.Context, in DispatchInput) (*DispatchResu
 	if rigName == "" {
 		rigName = "(unknown)"
 	}
+	// A child of an opted-in epic names the base its change request must target,
+	// so the seat's `gh pr create`/`glab mr create` cannot default to main. An
+	// ordinary item's brief is unchanged: publishBase is empty.
+	publishBase := ""
+	if epicBranch != "" {
+		publishBase = fmt.Sprintf("PR base: %s\n\n", epicBranch)
+	}
 	brief := fmt.Sprintf(briefTemplate,
 		in.ProjectKey, in.Item.Number, in.Item.Title, rigName, worktree, branch, base,
-		in.Item.Body, in.Item.Number, in.Item.Body)
+		in.Item.Body, publishBase, in.Item.Number, in.Item.Body)
 	if err := os.WriteFile(briefPath, []byte(brief), 0o644); err != nil {
 		return nil, fmt.Errorf("dispatch: write brief: %w", err)
 	}
@@ -221,6 +262,27 @@ func (a *Actions) Dispatch(ctx context.Context, in DispatchInput) (*DispatchResu
 		DispatchID: dispatchID, QItemID: row.ID, Branch: branch, Worktree: worktree,
 		BaseSHA: base, BriefPath: briefPath, Reused: reused, Events: []int64{eventID},
 	}, nil
+}
+
+// epicBranchFor answers the epic branch this item's change request targets, or
+// "" for the default branch. The rule is design D1's: the project opted in, the
+// item's parent is an open epic, and that epic does not carry the epic::direct
+// escape. The branch is named by prefix (epic/<n>-) so a title edit never
+// renames a live branch.
+func (a *Actions) epicBranchFor(in DispatchInput) string {
+	if !a.EpicBranches || in.Item.Parent == nil || in.Parent == nil {
+		return ""
+	}
+	parent := in.Parent
+	if parent.Number != *in.Item.Parent || parent.Kind != forge.KindEpic || parent.State != forge.StateOpen {
+		return ""
+	}
+	for _, label := range parent.Labels {
+		if label == epicDirectLabel {
+			return ""
+		}
+	}
+	return fmt.Sprintf("epic/%d-%s", parent.Number, slug(parent.Title))
 }
 
 // ResolveRow answers a parked row.

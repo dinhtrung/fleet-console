@@ -40,7 +40,11 @@ type TickInput struct {
 	// Reviewer is the project's reviewer member prefix (#384), resolved by the
 	// caller from the config. Empty is decide.DefaultReviewer.
 	Reviewer string
-	Now      func() time.Time
+	// EpicBranches is the project's epic-integration-branch opt-in (#484),
+	// resolved by the caller from the config. False is today's behaviour: every
+	// item's branch is cut from the default branch.
+	EpicBranches bool
+	Now          func() time.Time
 	// LifecycleFailed names, per rig, the launch failure this tick hit: every
 	// dispatch intent on that rig is skipped with the same named reason rather
 	// than writing a worktree and a row no seat will ever claim (design D5).
@@ -120,7 +124,7 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 	actions := &Actions{
 		Store: in.Store, Forge: in.Forge, Rig: in.Rig, Git: in.Git, Now: in.Now,
 		ProjectID: in.Project.ID, ProjectKey: in.Project.Key, WorktreeRoot: in.WorktreeRoot,
-		Reviewer: in.Reviewer,
+		Reviewer: in.Reviewer, EpicBranches: in.EpicBranches,
 	}
 
 	// Verdict capture and the merge watchdog run before new dispatches: a merged
@@ -629,8 +633,15 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("#%d already has a change request", intent.Item))
 			continue
 		}
+		// The parent row, when the item has one, is what lets Dispatch resolve an
+		// epic base (#484). It comes from the same snapshot; a parent the open
+		// list does not carry is nil and keeps the default base.
+		var parent *forge.Item
+		if item.Parent != nil {
+			parent = itemFor(in.Items, *item.Parent)
+		}
 		result, err := actions.Dispatch(ctx, DispatchInput{
-			ProjectID: in.Project.ID, ProjectKey: in.Project.Key, Item: *item,
+			ProjectID: in.Project.ID, ProjectKey: in.Project.Key, Item: *item, Parent: parent,
 			Seat: intent.Seat, WorktreeRoot: in.WorktreeRoot,
 		})
 		if err != nil {

@@ -44,14 +44,24 @@
 
 ## 4. Dispatch
 
-- [ ] 4.1 Resolve the base per item: parent epic opted in and not `epic::direct` → `epic/<n>-<slug>`; otherwise the
+- [x] 4.1 Resolve the base per item: parent epic opted in and not `epic::direct` → `epic/<n>-<slug>`; otherwise the
   default branch. Create the epic branch when absent, then cut the task's worktree from its head
   (`internal/act/actions.go:155-196`, `internal/act/git.go:52-61`). Evidence: a test where the first dispatch
   creates the branch and the second base-sha equals the epic head.
-- [ ] 4.2 Add `PR base: <branch>` to the brief (`internal/act/actions.go:105-130`) and assert it in
+  **Done (PR #495):** `epicBranchFor` applies the three-fact rule; `Dispatch` calls `EnsureBranch` from the default
+  head, re-fetches and resolves the epic head through the new `Git.RefSHA`. `TestDispatchEpicChildCutsFromEpicHead`
+  proves the first child cuts from the default head and the second from the epic head; `TestDispatchEpicDirect…` and
+  `TestDispatchEpicBranchesOff…` keep the default base.
+- [x] 4.2 Add `PR base: <branch>` to the brief (`internal/act/actions.go:105-130`) and assert it in
   `brief_publish_test.go`. Evidence: the rendered brief in the test output.
-- [ ] 4.3 Refuse the dispatch when the branch cannot be created or read; no fallback to the default branch and no
+  **Done (PR #495):** an epic child's brief opens `## Publish` with `PR base: epic/<n>-<slug>`; a non-epic brief is
+  byte-identical (the placeholder renders empty). The rendered brief for both cases is logged in the test output
+  and pasted in the PR body; `TestBriefPublishContract` still passes unchanged.
+- [x] 4.3 Refuse the dispatch when the branch cannot be created or read; no fallback to the default branch and no
   recreation over existing work. Evidence: two tests, one per design D6 arm, quoting the error text.
+  **Done (PR #495):** `TestDispatchRefusesWhenEpicBranchCannotBeCreated` and
+  `TestDispatchRefusesWhenEpicBranchCannotBeRead` quote the errors; both also assert no dispatch row and no worktree
+  were written, so there is no fallback or recreation.
 
 ## 5. Merge gate
 
