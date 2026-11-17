@@ -3,8 +3,6 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import "./index.css";
-import { AuthProvider } from "./auth/session";
-import { ScopeProvider } from "./shell/scope";
 import { AppToastProvider } from "./components/ui";
 import { router } from "./router";
 
@@ -22,13 +20,9 @@ const queryClient = new QueryClient({
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <ScopeProvider>
-          <AppToastProvider>
-            <RouterProvider router={router} />
-          </AppToastProvider>
-        </ScopeProvider>
-      </AuthProvider>
+      <AppToastProvider>
+        <RouterProvider router={router} />
+      </AppToastProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

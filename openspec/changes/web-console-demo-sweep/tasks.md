@@ -22,15 +22,15 @@
 
 ## 1. Remove the demo shell (T1)
 
-- [ ] 1.1 `src/main.tsx`: drop `AuthProvider` and `ScopeProvider`; keep `QueryClientProvider` and
+- [x] 1.1 `src/main.tsx`: drop `AuthProvider` and `ScopeProvider`; keep `QueryClientProvider` and
       `AppToastProvider`.
-- [ ] 1.2 `src/shell/AppShell.tsx`: drop `useAuth`, `useAccess`, `BoardControls`, `ScopeSwitcher` and the
+- [x] 1.2 `src/shell/AppShell.tsx`: drop `useAuth`, `useAccess`, `BoardControls`, `ScopeSwitcher` and the
       `IdentityBlock` function; remove the rail's scope strip and the mobile header's scope span; render every nav
       item unconditionally (delete `NavItem.permission` and the `can(...)` filter); remove the whole `<footer>`
       block.
-- [ ] 1.3 Delete `src/auth/session.tsx`, `src/access/access.tsx`, `src/shell/ScopeSwitcher.tsx`,
+- [x] 1.3 Delete `src/auth/session.tsx`, `src/access/access.tsx`, `src/shell/ScopeSwitcher.tsx`,
       `src/shell/scope.tsx`, `src/shell/BoardControls.tsx`. Fix every import a delete leaves behind.
-- [ ] 1.4 Evidence: `npm run typecheck`, `npm run lint`; `grep -rn "useAuth\|useAccess\|ScopeSwitcher\|BoardControls" src`
+- [x] 1.4 Evidence: `npm run typecheck`, `npm run lint`; `grep -rn "useAuth\|useAccess\|ScopeSwitcher\|BoardControls" src`
       returns nothing.
 
 ## 2. Delete the mock layer and its assets (T2 — blocked by T1)

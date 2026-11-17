@@ -1,12 +1,11 @@
-/** The mock API layer: what the identity scaffold still needs.
+/** The mock API layer: a seeded, deterministic stand-in for the board.
  *
- *  Every shipped screen reads the real API; this module survives for one reason — the app has one
- *  token and no user row, so the shell's `useAuth()` reads its identities from here. Replacing that
- *  means deciding what identity a loopback console has, which is its own change (design D2).
+ *  Every shipped screen reads the real API, and nothing under `src/` imports this module any more.
+ *  It survives only until its deletion lands as its own change (design D1).
  *
- *  It owns the seeded store and the runtime controls the board's dev panel uses. The screen-shaped
- *  functions — users, roles, organizations, sessions, api keys, flags — were removed with the
- *  screens that read them; `scripts/check-no-mock-screens.mjs` keeps that true. */
+ *  It owns the seeded store and the runtime switches that the retired dev panel used. The
+ *  screen-shaped functions — users, roles, organizations, sessions, api keys, flags — were removed
+ *  with the screens that read them; `scripts/check-no-mock-screens.mjs` keeps that true. */
 
 import { SCHEMA_VERSION, seed, type Database } from "./seed";
 import {
