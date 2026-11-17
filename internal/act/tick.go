@@ -113,6 +113,14 @@ func RunTick(ctx context.Context, in TickInput) (TickReport, error) {
 		in.Now = func() time.Time { return time.Now().UTC() }
 	}
 	report := TickReport{Applied: in.Apply}
+	// A paused or disabled project is not worked this tick: the pause is the
+	// operator's decision (design D1). The guard sits before the gate and before
+	// the first forge read, because verdict capture, the merge watchdog, notes
+	// and rolls all write to the forge — a paused project that merged its
+	// in-flight change requests would still be sending traffic the pause forbids.
+	if in.Project.OnHold || !in.Project.Enabled {
+		return report, nil
+	}
 	if err := in.Gate.Check(); err != nil {
 		report.Blocked = true
 		report.Reason = refusalReason(err)

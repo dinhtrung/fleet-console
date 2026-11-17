@@ -106,10 +106,9 @@ func TestNoFreeBuilderDetailAddsTheUnreadRigOnlyWhenItExplainsTheZero(t *testing
 
 // TestPausedProjectWithUnreadRigsPlansNothing pins the arm order: an unread rig
 // makes capacity unknown, but a paused or disabled project is not planned at
-// all, so the unknown must not surface as a stale plan. Planning and merging are
-// separate questions — a paused project still merges its in-flight change
-// requests (act.RunTick holds no OnHold guard), and this arm governs the plan
-// only.
+// all, so the unknown must not surface as a stale plan. A paused project is not
+// worked at all — act.RunTick returns an empty report for it before the gate —
+// so this arm governs the plan and the tick governs the merge, and both refuse.
 func TestPausedProjectWithUnreadRigsPlansNothing(t *testing.T) {
 	cases := map[string]Project{
 		"disabled": {Key: "app", Forge: ForgeGitHub, ConcurrencyCap: 2},
