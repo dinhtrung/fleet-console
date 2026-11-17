@@ -23,10 +23,17 @@ import (
 
 // Project is one project's read sources.
 type Project struct {
-	ID       int64
-	Key      string
-	Forge    forge.Forge
-	Rigs     []string
+	ID    int64
+	Key   string
+	Forge forge.Forge
+	Rigs  []string
+	// Paused is the project row's pause state (onhold or disabled), resolved by
+	// the caller. A paused project keeps its rig facts — the fleet-wide queue and
+	// roster reads still answer for its rigs, and the lifecycle still decides a
+	// stop on them — and loses its forge and git reads: no plan can move while
+	// paused, so the forge is not called and the local branch index is not
+	// rebuilt.
+	Paused   bool
 	RepoPath string
 	Git      git.Runner
 }
@@ -240,7 +247,12 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 		}
 
 		timeout := m.projectTimeoutFor(ctx, project.ID)
-		if project.Forge != nil {
+		// A paused project is not read: its forge and git are skipped, so its
+		// item, change-request and branch snapshots and its forge stamp stay as
+		// they were. The fleet-wide reads above and the status/roster writes below
+		// still run — a paused project's rig facts are what the lifecycle decides
+		// on, and dropping them would make a live rig look empty.
+		if !project.Paused && project.Forge != nil {
 			accepted := m.acceptedSHAs(ctx, project.ID)
 			// Items applies project_timeout to its per-item phase from the count it
 			// lists; the context below is the hard ceiling for the whole forge read.
@@ -294,7 +306,7 @@ func (m *Mirror) Tick(ctx context.Context, projects []Project) (TickResult, erro
 			}
 		}
 
-		if project.Git != nil {
+		if !project.Paused && project.Git != nil {
 			gitCtx, cancel := context.WithTimeout(ctx, timeout)
 			branches, err := git.Index(gitCtx, project.Git)
 			cancel()

@@ -22,15 +22,15 @@
 
 ## 1. Mirror: a paused project is not read (T1)
 
-- [ ] 1.1 `internal/mirror/mirror.go`: add `Paused bool` to `Project`, with the comment stating that a paused
+- [x] 1.1 `internal/mirror/mirror.go`: add `Paused bool` to `Project`, with the comment stating that a paused
       project keeps its rig facts and loses its forge and git reads.
-- [ ] 1.2 In `Tick`, guard the forge block (`project.Forge != nil`, around `:243`) and the git block
+- [x] 1.2 In `Tick`, guard the forge block (`project.Forge != nil`, around `:243`) and the git block
       (`project.Git != nil`, around `:297`) with `!project.Paused`. Do not skip the status/roster writes and do
       not skip the queue/seat reads.
-- [ ] 1.3 Assert in a test that a paused tick calls neither source: set `fake.ItemsErr` and `fake.RequestsErr`,
+- [x] 1.3 Assert in a test that a paused tick calls neither source: set `fake.ItemsErr` and `fake.RequestsErr`,
       pass a git runner that counts calls and would answer a branch, and assert the previous item rows, the
       `status` forge stamp and the `branches` snapshot are unchanged.
-- [ ] 1.4 Evidence: `go test ./internal/mirror -run 'TestPausedProjectReadsNothingFromTheForge' -v`.
+- [x] 1.4 Evidence: `go test ./internal/mirror -run 'TestPausedProjectReadsNothingFromTheForge' -v`.
 
 ## 2. Act: a paused project's tick does nothing (T2)
 
