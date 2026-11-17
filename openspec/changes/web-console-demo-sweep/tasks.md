@@ -52,10 +52,9 @@
 - [x] 3.3 `src/index.css`: delete the `.sweep` rule and the `@keyframes handover-sweep` block. `src/router.tsx`:
       drop the "permission gate" sentence. Any comment that says demo, synthetic or admin-panel is rewritten or
       removed.
-- [ ] 3.4 Evidence: `grep -rniE "synthetic|admin-panel|not a real service|authored" index.html public/favicon.svg src`
-      prints nothing (before the guard exists, this is the manual check). T3 landed before T2, so the command still
-      prints four lines from `src/mock/**` and `src/components/ui/OrgMark.tsx` — exactly the files T2 deletes; the
-      check closes with 2.2.
+- [x] 3.4 Evidence: `grep -rniE "synthetic|admin-panel|not a real service|authored" index.html public/favicon.svg src`
+      prints nothing (this is the manual check until T4's guard exists). T3 landed before T2; T2 then deleted the
+      last four matching lines with `src/mock/**` and `src/components/ui/OrgMark.tsx`, and the command is clean.
 
 ## 4. A guard that refuses demo scaffolding (T4 — blocked by T1–T3)
 
