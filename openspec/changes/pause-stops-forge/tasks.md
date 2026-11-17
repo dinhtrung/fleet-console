@@ -46,19 +46,21 @@
 
 ## 3. Wiring: the loop and housekeeping honour the pause (T3 — blocked by T1, T2)
 
-- [ ] 3.1 `cmd/fleet-console/main.go`: add `pausedProject(store.ProjectRow) bool` returning
+- [x] 3.1 `cmd/fleet-console/main.go`: add `pausedProject(store.ProjectRow) bool` returning
       `p.OnHold || !p.Enabled`, and set `Paused: pausedProject(project)` in `projectSources`.
-- [ ] 3.2 Serve loop (`cmd/fleet-console/main.go:847`): after `reads[project.ID] = projectRead`, `continue` for a
+- [x] 3.2 Serve loop (`cmd/fleet-console/main.go:847`): after `reads[project.ID] = projectRead`, `continue` for a
       paused project — no reconcile, no plan build, no `mirror:` line for it. Its rig facts stay in `reads` so the
       lifecycle still decides on them.
-- [ ] 3.3 Act loop (`cmd/fleet-console/main.go:930`): `continue` for a paused project before `RunTick`, so no
+- [x] 3.3 Act loop (`cmd/fleet-console/main.go:930`): `continue` for a paused project before `RunTick`, so no
       `act:` line, no verdict capture, no merge, no reply read, no progress digest.
-- [ ] 3.4 `runHousekeep` (`cmd/fleet-console/main.go:1207`): skip a paused project and write the fixed journal
+- [x] 3.4 `runHousekeep` (`cmd/fleet-console/main.go:1207`): skip a paused project and write the fixed journal
       line. This is the safety half: with no forge read the change-request list is empty, and an empty list is
       what authorises a worktree removal.
-- [ ] 3.5 Evidence: `go test ./cmd/fleet-console`, plus a unit test for `pausedProject` (all four flag
+- [x] 3.5 Evidence: `go test ./cmd/fleet-console`, plus a unit test for `pausedProject` (all four flag
       combinations) and a `projectSources` test proving a paused row yields `Paused: true` (and an enabled row
-      false) — use an empty `forge.NewFake`; no forge call is needed to build a spec.
+      false). `projectSources` takes a `forge.Runner`, not a `forge.Forge`, so the test passes a no-call runner
+      stub (which fails the test if invoked) rather than `forge.NewFake`; no forge call happens while building a
+      spec.
 
 ## 4. Web: the board refuses verdicts and says paused (T4)
 
