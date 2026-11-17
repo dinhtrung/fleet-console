@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="admin-panel — an operable admin surface for users, roles, organizations, sessions and audit, running entirely on synthetic data." />
+    <meta name="description" content="fleet-console — the control plane that mirrors a forge and its rigs, dispatches each ready item to an agent seat, and merges only on a recorded verdict." />
     <meta name="color-scheme" content="light" />
     <title>fleet-console</title>
     <script>
@@ -17,9 +17,7 @@
       (function () {
         try {
           localStorage.removeItem("fleet-console.appearance");
-          localStorage.removeItem("admin-panel.appearance");
           var density = localStorage.getItem("fleet-console.density");
-          localStorage.removeItem("admin-panel.density");
           document.documentElement.setAttribute("data-density", density === "compact" ? "compact" : "comfortable");
         } catch (e) {
           document.documentElement.setAttribute("data-density", "comfortable");
