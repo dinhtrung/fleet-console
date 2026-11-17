@@ -35,12 +35,13 @@
 
 ## 2. Delete the mock layer and its assets (T2 — blocked by T1)
 
-- [ ] 2.1 `rm -rf src/mock public/mock`; delete `src/components/ui/OrgMark.tsx` and its export in
+- [x] 2.1 `rm -rf src/mock public/mock`; delete `src/components/ui/OrgMark.tsx` and its export in
       `src/components/ui/index.ts`.
-- [ ] 2.2 Grep for surviving references: `grep -rn "/mock\|mock/" src` must return nothing outside comments that
+- [x] 2.2 Grep for surviving references: `grep -rn "/mock\|mock/" src` must return nothing outside comments that
       2.2 also fixes.
-- [ ] 2.3 Evidence: `npm run typecheck && npm run build`; `find src public -iname '*mock*'` prints nothing;
-      `git grep -n "fleet-console.db"` prints nothing.
+- [x] 2.3 Evidence: `npm run typecheck && npm run build`; `find src public -iname '*mock*'` prints nothing;
+      `git grep -n "fleet-console.db" -- src public` prints nothing. The unscoped grep also matches the SQLite
+      file name the Go service and its docs use; the demo localStorage key is gone from the web tree.
 
 ## 3. Rewrite the document head and the demo copy (T3)
 

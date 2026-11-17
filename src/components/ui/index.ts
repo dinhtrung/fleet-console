@@ -74,4 +74,3 @@ export { AppToastProvider, useToast } from "./toast";
 export type { ToastApi } from "./toast";
 
 export { LoadingRows, EmptyState, NoMatchesState, ErrorState, DeniedState, NotFoundState } from "./States";
-export { OrgMark } from "./OrgMark";
