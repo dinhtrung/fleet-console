@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dinhtrung/fleet-console/internal/forge"
+	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/store"
 	"github.com/gofiber/fiber/v3"
 )
@@ -19,9 +21,10 @@ import (
 // verdictFixture is one project with item 7 dispatched and a draft change
 // request that closes it.
 type verdictFixture struct {
-	app  *fiber.App
-	fake *forge.Fake
-	st   *store.Store
+	app   *fiber.App
+	fake  *forge.Fake
+	st    *store.Store
+	waker *mirror.Waker
 }
 
 func newVerdictFixture(t *testing.T, dispatch bool) verdictFixture {
@@ -59,14 +62,15 @@ func newVerdictFixture(t *testing.T, dispatch bool) verdictFixture {
 		Number: 12, State: forge.StateOpen, HeadSHA: "abc1234", Draft: true, Mergeable: true,
 		ClosesItem: 7, Checks: []forge.Check{{Name: "ci", Conclusion: "success"}},
 	}}
+	waker := mirror.NewWaker()
 	app, err := New(Config{
-		Token: "test-token", Store: st, ConfigPath: "/tmp/fake-config.yaml",
+		Token: "test-token", Store: st, ConfigPath: "/tmp/fake-config.yaml", Waker: waker,
 		ForgeFor: func(context.Context, store.ProjectRow) (forge.Forge, error) { return fake, nil },
 	})
 	if err != nil {
 		t.Fatalf("app: %v", err)
 	}
-	return verdictFixture{app: app, fake: fake, st: st}
+	return verdictFixture{app: app, fake: fake, st: st, waker: waker}
 }
 
 func postVerdict(t *testing.T, app *fiber.App, body string) (int, map[string]any) {
@@ -83,6 +87,27 @@ func postVerdict(t *testing.T, app *fiber.App, body string) (int, map[string]any
 	var out map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&out)
 	return resp.StatusCode, out
+}
+
+// postVerdictRaw is postVerdict for the answers that are not JSON: a refusal
+// from fiber.NewError arrives as text/plain, so decoding it as an object would
+// make an assertion on the message silently inert.
+func postVerdictRaw(t *testing.T, app *fiber.App, body string) (int, string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/items/7/verdict", bytes.NewBufferString(body))
+	req.Header.Set(fiber.HeaderAuthorization, "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "test-key-"+body)
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return resp.StatusCode, string(raw)
 }
 
 // An approve must land as the exact note the merge gate reads, name the head sha,

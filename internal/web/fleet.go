@@ -351,8 +351,11 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 		}
 		// How old each mirror read is belongs on the project's own header (#394).
 		// The stamps are the only evidence a stalled mirror leaves behind.
-		bp.ForgeRead = mirrorReadAt(now, projectStatus.LastForgeAt, f.Tick, f.MaxWait, "forge")
-		bp.RigRead = mirrorReadAt(now, projectStatus.LastRigAt, f.Tick, f.MaxWait, "rig")
+		bp.ForgeRead = mirrorReadAt(now, projectStatus.LastForgeAt, f.Tick, f.MaxWait, "forge", projectPaused(p))
+		// Only the forge read goes quiet on a pause: the rig reads and the roster
+		// stay fleet-wide, because the idle rule needs every project's rig facts
+		// (pause-stops-forge, design D3).
+		bp.RigRead = mirrorReadAt(now, projectStatus.LastRigAt, f.Tick, f.MaxWait, "rig", false)
 		// Planned answers "has a plan ever run for this project", which is what
 		// makes an empty reason table readable (#429): after a plan it means
 		// "nothing was skipped", before one it means "nothing is known yet".
@@ -576,8 +579,8 @@ func (f *Fleet) Item(c fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
 		now := f.now()
-		detail.Project.ForgeRead = mirrorReadAt(now, status.LastForgeAt, f.Tick, f.MaxWait, "forge")
-		detail.Project.RigRead = mirrorReadAt(now, status.LastRigAt, f.Tick, f.MaxWait, "rig")
+		detail.Project.ForgeRead = mirrorReadAt(now, status.LastForgeAt, f.Tick, f.MaxWait, "forge", projectPaused(p))
+		detail.Project.RigRead = mirrorReadAt(now, status.LastRigAt, f.Tick, f.MaxWait, "rig", false)
 		dispatches, err := f.Store.Dispatches(ctx, p.ID, number)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())

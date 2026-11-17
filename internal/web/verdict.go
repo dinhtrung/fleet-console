@@ -85,6 +85,13 @@ func (f *Fleet) ItemVerdict(c fiber.Ctx) error {
 		if item == nil {
 			continue
 		}
+		if projectPaused(project) {
+			// A paused project reads no forge and merges nothing, so a verdict
+			// posted now would sit on the forge where no tick will read it while
+			// the operator is told the note landed (pause-stops-forge, design D4).
+			// Refuse before the first forge call: no note, no ready mark, no wake.
+			return fiber.NewError(fiber.StatusConflict, "project is paused; resume it to post a verdict")
+		}
 		source, err := f.ForgeFor(ctx, project)
 		if err != nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
