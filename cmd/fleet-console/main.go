@@ -94,6 +94,15 @@ func forgeHost(eff *config.Effective, key string) string {
 	return ""
 }
 
+// pausedProject is the one pause predicate (design D6). `onhold` is set by the
+// board, by a quota decision and by a failed delete; `enabled = 0` is a config
+// block removed. Both mean "do not work this project", so both freeze its forge
+// and git traffic. A paused project is still a rig client: the lifecycle keeps
+// deciding on its seats, so this predicate never stops a rig.
+func pausedProject(p store.ProjectRow) bool {
+	return p.OnHold || !p.Enabled
+}
+
 // runTick reads the forge/rig/git, writes only the mirror caches, and prints the
 // decide plan. It performs no forge, rig or git writes.
 func projectSources(ctx context.Context, eff *config.Effective, db *store.Store, runner forge.Runner) ([]mirror.Project, error) {
@@ -123,7 +132,10 @@ func projectSources(ctx context.Context, eff *config.Effective, db *store.Store,
 		default:
 			return nil, fmt.Errorf("tick: project %s has unknown forge %q", project.Key, project.ForgeKind)
 		}
-		spec := mirror.Project{ID: project.ID, Key: project.Key, Forge: source, Rigs: project.Rigs, RepoPath: repoPath}
+		spec := mirror.Project{
+			ID: project.ID, Key: project.Key, Forge: source, Rigs: project.Rigs,
+			Paused: pausedProject(project), RepoPath: repoPath,
+		}
 		if repoPath != "" {
 			spec.Git = git.ExecRunner{RepoPath: repoPath}
 		}
@@ -847,6 +859,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 			for _, project := range rows {
 				projectRead := read.Projects[project.Key]
 				reads[project.ID] = projectRead
+				// A paused project is not read (the mirror skips its forge and
+				// git), so it has no plan this tick: nothing reconciles, plans or
+				// prints a mirror line for it. The read still lands in reads,
+				// because the lifecycle decides on its rows and seats (design D3).
+				if pausedProject(project) {
+					continue
+				}
 				// D4: reconcile the app's dispatch rows against the rig before
 				// planning. A reconciled item must not be dispatched again in the
 				// same tick.
@@ -928,6 +947,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 				}
 			}
 			for _, project := range rows {
+				// A paused project's tick does nothing (design D1). RunTick
+				// guards it too; skipping here means no act line, no reply read,
+				// no merge and no progress digest for it.
+				if pausedProject(project) {
+					continue
+				}
 				plan := plans[project.Key]
 				projectRead := reads[project.ID]
 				source, ok := specByKey[project.Key]
@@ -1226,6 +1251,13 @@ func runHousekeep(ctx context.Context, in housekeepArgs) error {
 	for _, project := range projects {
 		source, ok := specByKey[project.Key]
 		if !ok {
+			continue
+		}
+		// With no forge read the change-request list is empty, and an empty list
+		// is what authorises a worktree removal (design D8). A paused project
+		// proposes nothing and says so once.
+		if pausedProject(project) {
+			fmt.Fprintf(in.errOut, "housekeep: %s: paused, skipped\n", project.Key)
 			continue
 		}
 		projectRead := read.Projects[project.Key]
