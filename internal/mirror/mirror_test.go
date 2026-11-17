@@ -111,6 +111,62 @@ func TestMirrorStaleKeepsCachedRowsAndStamp(t *testing.T) {
 	}
 }
 
+func TestPausedProjectReadsNothingFromTheForge(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	id := project(t, st)
+	fake := forge.NewFake(forge.KindGitHub)
+	fake.ItemsValue = []forge.Item{{Number: 7, Kind: forge.KindTask, State: forge.StateOpen, Title: "One", URL: "u"}}
+
+	first := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
+	m := &Mirror{Store: st, Now: func() time.Time { return first }}
+	if _, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: fake}}); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	items, err := st.Items(ctx)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("first tick items = %+v, %v", items, err)
+	}
+
+	// A paused tick must call neither source: point the forge at errors, and give
+	// it a git runner that counts every call, so any read becomes visible.
+	fake.ItemsErr = errors.New("forge: items must not be read while paused")
+	fake.RequestsErr = errors.New("forge: change requests must not be read while paused")
+	var gitCalls atomic.Int64
+	gitRunner := runnerFunc(func(context.Context, ...string) ([]byte, error) {
+		gitCalls.Add(1)
+		return []byte("abc\trefs/heads/feature/7-one\n"), nil
+	})
+
+	second := first.Add(time.Minute)
+	m.Now = func() time.Time { return second }
+	if _, err := m.Tick(ctx, []Project{{ID: id, Key: "app", Forge: fake, Git: gitRunner, Paused: true}}); err != nil {
+		t.Fatalf("paused tick: %v", err)
+	}
+
+	items, err = st.Items(ctx)
+	if err != nil || len(items) != 1 || items[0].Number != 7 {
+		t.Fatalf("paused tick changed the item rows: %+v, %v", items, err)
+	}
+	status, err := st.MirrorStatus(ctx, id)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if status.ForgeStale || status.ForgeError != "" {
+		t.Fatalf("status = %+v, want not stale: a paused project is not read", status)
+	}
+	if status.LastForgeAt == nil || !status.LastForgeAt.Equal(first) {
+		t.Fatalf("stamp = %v, want the first tick %v", status.LastForgeAt, first)
+	}
+	branches, _, err := st.GetSnapshot(ctx, id, "branches")
+	if err != nil || len(branches) != 0 {
+		t.Fatalf("branches snapshot = %s, %v, want empty", branches, err)
+	}
+	if got := gitCalls.Load(); got != 0 {
+		t.Fatalf("git runner called %d times while paused, want 0", got)
+	}
+}
+
 func TestMirrorWritesSnapshots(t *testing.T) {
 	ctx := context.Background()
 	st := newStore(t)
