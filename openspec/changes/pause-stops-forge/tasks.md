@@ -34,14 +34,14 @@
 
 ## 2. Act: a paused project's tick does nothing (T2)
 
-- [ ] 2.1 `internal/act/tick.go`: in `RunTick`, after `report` is built and **before** `in.Gate.Check()`, return
+- [x] 2.1 `internal/act/tick.go`: in `RunTick`, after `report` is built and **before** `in.Gate.Check()`, return
       the empty report when `in.Project.OnHold || !in.Project.Enabled`.
-- [ ] 2.2 Test both flags (`onhold`, `enabled:false`) with a live dispatch row, a mergeable change request carrying
+- [x] 2.2 Test both flags (`onhold`, `enabled:false`) with a live dispatch row, a mergeable change request carrying
       `Closes #5` and an ACCEPT note, plus a plan carrying a dispatch intent: assert no `fake.Writes`, no
       `fake.CRNotesAsked`/`NotesAsked`, no queue create, no merges and no dispatches.
-- [ ] 2.3 Update the comment in `internal/decide/unread_rig_test.go:107-112`: the old text says a paused project
+- [x] 2.3 Update the comment in `internal/decide/unread_rig_test.go:107-112`: the old text says a paused project
       still merges. The plan rule is unchanged; the sentence about merging is now false.
-- [ ] 2.4 Evidence: `go test ./internal/act -run 'TestRunTickPausedProjectDoesNothing' -v` and
+- [x] 2.4 Evidence: `go test ./internal/act -run 'TestRunTickPausedProjectDoesNothing' -v` and
       `go test ./internal/decide`.
 
 ## 3. Wiring: the loop and housekeeping honour the pause (T3 — blocked by T1, T2)
