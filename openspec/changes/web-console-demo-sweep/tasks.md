@@ -58,15 +58,18 @@
 
 ## 4. A guard that refuses demo scaffolding (T4 — blocked by T1–T3)
 
-- [ ] 4.1 Rename `scripts/check-no-mock-screens.mjs` to `scripts/check-no-demo.mjs`. Walk all of `src/` (not only
+- [x] 4.1 Rename `scripts/check-no-mock-screens.mjs` to `scripts/check-no-demo.mjs`. Walk all of `src/` (not only
       `src/screens`), and scan `index.html` and `public/` for the token list in §0. Report every offence as
       `file:line  text` and exit 1; exit 0 with a one-line count when clean.
-- [ ] 4.2 `package.json`: replace `check:screens` with `check:demo`, add it to `gate` beside the other gates.
+- [x] 4.2 `package.json`: replace `check:screens` with `check:demo`, add it to `gate` beside the other gates.
       `.github/workflows/ci.yml`: replace the `npm run check:screens` step with `npm run check:demo` and update its
       comment.
-- [ ] 4.3 Prove both directions: on the clean tree the script exits 0; add one temporary line containing
+- [x] 4.3 Prove both directions: on the clean tree the script exits 0; add one temporary line containing
       `Synthetic data` to a file under `src/`, see exit 1 naming that file and line, then remove the line.
-- [ ] 4.4 Evidence: paste both runs in the PR body, plus `npm run gate` (or the four commands it chains) green.
+- [x] 4.4 Evidence: paste both runs in the PR body, plus the gate's steps run individually — `typecheck`, `lint`,
+      `check:demo`, `gate:spec` and `build` exit 0; `gate:design` exits 2 on a pre-existing `transition: height`
+      finding in the bundled output of unchanged source, outside this task's scope. Go gates: `go test ./...` and
+      the `embedboard` build are green.
 
 ## 5. Ship note
 
