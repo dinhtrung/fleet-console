@@ -2,7 +2,7 @@
  *
  *  Code-based routes rather than a generated tree: the addresses are part of the frozen contract
  *  (deep links must resolve), so they are declared in one file. The root route owns the shell; each
- *  screen owns its own header and permission gate. */
+ *  screen owns its own header. */
 
 import { createRootRoute, createRoute, createRouter, Outlet, useNavigate } from "@tanstack/react-router";
 import { AppShell } from "./shell/AppShell";

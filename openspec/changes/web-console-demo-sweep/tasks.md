@@ -44,15 +44,17 @@
 
 ## 3. Rewrite the document head and the demo copy (T3)
 
-- [ ] 3.1 `index.html`: replace the meta description with a fleet-console sentence (no "admin-panel", no
+- [x] 3.1 `index.html`: replace the meta description with a fleet-console sentence (no "admin-panel", no
       "synthetic"); remove the `admin-panel.appearance` / `admin-panel.density` cleanup lines; keep the
       `fleet-console.density` read and the `data-density` attribute.
-- [ ] 3.2 `public/favicon.svg`: `aria-label="fleet-console"`.
-- [ ] 3.3 `src/index.css`: delete the `.sweep` rule and the `@keyframes handover-sweep` block. `src/router.tsx`:
+- [x] 3.2 `public/favicon.svg`: `aria-label="fleet-console"`.
+- [x] 3.3 `src/index.css`: delete the `.sweep` rule and the `@keyframes handover-sweep` block. `src/router.tsx`:
       drop the "permission gate" sentence. Any comment that says demo, synthetic or admin-panel is rewritten or
       removed.
 - [ ] 3.4 Evidence: `grep -rniE "synthetic|admin-panel|not a real service|authored" index.html public/favicon.svg src`
-      prints nothing (before the guard exists, this is the manual check).
+      prints nothing (before the guard exists, this is the manual check). T3 landed before T2, so the command still
+      prints four lines from `src/mock/**` and `src/components/ui/OrgMark.tsx` — exactly the files T2 deletes; the
+      check closes with 2.2.
 
 ## 4. A guard that refuses demo scaffolding (T4 — blocked by T1–T3)
 
