@@ -364,16 +364,35 @@ the project, and the board lists the new issue with its state and reason.
 
 ## 9. Pause, stop, back up
 
-Pause the project by syncing the file's pause into the database:
+Pause the project by syncing the file's pause into the database (the board's
+pause action writes the same row):
 
 ```bash
 # set "onhold: true" under the project in $CONFIG, then:
 fleet-console --config "$CONFIG" --apply-config --sync-onhold   # updated my-project
 ```
 
-The board shows the project as paused and its rows as **PSE**. Set
-`onhold: false` and run the same command to resume. A normal apply never flips
-`onhold`, so a pause survives restarts and config edits.
+The board shows the project as paused and its rows as **PSE**. A normal apply
+never flips `onhold`, so a pause survives restarts and config edits.
+
+While paused:
+
+- **What stops:** every forge read and write for the project — items, change
+  requests, notes, branch indexes — so nothing is captured or merged. A verdict
+  posted from the board is refused with `409 project is paused; resume it to
+  post a verdict`.
+- **What keeps running:** a builder already working, the rig daemon, and the
+  fleet-wide queue and roster reads. The board still shows the project's seats
+  and why nothing is moving, and the project header reads
+  `paused — no forge reads` instead of an ageing forge stamp. A rig whose
+  projects are all paused may still be stopped by the lifecycle.
+- **What waits:** an accepted change request, and the project's worktrees —
+  housekeeping skips a paused project rather than read "no forge read" as
+  "nothing references it". No Telegram progress digest is sent.
+
+Set `onhold: false` and run the same command to resume. The next tick reads the
+forge again, captures what happened while paused, and merges the accepted change
+requests.
 
 Stop and back up:
 

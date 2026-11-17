@@ -75,10 +75,12 @@
 
 ## 5. Docs: what pause means (T5 — blocked by T1–T4)
 
-- [ ] 5.1 `docs/fleet-console.md` (Projects/pause section, around `:450`): state that pause stops all forge
+- [x] 5.1 `docs/fleet-console.md` (Projects/pause section, around `:450`): state that pause stops all forge
       traffic, that an accepted change request waits for resume, that the header says paused, and that a quota
       pause inherits the same freeze.
-- [ ] 5.2 `docs/quickstart.md` §9 (`Pause, stop, back up`, around `:365`): the operator-visible version — what
+- [x] 5.2 `docs/quickstart.md` §9 (`Pause, stop, back up`, around `:365`): the operator-visible version — what
       stops, what keeps running, what resume does.
-- [ ] 5.3 Grep both docs for the old claim that a paused project still merges in-flight work and remove it.
-- [ ] 5.4 Evidence: the grep in 5.3 returns nothing; `go test ./...` still green (docs do not change code).
+- [x] 5.3 Grep both docs for the old claim that a paused project still merges in-flight work and remove it.
+      The claim was not present: every `onhold`/`paused`/`pause` hit in the two files was about the registry
+      mechanics, the `PSE` row state or an unrelated epic-sibling label, so nothing was removed.
+- [x] 5.4 Evidence: the grep in 5.3 returns nothing; `go test ./...` still green (docs do not change code).

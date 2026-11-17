@@ -457,3 +457,24 @@ the same cascade as `--prune` for the one project named: the file entry goes
 first, then the project's rows, `event` rows untouched, and it is refused with
 the dispatch id while a dispatch is live. The edit carries the file's own field
 names; the key is immutable, so a rename is a delete and a create.
+
+### What a pause stops
+
+A pause is a forge freeze, not a kill switch (see
+[`openspec/changes/pause-stops-forge`](../openspec/changes/pause-stops-forge/)). While a project is
+paused — `onhold` in its row, or its config block removed:
+
+- **No forge traffic.** The mirror reads no items, change requests, notes or branch indexes, and the act
+  pass captures no verdict, posts no note and merges nothing.
+- **The board says so.** The project header reads `paused — no forge reads` instead of a forge age, so a
+  deliberate pause is not mistaken for a stalled mirror. A verdict posted from the board is refused with
+  `409` and `project is paused; resume it to post a verdict`.
+- **Work in flight waits.** A builder already running keeps running; an accepted change request merges on
+  the first tick after resume. No progress digest is sent while paused.
+- **Housekeeping leaves it alone.** The project's worktrees stay on disk, because no forge read proved
+  them unused.
+- **The rig still runs.** The fleet-wide queue and roster reads keep answering, and the lifecycle keeps
+  deciding on the project's seats — a rig whose projects are all paused may still be stopped after
+  `idle_after`. A rig stop is rig traffic, not forge traffic.
+- **A quota pause is the same freeze.** The quota decision sets the same `onhold`; there is no separate
+  source, so a quota-paused project also stops merging until someone resumes it.
