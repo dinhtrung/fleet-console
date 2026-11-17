@@ -57,7 +57,7 @@ type mirrorRead struct {
 	// Label is the whole phrase the header renders, e.g.
 	// "last forge read 4m · stalled".
 	Label string `json:"label"`
-	// State is never, ok, quiet or stalled.
+	// State is never, ok, quiet, stalled or paused (paused only for a forge read).
 	State string `json:"state"`
 	// At is the read's stamp, empty when the project has never read.
 	At string `json:"at,omitempty"`
@@ -67,10 +67,16 @@ type mirrorRead struct {
 // tick the mirror's poll cadence and maxWait the longest that cadence may
 // legitimately sleep; a zero tick falls back to the config default so a caller
 // that never learned the cadence cannot make every read look stalled.
-func mirrorReadAt(now time.Time, at *time.Time, tick, maxWait time.Duration, source string) mirrorRead {
+func mirrorReadAt(now time.Time, at *time.Time, tick, maxWait time.Duration, source string, paused bool) mirrorRead {
 	label := "last " + source + " read"
 	if at == nil || at.IsZero() {
 		return mirrorRead{Label: label + " never", State: "never"}
+	}
+	// A paused project's stamp stops advancing by design, so judging it against
+	// the cadence prints "stalled" within minutes — a red state for a deliberate
+	// pause (pause-stops-forge, design D5). The never-read case still says never.
+	if paused {
+		return mirrorRead{Label: "paused — no forge reads", State: "paused", At: at.UTC().Format(time.RFC3339)}
 	}
 	quietAfter, stalledAfter := mirrorWindows(tick, maxWait)
 	age := ageBetween(now, *at)

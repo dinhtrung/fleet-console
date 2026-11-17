@@ -29,7 +29,7 @@ func TestMirrorReadSaysNeverInWords(t *testing.T) {
 		{"zero stamp", new(time.Time), "rig"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := mirrorReadAt(now, tc.at, testTick, 0, tc.source)
+			got := mirrorReadAt(now, tc.at, testTick, 0, tc.source, false)
 			if want := "last " + tc.source + " read never"; got.Label != want {
 				t.Fatalf("label = %q, want %q", got.Label, want)
 			}
@@ -88,7 +88,7 @@ func TestMirrorReadThresholds(t *testing.T) {
 		{5*testTick + time.Second, "stalled", " · stalled"},
 	} {
 		at := now.Add(-tc.age)
-		got := mirrorReadAt(now, &at, testTick, 0, "forge")
+		got := mirrorReadAt(now, &at, testTick, 0, "forge", false)
 		if got.State != tc.state {
 			t.Fatalf("age %s: state = %q, want %q", tc.age, got.State, tc.state)
 		}
@@ -100,7 +100,7 @@ func TestMirrorReadThresholds(t *testing.T) {
 	// A caller that never learned the cadence still measures against the real
 	// default rather than calling every read stalled.
 	at := now.Add(-40 * time.Second)
-	if got := mirrorReadAt(now, &at, 0, 0, "rig").State; got != "quiet" {
+	if got := mirrorReadAt(now, &at, 0, 0, "rig", false).State; got != "quiet" {
 		t.Fatalf("zero tick state = %q, want quiet at the default cadence", got)
 	}
 }
@@ -128,7 +128,7 @@ func TestMirrorReadThresholdsMaxWaitAware(t *testing.T) {
 		{21 * time.Minute, "stalled"},
 	} {
 		at := now.Add(-tc.age)
-		if got := mirrorReadAt(now, &at, tick, maxWait, "forge").State; got != tc.state {
+		if got := mirrorReadAt(now, &at, tick, maxWait, "forge", false).State; got != tc.state {
 			t.Fatalf("age %s with a 10m cap: state = %q, want %q", tc.age, got, tc.state)
 		}
 	}
@@ -140,7 +140,7 @@ func TestMirrorReadThresholdsMaxWaitAware(t *testing.T) {
 		t.Fatalf("block-less windows = %s/%s, want the spec's 2m/5m", quiet, stalled)
 	}
 	at := now.Add(-10 * time.Minute)
-	if got := mirrorReadAt(now, &at, time.Minute, time.Minute, "forge").State; got != "stalled" {
+	if got := mirrorReadAt(now, &at, time.Minute, time.Minute, "forge", false).State; got != "stalled" {
 		t.Fatalf("block-less 10m read = %q, want stalled", got)
 	}
 }

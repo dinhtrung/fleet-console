@@ -62,14 +62,14 @@
 
 ## 4. Web: the board refuses verdicts and says paused (T4)
 
-- [ ] 4.1 `internal/web/verdict.go` `ItemVerdict`: after the project row is found and before any forge read,
+- [x] 4.1 `internal/web/verdict.go` `ItemVerdict`: after the project row is found and before any forge read,
       answer `409` with the fixed message when `projectPaused(project)`. No note, no `Ready`, no `wake`.
-- [ ] 4.2 `internal/web/mirror_read.go` and its caller: for a paused project return label
+- [x] 4.2 `internal/web/mirror_read.go` and its caller: for a paused project return label
       `paused — no forge reads` and state `paused`, whatever the stamp's age; leave the never-read case alone.
-- [ ] 4.3 Tests: a verdict request on an `onhold` project → 409 and an empty `fake.Writes`/`NotesAsked`; the same
+- [x] 4.3 Tests: a verdict request on an `onhold` project → 409 and an empty `fake.Writes`/`NotesAsked`; the same
       request after resume → 200 and the note posted. A paused project with a day-old stamp → `paused`, an
       enabled project with the same stamp → `stalled`.
-- [ ] 4.4 Evidence: `go test ./internal/web -run 'Paused|MirrorRead' -v`.
+- [x] 4.4 Evidence: `go test ./internal/web -run 'Paused|MirrorRead' -v`.
 
 ## 5. Docs: what pause means (T5 — blocked by T1–T4)
 
