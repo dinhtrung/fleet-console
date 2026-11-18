@@ -48,6 +48,13 @@
 
 ## 6. Documentation (child #528)
 
-- [ ] 6.1 How to mark owner-only tasks, and how `manual` differs from `onhold`.
-- [ ] 6.2 The `dead_end` skip and its question, with the three answers.
-- [ ] 6.3 How to release an item: push a new head, or answer the question with `release`.
+- [x] 6.1 How to mark owner-only tasks, and how `manual` differs from `onhold`.
+      `docs/fleet-console.md` → "Tasks the fleet should not take": the `gh`/`glab` example, the board's
+      `manual (owner)` row, the `labels.manual` rename, and the pause-vs-person contrast; the README's project
+      key list names the reserved key.
+- [x] 6.2 The `dead_end` skip and its question, with the three answers.
+      `docs/fleet-console.md` → "When a branch stops where it started": the skip line, the one question per
+      (item, head) with the last row's resolution, and what release / hold / hand-to-a-person each look like.
+- [x] 6.3 How to release an item: push a new head, or answer the question with `release`.
+      "Releasing an item": the two paths, the board-only answer caveat for the CLI, and the one-attempt rule
+      for a ledger release.

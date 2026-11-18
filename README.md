@@ -119,7 +119,10 @@ A project entry takes `key`, `name`, `forge` (`github`/`gitlab`), `repo`
 `forge_host` (GitLab only: the API host; defaults to `repo_url`'s host, else
 `gitlab.com`), `default_branch` (default `main`), `rigs`, `rig_template`
 (default `default`), `concurrency_cap`, `gate_cmd`, `labels`, `onhold`, and
-`paths.main` / `paths.worktrees`. `rigs` is the ordered list of rigs for this
+`paths.main` / `paths.worktrees`. The one reserved `labels` key is `manual`:
+its value names the forge label that marks an owner-only task (default
+`manual`), and an item carrying it is never dispatched — see
+[docs/fleet-console.md](docs/fleet-console.md#tasks-the-fleet-should-not-take). `rigs` is the ordered list of rigs for this
 project; `rig: name` is the one-element form, and using both in one file is an
 error. At least one rig is required, and a rig used by one project may not be
 listed by another. Each rig serves only this project: the
