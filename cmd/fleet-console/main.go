@@ -437,6 +437,7 @@ func planSnapshot(ctx context.Context, eff *config.Effective, db *store.Store, p
 		})
 	}
 	snapshot.Project.Reviewer = eff.ReviewerFor(project.Key)
+	snapshot.Project.ManualLabel = eff.ManualLabelFor(project.Key)
 	snapshot.Project.EpicParallel = !eff.EpicSerialFor(project.Key)
 	// The project's row answers first, the config block second — the same
 	// resolution the act phase runs for the relay seat below (#375, #397).

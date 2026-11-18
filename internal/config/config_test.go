@@ -923,3 +923,44 @@ func TestEpicBranches(t *testing.T) {
 		t.Fatalf("--print-config does not show the setting:\n%s", printed)
 	}
 }
+
+// TestManualLabel (#527): the owner-only label defaults to `manual`, resolves
+// from the reserved `labels.manual` key when the project names one, and an
+// unknown project or a blank value keeps the default rather than disabling
+// the rule.
+func TestManualLabel(t *testing.T) {
+	dir := t.TempDir()
+	t.Run("absent is the default", func(t *testing.T) {
+		path := writeConfig(t, dir, "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if got := eff.ManualLabelFor("a"); got != DefaultManualLabel {
+			t.Fatalf("manual label = %q, want %q", got, DefaultManualLabel)
+		}
+		if got := eff.ManualLabelFor("missing"); got != DefaultManualLabel {
+			t.Fatalf("unknown project manual label = %q, want the default", got)
+		}
+	})
+	t.Run("configured resolves", func(t *testing.T) {
+		path := writeConfig(t, dir, "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    labels:\n      manual: owner-only\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if got := eff.ManualLabelFor("a"); got != "owner-only" {
+			t.Fatalf("manual label = %q, want owner-only", got)
+		}
+	})
+	t.Run("a blank value keeps the default", func(t *testing.T) {
+		path := writeConfig(t, dir, "projects:\n  - key: a\n    forge: github\n    repo: o/r\n    rigs: [r]\n    labels:\n      manual: \" \"\n")
+		eff, err := Load(Options{FlagPath: path, Env: envMap(nil), Home: dir, Cwd: dir})
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if got := eff.ManualLabelFor("a"); got != DefaultManualLabel {
+			t.Fatalf("manual label = %q, want the default", got)
+		}
+	})
+}
