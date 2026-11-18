@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dinhtrung/fleet-console/internal/decide"
 	"github.com/dinhtrung/fleet-console/internal/forge"
+	"github.com/dinhtrung/fleet-console/internal/git"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 )
@@ -31,7 +33,13 @@ type reconcileMarker struct {
 // Reconcile applies D4: the rig wins. An open dispatch is ended when its item's
 // CR merged (merged), when its queue row is terminal (superseded), or when the
 // row has been absent for a full tick (abandoned). One event per transition.
-func Reconcile(ctx context.Context, st *store.Store, project store.ProjectRow, rows []rig.QueueRow, crs []forge.ChangeRequest, now time.Time) (ReconcileResult, error) {
+//
+// An end with no change request also records the branch head it stopped at
+// (#526): that head is the fact a later plan compares against origin, so an
+// unchanged dead end can park instead of re-dispatching every tick. The branch
+// index is the same tick's git read; an item with no branch records no head,
+// and the plan keeps today's behaviour for it.
+func Reconcile(ctx context.Context, st *store.Store, project store.ProjectRow, rows []rig.QueueRow, crs []forge.ChangeRequest, branches []git.Branch, now time.Time) (ReconcileResult, error) {
 	result := ReconcileResult{Reasons: map[int]string{}}
 	if st == nil {
 		return result, fmt.Errorf("reconcile: store is required")
@@ -59,8 +67,8 @@ func Reconcile(ctx context.Context, st *store.Store, project store.ProjectRow, r
 		}
 	}
 
-	changed := func(item int, dispatch store.DispatchRow, reason, detail string) error {
-		if err := st.EndDispatch(ctx, dispatch.ID, reason); err != nil {
+	changed := func(item int, dispatch store.DispatchRow, reason, detail, head string) error {
+		if err := st.EndDispatchWithHead(ctx, dispatch.ID, reason, head); err != nil {
 			return err
 		}
 		eventID, err := st.AppendEvent(ctx, store.Event{
@@ -82,8 +90,9 @@ func Reconcile(ctx context.Context, st *store.Store, project store.ProjectRow, r
 		}
 		item := dispatch.ItemNumber
 		if merged[item] {
+			// A merged change request is the record of this end; no head.
 			if err := changed(item, dispatch, "merged",
-				fmt.Sprintf("change request merged; attempt %d row %s", dispatch.Attempt, dispatch.QItemID)); err != nil {
+				fmt.Sprintf("change request merged; attempt %d row %s", dispatch.Attempt, dispatch.QItemID), ""); err != nil {
 				return result, err
 			}
 			delete(marker.Missing, dispatch.QItemID)
@@ -98,7 +107,8 @@ func Reconcile(ctx context.Context, st *store.Store, project store.ProjectRow, r
 			}
 			if _, terminal := reconcileTerminal[state]; terminal {
 				if err := changed(item, dispatch, "superseded",
-					fmt.Sprintf("row %s is %s; attempt %d", dispatch.QItemID, state, dispatch.Attempt)); err != nil {
+					fmt.Sprintf("row %s is %s; attempt %d", dispatch.QItemID, state, dispatch.Attempt),
+					endHead(item, crs, branches)); err != nil {
 					return result, err
 				}
 			}
@@ -108,7 +118,8 @@ func Reconcile(ctx context.Context, st *store.Store, project store.ProjectRow, r
 		// tick. A dispatch created by this tick's act pass is not in this read.
 		if first, seen := marker.Missing[dispatch.QItemID]; seen {
 			if err := changed(item, dispatch, "abandoned",
-				fmt.Sprintf("no row %s for item #%d since %s; attempt %d", dispatch.QItemID, item, first, dispatch.Attempt)); err != nil {
+				fmt.Sprintf("no row %s for item #%d since %s; attempt %d", dispatch.QItemID, item, first, dispatch.Attempt),
+				endHead(item, crs, branches)); err != nil {
 				return result, err
 			}
 			delete(marker.Missing, dispatch.QItemID)
@@ -121,4 +132,31 @@ func Reconcile(ctx context.Context, st *store.Store, project store.ProjectRow, r
 		return result, err
 	}
 	return result, nil
+}
+
+// endHead is the head to record for an attempt that is ending: the item's
+// branch head when the end has no change request to explain it, "" otherwise
+// (#526). A change request is its own record of the attempt, so recording a
+// head beside it would tell a later plan the attempt was a dead end.
+func endHead(item int, crs []forge.ChangeRequest, branches []git.Branch) string {
+	for _, cr := range crs {
+		if cr.Merged || strings.EqualFold(cr.State, "closed") {
+			// A merged or closed change request cannot merge again; it does not
+			// explain this attempt and does not suppress the head.
+			continue
+		}
+		closes := cr.ClosesItem
+		if closes == 0 {
+			closes = forge.ParseCloses(cr.Body)
+		}
+		if closes == item {
+			return ""
+		}
+	}
+	for _, branch := range branches {
+		if branch.Item == item || decide.BranchItem(branch.Name) == item {
+			return branch.Head
+		}
+	}
+	return ""
 }

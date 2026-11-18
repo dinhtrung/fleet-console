@@ -7,11 +7,11 @@ import (
 
 // schemaVersion is the number of migrations in migrations. A database at this
 // user_version is current.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // migrations are applied in order; migrations[i] moves user_version from i to
 // i+1. Never edit an applied migration; append a new one.
-var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7}
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4, schemaV5, schemaV6, schemaV7, schemaV8}
 
 // schemaV1 is design §6 verbatim. Do not add the queue_row, decision, lease or
 // task tables here: that state belongs to the rig.
@@ -143,6 +143,16 @@ CREATE TABLE plan_reason (
 // today's behaviour — an epic's children target the default branch.
 const schemaV7 = `
 ALTER TABLE project ADD COLUMN epic_branches INTEGER NOT NULL DEFAULT 0;
+`
+
+// schemaV8 keeps the branch head a dispatch ended on (#526): when an attempt
+// ends without a change request, the head it stopped at is the fact a later
+// tick compares against origin. An unchanged head means nobody pushed since,
+// so re-dispatching would repeat the same dead end. Empty is "the end recorded
+// no head" — every attempt that ended before this column existed, and any end
+// that happened with a change request present.
+const schemaV8 = `
+ALTER TABLE dispatch ADD COLUMN end_head TEXT NOT NULL DEFAULT '';
 `
 
 func (s *Store) migrate(ctx context.Context) error {

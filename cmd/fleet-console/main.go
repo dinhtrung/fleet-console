@@ -426,7 +426,16 @@ func planSnapshot(ctx context.Context, eff *config.Effective, db *store.Store, p
 	if err != nil {
 		return decide.Snapshot{}, nil, err
 	}
+	released, err := db.DeadEndReleases(ctx, project.ID)
+	if err != nil {
+		return decide.Snapshot{}, nil, err
+	}
 	snapshot := mirror.BuildSnapshot(project, result, dispatches, verdicts, malformed, relayed)
+	for _, release := range released {
+		snapshot.ReleasedHeads = append(snapshot.ReleasedHeads, decide.ReleasedHead{
+			Item: release.Item, Head: release.Head, At: release.At,
+		})
+	}
 	snapshot.Project.Reviewer = eff.ReviewerFor(project.Key)
 	snapshot.Project.EpicParallel = !eff.EpicSerialFor(project.Key)
 	// The project's row answers first, the config block second — the same
@@ -871,7 +880,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 				// same tick.
 				suppress := map[int]bool{}
 				if apply && gateErr == nil {
-					reconciled, err := act.Reconcile(ctx, db, project, projectRead.Rows, projectRead.CRs, read.At)
+					reconciled, err := act.Reconcile(ctx, db, project, projectRead.Rows, projectRead.CRs, projectRead.Branches, read.At)
 					if err != nil {
 						fmt.Fprintf(stderr, "reconcile: %s: %v\n", project.Key, err)
 					} else if len(reconciled.Changed) > 0 {

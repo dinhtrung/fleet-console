@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -50,9 +51,17 @@ func (s *Store) CreateDispatch(ctx context.Context, d NewDispatch) (int64, error
 
 // EndDispatch marks a dispatch attempt ended.
 func (s *Store) EndDispatch(ctx context.Context, id int64, reason string) error {
+	return s.EndDispatchWithHead(ctx, id, reason, "")
+}
+
+// EndDispatchWithHead marks a dispatch attempt ended and records the branch head
+// it stopped at (#526). Callers pass a head only when the attempt ended without
+// a change request: that head is what a later tick compares against origin, and
+// a change request ending is a different fact with its own record.
+func (s *Store) EndDispatchWithHead(ctx context.Context, id int64, reason, head string) error {
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE dispatch SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL`,
-		time.Now().UTC().Format(time.RFC3339Nano), reason, id)
+		UPDATE dispatch SET ended_at = ?, end_reason = ?, end_head = ? WHERE id = ? AND ended_at IS NULL`,
+		time.Now().UTC().Format(time.RFC3339Nano), reason, strings.ToLower(strings.TrimSpace(head)), id)
 	if err != nil {
 		return fmt.Errorf("store: end dispatch: %w", err)
 	}
@@ -68,10 +77,11 @@ func (s *Store) Dispatch(ctx context.Context, id int64) (*DispatchRow, error) {
 	var ended sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, project_id, item_number, attempt, seat, branch, worktree, base_sha,
-		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, ''), state
+		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, ''),
+		       COALESCE(end_head, ''), state
 		FROM dispatch WHERE id = ?`, id).
 		Scan(&d.ID, &d.ProjectID, &d.ItemNumber, &d.Attempt, &d.Seat, &d.Branch, &d.Worktree,
-			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason, &d.State)
+			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason, &d.EndHead, &d.State)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -131,7 +141,8 @@ func (s *Store) AddVerdict(ctx context.Context, v NewVerdict) (int64, error) {
 func (s *Store) PendingDispatches(ctx context.Context, projectID int64) ([]DispatchRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_id, item_number, attempt, seat, branch, worktree, base_sha,
-		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, ''), state
+		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, ''),
+		       COALESCE(end_head, ''), state
 		FROM dispatch WHERE project_id = ? AND state = 'pending' AND COALESCE(qitem_id, '') = ''
 		ORDER BY id`, projectID)
 	if err != nil {
@@ -143,7 +154,7 @@ func (s *Store) PendingDispatches(ctx context.Context, projectID int64) ([]Dispa
 		var d DispatchRow
 		var ended sql.NullString
 		if err := rows.Scan(&d.ID, &d.ProjectID, &d.ItemNumber, &d.Attempt, &d.Seat, &d.Branch, &d.Worktree,
-			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason, &d.State); err != nil {
+			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason, &d.EndHead, &d.State); err != nil {
 			return nil, fmt.Errorf("store: pending dispatches: %w", err)
 		}
 		if ended.Valid {

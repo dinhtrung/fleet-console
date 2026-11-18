@@ -151,13 +151,19 @@ type Row struct {
 	Summary     string    `json:"summary"`
 	CreatedAt   time.Time `json:"created_at,omitempty"`
 	LastNudgeAt time.Time `json:"last_nudge_at,omitempty"`
+	// Resolution is the text the row was closed with, when the rig reports one.
+	// A dead end quotes it in its operator question (#526): the builder's own
+	// words are what tells a person whether the item is a dead end at all.
+	Resolution string `json:"resolution,omitempty"`
 }
 
 // Branch is one origin branch the mirror saw. A branch named feature/<n>-* belongs to
 // item n; an open or merged change request on it is the second half of idempotency.
+// Head is origin's commit for the branch, the fact a dead end compares (#526).
 type Branch struct {
 	Name        string `json:"name"`
 	Item        int    `json:"item"`
+	Head        string `json:"head,omitempty"`
 	HasOpenCR   bool   `json:"has_open_cr"`
 	HasMergedCR bool   `json:"has_merged_cr"`
 }
@@ -215,12 +221,27 @@ type Snapshot struct {
 	// an earlier tick's dispatches. An empty slice means nothing was relayed;
 	// the entries are lowercased shas.
 	RelayedHeads []RelayedHead `json:"relayed_heads,omitempty"`
+
+	// ReleasedHeads carries the (item, head) pairs an operator released after a
+	// dead end (#526). Folded from the event ledger by the caller for the same
+	// reason as RelayedHeads: the plan reads no ledger itself.
+	ReleasedHeads []ReleasedHead `json:"released_heads,omitempty"`
 }
 
 // RelayedHead is one (item, head) the ledger already relayed.
 type RelayedHead struct {
 	Item int    `json:"item"`
 	Head string `json:"head"`
+}
+
+// ReleasedHead is one (item, head) an operator answered "release" for (#526).
+// At is when the answer was recorded: a dispatch attempt that started after it
+// is the release being spent, so the next dead end at the same head parks again
+// instead of re-dispatching forever.
+type ReleasedHead struct {
+	Item int       `json:"item"`
+	Head string    `json:"head"`
+	At   time.Time `json:"at"`
 }
 
 // Reason is a skip reason. Every candidate carries one; a candidate with no reason is a
@@ -238,6 +259,10 @@ const (
 	ReasonBranchMergedCR    Reason = "branch_merged_cr"
 	ReasonBlocked           Reason = "blocked"
 	ReasonNoFreeBuilder     Reason = "no_free_builder"
+	// ReasonDeadEnd: the item's newest dispatch ended without a change request
+	// at exactly the head origin still reports, so adopting the branch would
+	// repeat an attempt that already stopped there (#526).
+	ReasonDeadEnd Reason = "dead_end"
 	// ReasonEpicBusy: another child of the same epic holds it — a live dispatch
 	// or an open unmerged change request (#443).
 	ReasonEpicBusy Reason = "epic_busy"
@@ -265,6 +290,15 @@ type Dispatch struct {
 	Seat   string `json:"seat"`
 }
 
+// DeadEnd is one item the newest dispatch already ended on at a branch head
+// origin has not moved since (#526). The plan raises one operator question per
+// (item, head) from it; the skip is the same fact for the board.
+type DeadEnd struct {
+	Number int    `json:"number"`
+	Branch string `json:"branch"`
+	Head   string `json:"head"`
+}
+
 // Result is the whole plan: deterministic for a snapshot.
 type Result struct {
 	Status Status `json:"status"`
@@ -275,7 +309,11 @@ type Result struct {
 	Ready      int        `json:"ready"`
 	Dispatches []Dispatch `json:"dispatches"`
 	Skips      []Skip     `json:"skips"`
-	Error      string     `json:"error,omitempty"`
+	// DeadEnds carries every skip that is a dead end, with the branch and head
+	// the operator question needs. It is the same fact as the skip, kept apart
+	// because a Skip's detail is prose for a board and the raise needs fields.
+	DeadEnds []DeadEnd `json:"dead_ends,omitempty"`
+	Error    string    `json:"error,omitempty"`
 }
 
 var terminalRowStates = map[string]struct{}{
@@ -454,7 +492,21 @@ func Decide(s Snapshot) Result {
 				})
 				continue
 			}
-			// A branch with no change request is unfinished work: adopt it.
+			// A branch with no change request is unfinished work: adopt it —
+			// unless the newest dispatch already ended there without a change
+			// request and origin has not moved since (#526). Re-dispatching an
+			// unchanged dead end repeats the attempt every tick; one operator
+			// question per (item, head) is the plan's answer instead.
+			if head, deadEnd := deadEndFor(s, item.Number, branch); deadEnd {
+				result.DeadEnds = append(result.DeadEnds, DeadEnd{
+					Number: item.Number, Branch: branch.Name, Head: head,
+				})
+				result.Skips = append(result.Skips, Skip{
+					Number: item.Number, Reason: ReasonDeadEnd,
+					Detail: fmt.Sprintf("%s@%s", branch.Name, head),
+				})
+				continue
+			}
 			if skip, busy := epicGate(item); busy {
 				result.Skips = append(result.Skips, skip)
 				continue
@@ -860,9 +912,56 @@ func branchIndex(branches []Branch) map[int]Branch {
 		if current.Name == "" {
 			current.Name = branch.Name
 		}
+		if current.Head == "" {
+			current.Head = branch.Head
+		}
 		index[number] = current
 	}
 	return index
+}
+
+// newestDispatch is the item's latest attempt: the highest attempt number, and
+// the later start among equal numbers. The store already orders by attempt, but
+// the comparison is here rather than assumed, so a caller's ordering is never
+// load-bearing.
+func newestDispatch(dispatches []DispatchState, item int) (DispatchState, bool) {
+	var newest DispatchState
+	found := false
+	for _, dispatch := range dispatches {
+		if dispatch.Item != item {
+			continue
+		}
+		if !found || dispatch.Attempt > newest.Attempt ||
+			(dispatch.Attempt == newest.Attempt && dispatch.CreatedAt.After(newest.CreatedAt)) {
+			newest = dispatch
+			found = true
+		}
+	}
+	return newest, found
+}
+
+// deadEndFor reports the head the item's newest dispatch already ended on when
+// adopting the branch would repeat that attempt (#526): the attempt is ended,
+// it recorded a head (it ended without a change request), origin still reports
+// that same head, and no operator release answered after the end.
+//
+// A release answered before the attempt ended is spent: a dispatch started
+// after it is the release doing its work, so the same head parking again is a
+// new dead end, not a second permission to re-dispatch.
+func deadEndFor(s Snapshot, item int, branch Branch) (string, bool) {
+	dispatch, found := newestDispatch(s.Dispatches, item)
+	if !found || dispatch.EndedAt.IsZero() || dispatch.EndHead == "" || branch.Head == "" {
+		return "", false
+	}
+	if !sameSHA(dispatch.EndHead, branch.Head) {
+		return "", false
+	}
+	for _, release := range s.ReleasedHeads {
+		if release.Item == item && sameSHA(release.Head, branch.Head) && release.At.After(dispatch.EndedAt) {
+			return "", false
+		}
+	}
+	return dispatch.EndHead, true
 }
 
 var branchPrefix = regexp.MustCompile(`^feature/(\d+)-`)

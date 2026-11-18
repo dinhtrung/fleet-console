@@ -25,9 +25,9 @@ func TestBranchIndex(t *testing.T) {
 		t.Fatalf("branches = %+v, want 3", branches)
 	}
 	want := []Branch{
-		{Name: "feature/12-connection-pool", Item: 12},
-		{Name: "feature/7-web-foundation", Item: 7},
-		{Name: "feature/9-board", Item: 9},
+		{Name: "feature/12-connection-pool", Item: 12, Head: "2222222222222222222222222222222222222222"},
+		{Name: "feature/7-web-foundation", Item: 7, Head: "3333333333333333333333333333333333333333"},
+		{Name: "feature/9-board", Item: 9, Head: "4444444444444444444444444444444444444444"},
 	}
 	for i := range want {
 		if branches[i] != want[i] {

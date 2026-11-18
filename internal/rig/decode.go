@@ -22,6 +22,9 @@ type QueueRow struct {
 	CreatedAt   string `json:"created_at,omitempty"`
 	LastNudgeAt string `json:"last_nudge_at,omitempty"`
 	Body        string `json:"body,omitempty"`
+	// Resolution is the text the row was closed with. `rig queue list -a`
+	// carries it; a row still open reports none.
+	Resolution string `json:"resolution,omitempty"`
 }
 
 // Seat is one node from `rig ps --nodes -A --full --json` (or a targeted `--rig`).
@@ -118,6 +121,7 @@ type queueRowWire struct {
 	CreatedAt   string `json:"tsCreated"`
 	LastNudge   string `json:"lastNudgeAttempt"`
 	Body        string `json:"body"`
+	Resolution  string `json:"resolution"`
 }
 
 type seatWire struct {
@@ -196,6 +200,7 @@ func ParseQueueList(data []byte, unknown func(key string)) ([]QueueRow, error) {
 			CreatedAt:   wire.CreatedAt,
 			LastNudgeAt: wire.LastNudge,
 			Body:        wire.Body,
+			Resolution:  wire.Resolution,
 		}
 		for _, check := range []struct {
 			field, path, value string

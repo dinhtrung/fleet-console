@@ -572,10 +572,11 @@ func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []
 			QItemID: row.ID, State: row.State, Pickup: row.PickupState,
 			Destination: row.Destination, Body: row.Body, Summary: row.Summary,
 			CreatedAt: parseTime(row.CreatedAt), LastNudgeAt: parseTime(row.LastNudgeAt),
+			Resolution: row.Resolution,
 		})
 	}
 	for _, branch := range result.Branches {
-		converted := branchFields{Name: branch.Name, Item: branch.Item}
+		converted := branchFields{Name: branch.Name, Item: branch.Item, Head: branch.Head}
 		for _, cr := range result.CRs {
 			if cr.ClosesItem != branch.Item {
 				continue
@@ -625,6 +626,7 @@ func BuildSnapshot(project store.ProjectRow, result ProjectResult, dispatches []
 			Item: dispatch.ItemNumber, Seat: dispatch.Seat, Branch: dispatch.Branch,
 			QItemID: dispatch.QItemID, Attempt: dispatch.Attempt,
 			CreatedAt: parseTime(dispatch.CreatedAt), EndReason: dispatch.EndReason,
+			EndHead: dispatch.EndHead,
 		}
 		if dispatch.EndedAt != nil {
 			converted.EndedAt = parseTime(*dispatch.EndedAt)

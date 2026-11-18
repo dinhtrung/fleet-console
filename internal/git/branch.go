@@ -68,10 +68,12 @@ func (r ExecRunner) Run(ctx context.Context, args ...string) ([]byte, error) {
 	return stdout.Bytes(), nil
 }
 
-// Branch is one origin head that belongs to an item.
+// Branch is one origin head that belongs to an item. Head is the commit the
+// remote reported for it — the fact a dead end compares against (#526).
 type Branch struct {
 	Name string `json:"name"`
 	Item int    `json:"item"`
+	Head string `json:"head"`
 }
 
 var featureBranch = regexp.MustCompile(`^refs/heads/feature/(\d+)-`)
@@ -94,7 +96,7 @@ func ParseRemoteHeads(stdout []byte) []Branch {
 		if err != nil || number <= 0 {
 			continue
 		}
-		out = append(out, Branch{Name: strings.TrimPrefix(ref, "refs/heads/"), Item: number})
+		out = append(out, Branch{Name: strings.TrimPrefix(ref, "refs/heads/"), Item: number, Head: fields[0]})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
