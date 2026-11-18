@@ -309,6 +309,99 @@ panic still means the tick did nothing; an unsupervised box that starts the cons
 runner with no restart policy is dark after *any* panic, and that is the failure this section
 exists because of: the loop contained the crash, and nothing was left to restart it.
 
+## Tasks the fleet should not take
+
+Two labels say "a builder should not pick this up", for two different reasons: `manual` means a person does the
+work, `onhold` means nobody does it right now. Both are skips in the ready walk, and both are visible on the
+board's why-column — but they must never be confused for each other.
+
+### Marking a task for a person
+
+Some epic children can only be done by a person after deploy: a live browser check, a query against production
+Prometheus, pushing an alert rule. A builder dispatched to one of those cannot finish it, ends its row, and
+leaves a branch with a partial commit — the shape the `dead_end` rule below exists for. The cheaper answer is to
+mark the task when the epic is written: put the `manual` label on it at creation, and the fleet never takes it.
+
+```bash
+# at epic-creation time, on the forge (gh shown; glab takes --label)
+gh issue edit 7 --add-label manual          # "owner-only: prove the alert on live Prometheus"
+```
+
+On the board the item reads **manual (owner)**, its own state and its own count in the project header (`2
+manual`); the why-column reads `manual — owner-only task`. It is not queued, not waiting for a seat, and not
+blocked — nothing is wrong with it; a person owns it. Under the default serial-epic rule a manual child also
+holds nothing: the next sibling may start while the owner works their task, even if the owner already has a
+change request open on it.
+
+A project can rename the label through the reserved `labels.manual` entry, so a rig that already uses a
+different word needs no second one:
+
+```yaml
+projects:
+  - key: mnpserver2
+    labels:
+      manual: owner-only      # items labelled owner-only are the person's; default is `manual`
+```
+
+### How `manual` differs from `onhold`
+
+`onhold` is a **pause**, and it is read that way everywhere: the item is real work that nobody is doing now —
+held for a reason, resumed by removing the label. A manual item is **not paused**: it is work the fleet will
+never do, and removing the label is what makes it the fleet's. Use `onhold` for "not now, and possibly never by
+a builder either" — it is what operators used to stop a re-dispatch loop by hand, before the `dead_end` rule
+below — and `manual` for "this one is somebody's job". A project's `onhold:` key is a third, different thing:
+it pauses the whole project.
+
+## When a branch stops where it started
+
+`internal/decide` adopts a branch with no change request as unfinished work — that is how a half-done attempt
+gets picked back up. The exception is a **dead end**: the item's newest dispatch ended without opening a
+change request, and origin still reports exactly the head that dispatch stopped at. Nobody pushed since; a
+re-dispatch would repeat the attempt that already failed.
+
+The item is then skipped with the reason `dead_end`, and the detail names the branch and head:
+
+```
+#7 dead_end — feature/7-live-check@4f2c9a1d0e4b8c6a2f1e9d7c5b3a1f0e8d6c4b2a
+```
+
+The plan does not leave it there silently. It raises **one operator question per (item, head)** — repeated
+ticks are the same question standing, and a moved head is a new one — carrying what stopped, where, and the
+last row's own resolution, because the builder's words are what tells a person whether the item is a dead end
+at all:
+
+```
+app #7: the last dispatch ended without a change request on
+feature/7-live-check@4f2c9a1d…; release it, put it on hold, or hand it to a person?
+The last row's resolution: blocked: needs a deployed instance to prove the check
+```
+
+The three answers, and what each one looks like:
+
+- **Release it.** Answer the question row with `release` **on the board**. Its answer control writes the
+  `decision.answer` event the next tick folds in, and the item is dispatched again at the same head. (An
+  answer given only through the `rig queue` CLI writes no such event, so the app cannot see it — push a new
+  head instead.)
+- **Put it on hold.** Add the `onhold` label to the item; the plan already skips it there, and the question is
+  the record of why. Remove the label when the reason has gone.
+- **Hand it to a person.** Add the `manual` label (or your project's `labels.manual` name). The item stops
+  being the fleet's work and the board says `manual (owner)`.
+
+### Releasing an item
+
+There are two ways, and both are the owner's call:
+
+1. **Push a new head.** Any commit pushed to the branch makes its head differ from the one the attempt
+   stopped at, so the next tick adopts the branch and dispatches the item, exactly as before the rule
+   existed. This is the release for "the reason it failed has gone away".
+2. **Answer the question with `release`.** The answer is folded from the ledger on the next tick and the item
+   is dispatched once at the unchanged head. A release buys **one attempt**: if that attempt stops at the same
+   head again, the item parks again — the question is asked once per head, so the second release is a new
+   commit, or one of the other two answers.
+
+Nothing is dispatched without one of those: an unchanged dead end waits, however many ticks pass, and its
+skip line is written once rather than on every tick.
+
 ## What it refuses to be
 
 - **No model in the dispatch path.** Ordering is a contract, not a judgement call.
