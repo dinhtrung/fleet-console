@@ -61,7 +61,16 @@ type Project struct {
 	// to thread the config serializes epics rather than silently disabling the
 	// rule.
 	EpicParallel bool `json:"epic_parallel"`
+	// ManualLabel is the forge label that marks an owner-only task (#527),
+	// resolved by the caller from the project's config and defaulted to
+	// DefaultManualLabel. An item carrying it is skipped like `onhold`, because
+	// a person does the work and no builder can finish it.
+	ManualLabel string `json:"manual_label,omitempty"`
 }
+
+// DefaultManualLabel is the label a project's owner-only tasks carry when the
+// project names none (#527) — the name every project has before the key existed.
+const DefaultManualLabel = "manual"
 
 // DefaultReviewer is the reviewer member prefix a project uses when its config
 // names none (#384) — the name every project had before the field existed.
@@ -138,6 +147,16 @@ func (i Item) onHold() bool {
 		}
 	}
 	return false
+}
+
+// manual reports whether the item carries the project's owner-only label (#527).
+// The label is a project choice, so it comes from the snapshot; an empty name
+// resolves to DefaultManualLabel rather than silently disabling the rule.
+func (i Item) manual(label string) bool {
+	if strings.TrimSpace(label) == "" {
+		label = DefaultManualLabel
+	}
+	return hasLabel(i.Labels, label)
 }
 
 // Row is a rig queue row. The rig spells the transport state `terminal` and the row
@@ -263,6 +282,10 @@ const (
 	// at exactly the head origin still reports, so adopting the branch would
 	// repeat an attempt that already stopped there (#526).
 	ReasonDeadEnd Reason = "dead_end"
+	// ReasonManual: the item carries the project's owner-only label (#527), so
+	// a person does it and no builder can finish it. Not a pause like `onhold`:
+	// the two read differently on the board because they mean different things.
+	ReasonManual Reason = "manual"
 	// ReasonEpicBusy: another child of the same epic holds it — a live dispatch
 	// or an open unmerged change request (#443).
 	ReasonEpicBusy Reason = "epic_busy"
@@ -390,12 +413,14 @@ func Decide(s Snapshot) Result {
 	// The epic rule (#443, design D1): a child holds its epic while it has a
 	// live dispatch row or an open unmerged change request, because a builder's
 	// dispatch ends when the pull request opens and the next sibling starting off
-	// main is the conflict this prevents. A sibling on hold holds nothing.
+	// main is the conflict this prevents. A sibling on hold holds nothing, and
+	// neither does an owner-only task (#527): the fleet will never work it in
+	// this slot, so waiting on it would serialize the epic forever.
 	holders := map[int]epicHolder{}
 	claimed := map[int]int{}
 	if !s.Project.EpicParallel {
 		for _, item := range items {
-			if !item.open() || item.Kind == KindEpic || item.onHold() || item.Parent == nil {
+			if !item.open() || item.Kind == KindEpic || item.onHold() || item.manual(s.Project.ManualLabel) || item.Parent == nil {
 				continue
 			}
 			if _, openEpic := epics[*item.Parent]; !openEpic {
@@ -451,6 +476,15 @@ func Decide(s Snapshot) Result {
 		}
 		if item.onHold() {
 			result.Skips = append(result.Skips, Skip{Number: item.Number, Reason: ReasonOnHold})
+			continue
+		}
+		// An owner-only task is somebody's work, not the fleet's (#527). It is
+		// skipped before the parent and epic gates so it also holds nothing: a
+		// manual child must not keep its epic's serial slot.
+		if item.manual(s.Project.ManualLabel) {
+			result.Skips = append(result.Skips, Skip{
+				Number: item.Number, Reason: ReasonManual, Detail: "owner-only task",
+			})
 			continue
 		}
 		if item.Parent != nil {

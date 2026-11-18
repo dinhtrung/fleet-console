@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dinhtrung/fleet-console/internal/decide"
 	"github.com/dinhtrung/fleet-console/internal/forge"
 	"github.com/dinhtrung/fleet-console/internal/mirror"
 	"github.com/dinhtrung/fleet-console/internal/rig"
@@ -76,6 +77,10 @@ type boardCounts struct {
 	Parked   int `json:"parked"`
 	Blocked  int `json:"blocked"`
 	Stale    int `json:"stale"`
+	// Manual counts the owner-only tasks (#527): work a person does, which the
+	// fleet will never take. Its own bucket, because "blocked" would read as a
+	// fault and "waiting" as a queue the fleet is working through.
+	Manual int `json:"manual"`
 }
 
 // projectPaused treats a disabled project as paused: removing its config block
@@ -467,6 +472,26 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 			case projectStatus.ForgeForbidden:
 				row.State, row.Reason = "blocked", projectStatus.ForgeError
 			}
+			// The last plan's reason (#428) is also the one place the board learns
+			// an item is owner-only (#527): the plan skips it with `manual`, and
+			// the row says so in its own state rather than reading as queued work
+			// nobody has picked up.
+			if reason, ok := planReasons[row.Number]; ok {
+				row.PlanReason = reason.Reason
+				if reason.Detail != "" {
+					row.PlanReason += " — " + reason.Detail
+				}
+				if !reason.TickAt.IsZero() {
+					row.PlanAge = ageBetween(now, reason.TickAt)
+				}
+				// Only a row the fleet has not taken becomes `manual`: queued or
+				// waiting-for-a-seat both mean "nobody is on it yet", while a
+				// paused, blocked or building item already has a louder fact,
+				// and the reason table can lag a pause by a tick.
+				if reason.Reason == string(decide.ReasonManual) && (row.State == "queued" || row.State == "waiting") {
+					row.State, row.Reason = "manual", "manual (owner)"
+				}
+			}
 			switch row.State {
 			case "building":
 				bp.Counts.Building++
@@ -481,17 +506,10 @@ func (f *Fleet) Board(c fiber.Ctx) error {
 				bp.Counts.Stale++
 			case "waiting":
 				bp.Counts.Waiting++
+			case "manual":
+				bp.Counts.Manual++
 			case "blocked", "paused":
 				bp.Counts.Blocked++
-			}
-			if reason, ok := planReasons[row.Number]; ok {
-				row.PlanReason = reason.Reason
-				if reason.Detail != "" {
-					row.PlanReason += " — " + reason.Detail
-				}
-				if !reason.TickAt.IsZero() {
-					row.PlanAge = ageBetween(now, reason.TickAt)
-				}
 			}
 			bp.Items = append(bp.Items, row)
 		}

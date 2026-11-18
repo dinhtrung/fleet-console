@@ -37,9 +37,14 @@
 
 ## 5. The manual label (child #527)
 
-- [ ] 5.1 A project key naming the label (default `manual`) and a `manual` skip reason beside `onhold`.
-- [ ] 5.2 The board shows such items as manual; a serial epic does not count a `manual` child as its holder.
-- [ ] 5.3 Tests: the default and a custom label, and the serial-epic slot.
+- [x] 5.1 A project key naming the label (default `manual`) and a `manual` skip reason beside `onhold`.
+      Shipped as the reserved `labels.manual` entry (`owner-only` names a custom label) with
+      `config.ManualLabelFor`; the walk skips with reason `manual`, detail `owner-only task`, in `internal/decide`.
+- [x] 5.2 The board shows such items as manual; a serial epic does not count a `manual` child as its holder.
+      The board reads the plan's recorded reason and gives the row state `manual (owner)` with its own count;
+      the holder loop and the candidate walk both exclude manual children.
+- [x] 5.3 Tests: the default and a custom label, and the serial-epic slot.
+      `internal/decide/manual_test.go`, `internal/web/manual_board_test.go`, `internal/config/config_test.go`.
 
 ## 6. Documentation (child #528)
 

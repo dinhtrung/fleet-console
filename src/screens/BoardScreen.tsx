@@ -17,13 +17,14 @@ import {
 } from "../components/ui";
 import { PageHeader } from "../shell/PageHeader";
 
-function countLine(project: { counts: { building: number; review: number; waiting: number; parked: number; blocked: number; stale: number } }): string {
+function countLine(project: { counts: { building: number; review: number; waiting: number; parked: number; blocked: number; stale: number; manual: number } }): string {
   const parts = [
     project.counts.building ? `${project.counts.building} building` : "",
     project.counts.review ? `${project.counts.review} review` : "",
     project.counts.stale ? `${project.counts.stale} stale` : "",
     project.counts.parked ? `${project.counts.parked} parked` : "",
     project.counts.waiting ? `${project.counts.waiting} waiting` : "",
+    project.counts.manual ? `${project.counts.manual} manual` : "",
     project.counts.blocked ? `${project.counts.blocked} blocked` : "",
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(" · ") : "nothing open";

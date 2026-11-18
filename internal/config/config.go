@@ -56,8 +56,13 @@ type Project struct {
 	// or claude; stored lowercase; omp when absent.
 	Runtime string            `yaml:"runtime"`
 	GateCmd string            `yaml:"gate_cmd"`
-	Labels  map[string]string `yaml:"labels"`
-	OnHold  *bool             `yaml:"onhold"`
+	// Labels is the project's label block. `manual` is the one reserved key
+	// (#527): its value names the forge label that marks an owner-only task, so
+	// a project can say `labels: {manual: owner-only}` instead of requiring the
+	// literal `manual`. Every other entry is free metadata. Unset keeps
+	// DefaultManualLabel.
+	Labels map[string]string `yaml:"labels"`
+	OnHold *bool             `yaml:"onhold"`
 	// Lifecycle is this project's per-project switch: `on` or `off`. An absent
 	// key inherits rig_lifecycle.enabled; anything else is refused at load.
 	Lifecycle string `yaml:"lifecycle,omitempty"`
@@ -101,6 +106,12 @@ const DefaultEventsKeepDays = 90
 // DefaultReviewer is the reviewer member prefix a project uses when its config
 // names none (#384). It is the name every project had before the field existed.
 const DefaultReviewer = "dev-review"
+
+// DefaultManualLabel is the forge label that marks an owner-only task when a
+// project names none (#527): `[live]` checks, post-deploy steps, anything only
+// a person can do. An item carrying it is skipped like `onhold`, with the plan
+// reason `manual`, and the board reads it as the owner's work.
+const DefaultManualLabel = "manual"
 
 // Relay modes. The relay is off unless a project names one of these in its
 // verdict_relay block; there is no default (D8 — an upgraded binary must not
@@ -803,6 +814,20 @@ func (e *Effective) ReviewerFor(projectKey string) string {
 		return DefaultReviewer
 	}
 	return strings.TrimSpace(project.Reviewer)
+}
+
+// ManualLabelFor resolves a project's owner-only label (#527): the value of the
+// reserved `labels.manual` key, or DefaultManualLabel. One resolution, so the
+// plan's skip and the board's word cannot disagree about a custom name.
+func (e *Effective) ManualLabelFor(projectKey string) string {
+	project := findProjectByKey(e.Projects, projectKey)
+	if project == nil {
+		return DefaultManualLabel
+	}
+	if name := strings.TrimSpace(project.Labels[DefaultManualLabel]); name != "" {
+		return name
+	}
+	return DefaultManualLabel
 }
 
 // RelayRow is the store's half of a project's verdict relay (#375). The zero

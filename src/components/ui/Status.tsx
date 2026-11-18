@@ -31,6 +31,9 @@ const STATUS: Record<string, { code: string; word: string; className: string }> 
   parked: { code: "PRK", word: "Parked", className: "bg-attention text-on-attention" },
   paused: { code: "PSE", word: "Paused", className: "bg-attention text-on-attention" },
   blocked: { code: "BLK", word: "Blocked", className: "border border-rule-strong text-ink" },
+  // An owner-only task (#527): a person does it, so it is not the fleet's work
+  // and must not read as blocked (a fault) or parked (nobody needed).
+  manual: { code: "MNL", word: "Manual (owner)", className: "border border-rule text-ink-muted" },
   // "Unknown" is a state, not an absence (#429): an unread rig must read as a fact the operator can
   // act on, never as the quiet, healthy default.
   unknown: { code: "UNK", word: "Unknown", className: "border border-rule-strong text-ink-muted" },

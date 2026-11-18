@@ -29,6 +29,9 @@ export interface BoardCounts {
   /** Stale verdicts are their own count: parked means nobody is needed, and a stale verdict is
    *  a review waiting for the reviewer. */
   stale: number;
+  /** Owner-only tasks (#527): a person does them, so the fleet never takes them. Their own count,
+   *  because "blocked" would read as a fault and "waiting" as work in the queue. */
+  manual: number;
 }
 
 /** One unanswered operator question (#377): a note the merge gate could not read as a verdict. The

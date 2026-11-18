@@ -79,13 +79,25 @@ this change exists to stop.
 ## D5. The manual label
 
 Owner-only tasks need to be marked at creation time, before a builder fails on them. The project names the
-label — `labels.manual`, default `manual` — and the ready walk skips a labelled item with its own reason
-`manual`, beside `onhold`. A separate reason matters because `onhold` means "paused", and an operator reading
-the board must be able to tell "a person does this" from "nobody does this now".
+label through the reserved `labels.manual` key — `labels: {manual: owner-only}` — and the default is `manual`.
+The value is the forge label name, because the `labels` block is already a map that the config file, the
+store row and the board's editor all round-trip; a new top-level key would have to be added to every one of
+those, and a board edit today re-encodes the entry from its typed struct, so an unknown key would be silently
+dropped.
+
+The ready walk skips a labelled item with its own reason `manual`, beside `onhold`. A separate reason matters
+because `onhold` means "paused", and an operator reading the board must be able to tell "a person does this"
+from "nobody does this now". The skip carries the detail `owner-only task`, so the board's why-column reads
+`manual — owner-only task`; the board also gives such an item its own state, `manual (owner)`, derived from
+the recorded plan reason, and its own count — "blocked" would read as a fault and "waiting" as work the fleet
+is working through.
 
 The serial-epic rule must not let a `manual` child hold its epic's slot: the child is not work this fleet will
-ever do in that slot, so holding on it would serialize the epic forever. This is the second child's work
-(#527); the spec delta names it, and this change set is the epic's record.
+ever do in that slot, so holding on it would serialize the epic forever. Manual children are therefore
+excluded both as candidates (they never claim the slot) and as holders (an open change request a person
+started on their own manual child does not block the next sibling).
+
+This is the second child's work (#527); the spec delta names it, and this change set is the epic's record.
 
 ## Risks and limits
 
