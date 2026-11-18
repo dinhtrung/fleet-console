@@ -213,8 +213,17 @@ func (a *Actions) RaiseOperatorQuestion(ctx context.Context, project store.Proje
 	}
 	sum := sha256.Sum256([]byte(question + sha))
 	path := filepath.Join(dir, fmt.Sprintf("operator-%s-%d-%s.md", slug(project.Key), item, hex.EncodeToString(sum[:4])))
-	body := fmt.Sprintf("# %s #%d - operator question\n\n%s\n\nHead under review: %s\nThe two answers that already work: Approve/Reject on the item drawer (POST /api/items/%d/verdict), or reply fleet: accept / fleet: reject on the item. Either writes the note on the change request, which stays the only verdict record — a row answer is never read as one.\n",
-		project.Key, item, question, sha, item)
+	// A dead end is not a review (#526): its head is where an attempt stopped,
+	// and its answers are about the item, not a verdict. Same raise, same
+	// ledger dedupe, different instructions for the person reading the brief.
+	headLabel := "Head under review"
+	tail := fmt.Sprintf("The two answers that already work: Approve/Reject on the item drawer (POST /api/items/%d/verdict), or reply fleet: accept / fleet: reject on the item. Either writes the note on the change request, which stays the only verdict record — a row answer is never read as one.", item)
+	if kind == "decision.dead_end" {
+		headLabel = "Stopped at head"
+		tail = "Answer on this row: release (dispatch it again), put it on hold (label the item `onhold`), or hand it to a person. A new commit pushed to the branch also makes the item eligible again."
+	}
+	body := fmt.Sprintf("# %s #%d - operator question\n\n%s\n\n%s: %s\n%s\n",
+		project.Key, item, question, headLabel, sha, tail)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return nil, fmt.Errorf("raise operator question: write brief: %w", err)
 	}

@@ -197,7 +197,8 @@ func (s *Store) RepoPath(ctx context.Context, projectID int64) (string, error) {
 func (s *Store) DispatchesForProject(ctx context.Context, projectID int64) ([]DispatchRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_id, item_number, attempt, seat, branch, worktree, base_sha,
-		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, ''), state
+		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, ''),
+		       COALESCE(end_head, ''), state
 		FROM dispatch WHERE project_id = ? ORDER BY item_number, attempt DESC`, projectID)
 	if err != nil {
 		return nil, fmt.Errorf("store: dispatches: %w", err)
@@ -208,7 +209,7 @@ func (s *Store) DispatchesForProject(ctx context.Context, projectID int64) ([]Di
 		var d DispatchRow
 		var ended sql.NullString
 		if err := rows.Scan(&d.ID, &d.ProjectID, &d.ItemNumber, &d.Attempt, &d.Seat, &d.Branch, &d.Worktree,
-			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason, &d.State); err != nil {
+			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason, &d.EndHead, &d.State); err != nil {
 			return nil, fmt.Errorf("store: dispatches: %w", err)
 		}
 		if ended.Valid {

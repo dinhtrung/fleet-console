@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // ProjectRow is one project registry row.
@@ -64,7 +66,10 @@ type DispatchRow struct {
 	CreatedAt  string  `json:"created_at"`
 	EndedAt    *string `json:"ended_at,omitempty"`
 	EndReason  string  `json:"end_reason"`
-	State      string  `json:"state"`
+	// EndHead is the branch head the attempt stopped at when it ended without a
+	// change request (#526); empty when no head was recorded.
+	EndHead string `json:"end_head,omitempty"`
+	State   string `json:"state"`
 }
 
 // VerdictRow is one reviewer verdict. DispatchID is 0 when the verdict belongs
@@ -234,7 +239,8 @@ func (s *Store) Item(ctx context.Context, projectID int64, number int) (*ItemRow
 func (s *Store) Dispatches(ctx context.Context, projectID int64, number int) ([]DispatchRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_id, item_number, attempt, seat, branch, worktree, base_sha,
-		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, ''), state
+		       COALESCE(qitem_id, ''), COALESCE(brief_path, ''), created_at, ended_at, COALESCE(end_reason, ''),
+		       COALESCE(end_head, ''), state
 		FROM dispatch WHERE project_id = ? AND item_number = ? ORDER BY attempt DESC`, projectID, number)
 	if err != nil {
 		return nil, fmt.Errorf("store: dispatches: %w", err)
@@ -245,7 +251,7 @@ func (s *Store) Dispatches(ctx context.Context, projectID int64, number int) ([]
 		var d DispatchRow
 		var ended sql.NullString
 		if err := rows.Scan(&d.ID, &d.ProjectID, &d.ItemNumber, &d.Attempt, &d.Seat, &d.Branch, &d.Worktree,
-			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason, &d.State); err != nil {
+			&d.BaseSHA, &d.QItemID, &d.BriefPath, &d.CreatedAt, &ended, &d.EndReason, &d.EndHead, &d.State); err != nil {
 			return nil, fmt.Errorf("store: dispatches: %w", err)
 		}
 		if ended.Valid {
@@ -581,6 +587,141 @@ func (s *Store) RelayedHeads(ctx context.Context, projectID int64) ([]RelayedHea
 		out = append(out, RelayedHead{Item: number, Head: head})
 	}
 	return out, rows.Err()
+}
+
+// DeadEndRelease is one operator release of a dead end (#526): the operator
+// answered the (item, head) question with "release", so the item is eligible
+// again even though the branch head has not moved. At is when the answer was
+// recorded, the fact the plan compares a later dispatch attempt against.
+type DeadEndRelease struct {
+	Item int
+	Head string
+	At   time.Time
+}
+
+// deadEndDetail is the tail act's operator raise writes after the question:
+//
+//	<question first line>; head=<sha>; row <qitemId>
+//
+// The question is free prose that may itself contain `;`, so only the anchored
+// tail is trusted. A detail that does not match is skipped, not guessed at.
+var deadEndDetail = regexp.MustCompile(`head=([^;\s]+); row (\S+)$`)
+
+// releasedAnswer reports whether an operator answer says "release". The
+// question offers three answers (release, hold, hand to a person), so the word
+// is the signal; `released` counts, `onhold` does not.
+func releasedAnswer(detail string) bool {
+	for _, field := range strings.FieldsFunc(strings.ToLower(detail), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z')
+	}) {
+		if field == "release" || field == "released" {
+			return true
+		}
+	}
+	return false
+}
+
+// DeadEndReleases returns every (item, head) pair an operator released: the
+// newest `decision.dead_end` raise per item names the head and the queue row it
+// created, and a `decision.answer` event on that row whose text says "release"
+// is the operator's answer. The event table carries no project id, so the join
+// scopes the read through the item table — the same scoping, and the same
+// accepted granularity, as RelayedHeads and MalformedVerdicts.
+//
+// Only the app's own surfaces write `decision.answer` (act's board endpoint);
+// a release answered only in the rig's queue leaves no row here, and the
+// head simply stays parked — an absence, never a wrong release.
+func (s *Store) DeadEndReleases(ctx context.Context, projectID int64) ([]DeadEndRelease, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT i.number, e.detail
+		FROM event e JOIN item i ON i.project_id = ? AND e.subject = '#' || i.number
+		WHERE e.kind = 'decision.dead_end'
+		ORDER BY e.id ASC`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("store: dead end releases: %w", err)
+	}
+	type pending struct {
+		item int
+		head string
+		row  string
+	}
+	var questions []pending
+	for rows.Next() {
+		var number int
+		var detail string
+		if err := rows.Scan(&number, &detail); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("store: dead end releases: %w", err)
+		}
+		match := deadEndDetail.FindAllStringSubmatch(detail, -1)
+		if len(match) == 0 {
+			continue
+		}
+		// The tail the raise writes is the last match: the question's own prose
+		// may quote a resolution that happens to contain the same shape.
+		tail := match[len(match)-1]
+		questions = append(questions, pending{item: number, head: strings.ToLower(tail[1]), row: tail[2]})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, fmt.Errorf("store: dead end releases: %w", err)
+	}
+	rows.Close()
+
+	// Read every event before the per-question queries: the store runs on one
+	// connection (the single-writer guard), so a second query while a cursor is
+	// open would wait on itself.
+	type answer struct {
+		at     time.Time
+		detail string
+	}
+	answers := make(map[string][]answer)
+	for _, question := range questions {
+		if _, read := answers[question.row]; read {
+			continue
+		}
+		answerRows, err := s.db.QueryContext(ctx, `
+			SELECT at, detail FROM event WHERE kind = 'decision.answer' AND subject = ? ORDER BY id ASC`, question.row)
+		if err != nil {
+			return nil, fmt.Errorf("store: dead end releases: %w", err)
+		}
+		var out []answer
+		for answerRows.Next() {
+			var at, detail string
+			if err := answerRows.Scan(&at, &detail); err != nil {
+				answerRows.Close()
+				return nil, fmt.Errorf("store: dead end releases: %w", err)
+			}
+			parsed, err := time.Parse(time.RFC3339Nano, at)
+			if err != nil {
+				continue
+			}
+			out = append(out, answer{at: parsed, detail: detail})
+		}
+		if err := answerRows.Err(); err != nil {
+			answerRows.Close()
+			return nil, fmt.Errorf("store: dead end releases: %w", err)
+		}
+		answerRows.Close()
+		answers[question.row] = out
+	}
+
+	var out []DeadEndRelease
+	seen := make(map[string]bool)
+	for _, question := range questions {
+		for _, answered := range answers[question.row] {
+			if !releasedAnswer(answered.detail) {
+				continue
+			}
+			key := fmt.Sprintf("%d@%s", question.item, question.head)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, DeadEndRelease{Item: question.item, Head: question.head, At: answered.at})
+		}
+	}
+	return out, nil
 }
 
 // NewestEventsByKind returns, per subject, the newest event of this kind. The

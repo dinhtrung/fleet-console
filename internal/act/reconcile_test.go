@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dinhtrung/fleet-console/internal/forge"
+	"github.com/dinhtrung/fleet-console/internal/git"
 	"github.com/dinhtrung/fleet-console/internal/rig"
 	"github.com/dinhtrung/fleet-console/internal/store"
 )
@@ -48,7 +49,7 @@ func TestReconcileSuperseded(t *testing.T) {
 	project := reconcileProject(t, st, 5, "qitem-1")
 	rows := []rig.QueueRow{{ID: "qitem-1", State: "pending", PickupState: "done"}}
 
-	result, err := Reconcile(ctx, st, project, rows, nil, now)
+	result, err := Reconcile(ctx, st, project, rows, nil, nil, now)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -74,7 +75,7 @@ func TestReconcileSuperseded(t *testing.T) {
 	}
 
 	// The same read again is a no-op: the dispatch is already ended.
-	result, err = Reconcile(ctx, st, project, rows, nil, now.Add(time.Minute))
+	result, err = Reconcile(ctx, st, project, rows, nil, nil, now.Add(time.Minute))
 	if err != nil || len(result.Changed) != 0 {
 		t.Fatalf("second reconcile = %+v, %v, want no change", result, err)
 	}
@@ -90,7 +91,7 @@ func TestReconcileMerged(t *testing.T) {
 	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 	project := reconcileProject(t, st, 6, "qitem-2")
 	crs := []forge.ChangeRequest{{Number: 9, ClosesItem: 6, Merged: true}}
-	result, err := Reconcile(ctx, st, project, nil, crs, now)
+	result, err := Reconcile(ctx, st, project, nil, crs, nil, now)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -114,7 +115,7 @@ func TestReconcileAbandonedAfterAFullTick(t *testing.T) {
 	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 	project := reconcileProject(t, st, 7, "qitem-3")
 
-	first, err := Reconcile(ctx, st, project, nil, nil, now)
+	first, err := Reconcile(ctx, st, project, nil, nil, nil, now)
 	if err != nil {
 		t.Fatalf("first reconcile: %v", err)
 	}
@@ -125,7 +126,7 @@ func TestReconcileAbandonedAfterAFullTick(t *testing.T) {
 		t.Fatalf("abandoned events = %d after one tick, want 0", got)
 	}
 
-	second, err := Reconcile(ctx, st, project, nil, nil, now.Add(time.Minute))
+	second, err := Reconcile(ctx, st, project, nil, nil, nil, now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
@@ -146,8 +147,51 @@ func TestReconcileAbandonedAfterAFullTick(t *testing.T) {
 		t.Fatalf("events = %+v, want dispatch.abandoned", events)
 	}
 
-	third, err := Reconcile(ctx, st, project, nil, nil, now.Add(2*time.Minute))
+	third, err := Reconcile(ctx, st, project, nil, nil, nil, now.Add(2*time.Minute))
 	if err != nil || len(third.Changed) != 0 {
 		t.Fatalf("third = %+v, %v, want no change", third, err)
+	}
+}
+
+// TestReconcileRecordsTheHeadWhenTheEndHasNoChangeRequest is the store half of
+// #526: an attempt that ends with no change request to explain it records the
+// branch head it stopped at, so a later plan can tell an unchanged dead end
+// from a branch somebody pushed to.
+func TestReconcileRecordsTheHeadWhenTheEndHasNoChangeRequest(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	project := reconcileProject(t, st, 5, "qitem-1")
+	rows := []rig.QueueRow{{ID: "qitem-1", State: "pending", PickupState: "done"}}
+	const head = "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111"
+	branches := []git.Branch{{Name: "feature/5-started", Item: 5, Head: head}}
+
+	if _, err := Reconcile(ctx, st, project, rows, nil, branches, now); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	dispatches, _ := st.DispatchesForProject(ctx, project.ID)
+	if len(dispatches) != 1 || dispatches[0].EndHead != head {
+		t.Fatalf("dispatch = %+v, want the branch head recorded on the end", dispatches)
+	}
+}
+
+// TestReconcileKeepsNoHeadWhenAChangeRequestExplainsTheEnd: a change request is
+// its own record of the attempt, so the end records no head — a later plan must
+// not read the end as a dead end.
+func TestReconcileKeepsNoHeadWhenAChangeRequestExplainsTheEnd(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	project := reconcileProject(t, st, 5, "qitem-1")
+	rows := []rig.QueueRow{{ID: "qitem-1", State: "pending", PickupState: "done"}}
+	branches := []git.Branch{{Name: "feature/5-started", Item: 5, Head: "aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111"}}
+	crs := []forge.ChangeRequest{{Number: 9, ClosesItem: 5, State: "open", HeadSHA: "bbbb2222"}}
+
+	if _, err := Reconcile(ctx, st, project, rows, crs, branches, now); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	dispatches, _ := st.DispatchesForProject(ctx, project.ID)
+	if len(dispatches) != 1 || dispatches[0].EndHead != "" {
+		t.Fatalf("dispatch = %+v, want no head beside a change request", dispatches)
 	}
 }

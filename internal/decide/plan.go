@@ -54,6 +54,9 @@ type DispatchState struct {
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	EndedAt   time.Time `json:"ended_at,omitempty"`
 	EndReason string    `json:"end_reason,omitempty"`
+	// EndHead is the branch head the attempt stopped at when it ended without a
+	// change request (#526); empty when no head was recorded.
+	EndHead string `json:"end_head,omitempty"`
 }
 
 // CRState is one normalized change request in the snapshot.
@@ -201,7 +204,53 @@ func PlanTick(s Snapshot, now time.Time) Plan {
 		})
 		plan.Events = append(plan.Events, event)
 	}
+
+	// A dead end is not a silent skip (#526): the newest dispatch already
+	// stopped at this head with no change request, so one operator question per
+	// (item, head) asks what to do. Act's raise dedupes across ticks by
+	// (kind, item, head), so a plan repeating this intent is the same question
+	// standing, and a moved head is a new one — the text carries the head.
+	for _, dead := range result.DeadEnds {
+		subject := fmt.Sprintf("#%d", dead.Number)
+		event := Event{Actor: "decide", Kind: "decision.dead_end", Subject: subject,
+			Detail: fmt.Sprintf("branch=%s head=%s", dead.Branch, dead.Head)}
+		plan.Intents = append(plan.Intents, Intent{
+			Kind: IntentRaiseDecision, Project: s.Project.Key, Item: dead.Number,
+			Audience: AudienceOperator, HeadSHA: dead.Head, Text: deadEndQuestion(s, dead), Event: event,
+		})
+		plan.Events = append(plan.Events, event)
+	}
 	return plan
+}
+
+// deadEndQuestion is the one question a dead end raises (#526): what stopped,
+// where, and the three answers. The last attempt's own resolution is quoted
+// when the row carried one — the builder's words are what tells a person
+// whether the item is a dead end at all.
+func deadEndQuestion(s Snapshot, dead DeadEnd) string {
+	text := fmt.Sprintf("%s #%d: the last dispatch ended without a change request on %s@%s; release it, put it on hold, or hand it to a person?",
+		s.Project.Key, dead.Number, dead.Branch, dead.Head)
+	if resolution := lastRowResolution(s, dead.Number); resolution != "" {
+		text += " The last row's resolution: " + resolution
+	}
+	return text
+}
+
+// lastRowResolution is the text the item's newest dispatch row was closed
+// with, or "" when the row is not in this read. The snapshot carries the rows
+// the project's read kept; a missing one proves nothing, so the question
+// simply omits it.
+func lastRowResolution(s Snapshot, item int) string {
+	dispatch, found := newestDispatch(s.Dispatches, item)
+	if !found || dispatch.QItemID == "" {
+		return ""
+	}
+	for _, row := range s.Rows {
+		if row.QItemID == dispatch.QItemID {
+			return strings.TrimSpace(row.Resolution)
+		}
+	}
+	return ""
 }
 
 func housekeeping(plan *Plan, s Snapshot, now time.Time) {
