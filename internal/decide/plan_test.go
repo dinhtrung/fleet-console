@@ -300,9 +300,17 @@ func TestNoVerdictIsAskedOncePerHead(t *testing.T) {
 	if len(findIntents(plan, IntentRaiseDecision)) != 0 {
 		t.Fatalf("intents = %+v, want none while the same head's question stands", plan.Intents)
 	}
-	// The head moves: the standing question is about a different commit, so
-	// one new question names the new sha.
+	// The head moves while the question still stands: nothing new is asked
+	// (#536). A builder iterating on the branch would otherwise raise one
+	// question per push.
 	s.CRs[0].HeadSHA = "bbbb222"
+	plan = PlanTick(s, planNow)
+	if len(findIntents(plan, IntentRaiseDecision)) != 0 {
+		t.Fatalf("intents = %+v, want none while the item's question stands", plan.Intents)
+	}
+	// The question is answered (closed): the moved head asks once, naming the
+	// new sha.
+	s.Rows[len(s.Rows)-1].State, s.Rows[len(s.Rows)-1].Pickup = "done", "terminal"
 	plan = PlanTick(s, planNow)
 	moved := findIntents(plan, IntentRaiseDecision)
 	if len(moved) != 1 || !strings.Contains(moved[0].Text, "bbbb222") {
@@ -948,5 +956,23 @@ func TestPlanRelayReviewerRowConfiguredName(t *testing.T) {
 	configured.Rows = []Row{reviewerRow("done", head)}
 	if relays := findIntents(PlanTick(configured, planNow), IntentRelayVerdict); len(relays) != 0 {
 		t.Fatalf("relays = %d, want 0: %q is not this project's reviewer", len(relays), "dev-review@rig-a")
+	}
+}
+
+// TestNoVerdictNotSilencedByAnotherKindOfQuestion (#536): only a standing
+// no_verdict question silences the arm; a different human question for an
+// older head (here a malformed-verdict ask) does not.
+func TestNoVerdictNotSilencedByAnotherKindOfQuestion(t *testing.T) {
+	if noVerdictStanding([]Row{{QItemID: "q", State: "pending", Pickup: "unclaimed",
+		Destination: "human@kernel", Body: "app #5: your note 1 names no commit; head aaaa111"}}, 5) {
+		t.Fatal("a malformed-verdict question counted as a standing no_verdict question")
+	}
+	if !noVerdictStanding([]Row{{QItemID: "q", State: "pending", Pickup: "unclaimed",
+		Destination: "human@kernel", Body: "app #5 x: change request #20 has no verdict for head aaaa111."}}, 5) {
+		t.Fatal("a standing no_verdict question was not seen")
+	}
+	if noVerdictStanding([]Row{{QItemID: "q", State: "pending", Pickup: "unclaimed",
+		Destination: "dev-review@r", Body: "app #5 x: change request #20 has no verdict for head aaaa111."}}, 5) {
+		t.Fatal("a seat row counted as a human question")
 	}
 }

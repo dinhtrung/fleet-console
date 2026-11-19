@@ -468,7 +468,12 @@ func housekeeping(plan *Plan, s Snapshot, now time.Time) {
 			// malformed fact for the item — this head's or an older head's —
 			// keeps `no_verdict` silent: the reviewer tried, so the question
 			// would be false.
-			if hasMalformed || workInFlight(s.Rows, item.Number) || questionStanding(s.Rows, item.Number, cr.HeadSHA) {
+			// One unanswered no_verdict question per item, not per head (#536):
+			// a builder iterating on the branch moves the head every few
+			// minutes, and each move used to raise (and notify) the same
+			// question again while the first still stood unanswered.
+			if hasMalformed || workInFlight(s.Rows, item.Number) || questionStanding(s.Rows, item.Number, cr.HeadSHA) ||
+				noVerdictStanding(s.Rows, item.Number) {
 				continue
 			}
 			head := cr.HeadSHA
@@ -739,6 +744,26 @@ func questionStanding(rows []Row, item int, head string) bool {
 			continue
 		}
 		if rowNamesHead(row, head) {
+			return true
+		}
+	}
+	return false
+}
+
+// noVerdictMarker is the phrase only the no_verdict question carries.
+const noVerdictMarker = "has no verdict for head"
+
+// noVerdictStanding reports a live no_verdict question for the item on a
+// human seat, for any head (#536). While it stands, a moved head raises
+// nothing new; once it is answered or closed, the next head may ask again.
+// Other human questions (stall, malformed) do not count: they ask something
+// else.
+func noVerdictStanding(rows []Row, item int) bool {
+	for _, row := range rows {
+		if !rowLive(row) || !rowNamesItem(row, item) || !rig.IsHumanSeat(row.Destination) {
+			continue
+		}
+		if strings.Contains(rowText(row), noVerdictMarker) {
 			return true
 		}
 	}
