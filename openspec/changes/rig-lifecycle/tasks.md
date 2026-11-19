@@ -92,7 +92,7 @@
 
 ## 6. Gate (whoever is last)
 
-- [ ] 6.1 `go build ./... && go vet ./... && go test ./...` and `openspec validate --all --strict` in the PR body,
+- [x] 6.1 `go build ./... && go vet ./... && go test ./...` and `openspec validate --all --strict` in the PR body,
       real output, 12+ passed and 0 failed.
-- [ ] 6.2 A hand proof on a spare port: build, run with `act: false` and a throwaway DB, and show `--print-config`
+- [x] 6.2 A hand proof on a spare port: build, run with `act: false` and a throwaway DB, and show `--print-config`
       rendering the block. Never point a probe at 8787.

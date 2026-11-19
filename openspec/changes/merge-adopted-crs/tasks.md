@@ -47,5 +47,5 @@
 
 ## 4. Orchestrator
 
-- [ ] 4.1 After merge: re-run the reported case on the box — dispatch a throwaway item by hand, ACCEPT it, and quote
+- [x] 4.1 After merge: re-run the reported case on the box — dispatch a throwaway item by hand, ACCEPT it, and quote
       the journal lines showing `change_request.adopted` then `merge` — then close the epic.

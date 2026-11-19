@@ -28,4 +28,4 @@ A box is ticked only with the command that proved it, quoted in the pull request
 
 ## 4. Gate
 
-- [ ] 4.1 `go build ./... && go vet ./... && go test ./...`, `npm run typecheck && npm run lint && npm run build`, then `openspec validate --all --strict`. Verify: real output quoted in the pull request.
+- [x] 4.1 `go build ./... && go vet ./... && go test ./...`, `npm run typecheck && npm run lint && npm run build`, then `openspec validate --all --strict`. Verify: real output quoted in the pull request.

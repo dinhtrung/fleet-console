@@ -11,9 +11,9 @@ before it is pointed at a box that runs a fleet.
 
 ## 2. Install steps
 
-- [ ] 2.1 Packages: `git tmux jq curl unzip sqlite3` via apt, Node 24 and Go 1.25 from their own channels, all checksum-verified where the vendor publishes one. Verify: each step prints the installed version and the step's exit code.
-- [ ] 2.2 OpenRig CLI at the locked version into `~/.local`, then `rig setup --dry-run` and `rig setup`; record that Codex is expected to fail. Verify: `rig --version` equals the lock; `rig doctor` shows only the two expected findings, quoted in the log.
-- [ ] 2.3 Tooling: `serena` via `uv tool install`, `codegraph` and `rtk` from their release assets, `gopls` via `go install`. Verify: each tool answers `--version` with the seat's `PATH`, not the login shell's.
+- [x] 2.1 Packages: `git tmux jq curl unzip sqlite3` via apt, Node 24 and Go 1.25 from their own channels, all checksum-verified where the vendor publishes one. Verify: each step prints the installed version and the step's exit code.
+- [x] 2.2 OpenRig CLI at the locked version into `~/.local`, then `rig setup --dry-run` and `rig setup`; record that Codex is expected to fail. Verify: `rig --version` equals the lock; `rig doctor` shows only the two expected findings, quoted in the log.
+- [x] 2.3 Tooling: `serena` via `uv tool install`, `codegraph` and `rtk` from their release assets, `gopls` via `go install`. Verify: each tool answers `--version` with the seat's `PATH`, not the login shell's.
 - [x] 2.4 The app: binary from the release tarball (sha256 checked), `deploy/fleet-console.service`, an env file at mode 600, and the rig template directory. Verify: `systemctl --user is-active fleet-console` and `curl -fsS 127.0.0.1:8787/api/health`.
 
 ## 3. Human stops
@@ -40,4 +40,4 @@ before it is pointed at a box that runs a fleet.
 
 ## 7. Documentation
 
-- [ ] 7.1 One page `docs/install.md`: profiles, the four stops, what verify proves, the Docker exception, and the upgrade path. Verify: a fresh box is installed by following only that page, and the transcript is attached to the task.
+- [x] 7.1 One page `docs/install.md`: profiles, the four stops, what verify proves, the Docker exception, and the upgrade path. Verify: a fresh box is installed by following only that page, and the transcript is attached to the task.

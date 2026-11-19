@@ -48,8 +48,8 @@
 
 ## 5. Gates
 
-- [ ] 5.1 `make build`, `make test`, `npm run typecheck`, `npm run lint` green in the PR body with their real output.
-- [ ] 5.2 `openspec validate culture-editor --strict` passes.
-- [ ] 5.3 Manual pass recorded in the PR body: load → edit → save → sha changes on disk; a second tab provokes a `409`
+- [x] 5.1 `make build`, `make test`, `npm run typecheck`, `npm run lint` green in the PR body with their real output.
+- [x] 5.2 `openspec validate culture-editor --strict` passes.
+- [x] 5.3 Manual pass recorded in the PR body: load → edit → save → sha changes on disk; a second tab provokes a `409`
       and both recovery actions work; a `0444` file is refused with `403`; the running fleet keeps the old text until
       a seat relaunches.

@@ -4,7 +4,7 @@
 
 - [x] 1.1 Author the change set and validate it. Evidence: `openspec validate epic-integration-branch --strict`
   and `openspec validate --all --strict`.
-- [ ] 1.2 Record the two operator-facing strings in the design before coding: the refusal reason
+- [x] 1.2 Record the two operator-facing strings in the design before coding: the refusal reason
   (`wrong_base: change request targets <got>, expected <want>`) and the rollup hold (`integration branch open`).
   Evidence: both strings appear in `design.md` and in a test name.
 

@@ -68,5 +68,5 @@
 
 ## 4. Orchestrator
 
-- [ ] 4.1 After both PRs merge: verify on the box that an idle digest tick logs the skip line and sends nothing
+- [x] 4.1 After both PRs merge: verify on the box that an idle digest tick logs the skip line and sends nothing
       (quote the log), then close the epic.
