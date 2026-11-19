@@ -263,6 +263,11 @@ func TestGitLabChangeRequestsSkipsDetailsForMerged(t *testing.T) {
 	if merged.Base != "epic/476-new-project-dialog-fit" {
 		t.Fatalf("base = %q, want the fixture's epic branch", merged.Base)
 	}
+	// Branch is read from GitLab's source_branch (#533): an empty Branch hid the
+	// epic's open delivery from every branch-keyed check.
+	if merged.Branch != "feature/268-gates-the-whole-tree-green" {
+		t.Fatalf("branch = %q, want the fixture's source_branch", merged.Branch)
+	}
 	if merged.DocsOnly || merged.Checks != nil {
 		t.Fatalf("merged MR details = docs_only %v checks %+v, want none", merged.DocsOnly, merged.Checks)
 	}
