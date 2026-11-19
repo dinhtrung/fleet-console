@@ -175,10 +175,13 @@ the item, and two facts keep it quiet:
   asking a human to judge a head mid-review would only page someone for the same thing
   twice. A row addressed to a human seat never counts as work — it is a question standing,
   not a seat at work, so the operator's own pending question cannot silence the next one.
-- **A question already standing for that head.** A live question row naming the item and
-  the head is the same question still unanswered; the plan stays quiet while it stands. A
-  question that names a different head is not standing in the way — a moved head asks again,
-  once.
+- **A question already standing for the item.** A live question row naming the item and
+  the head is the same question still unanswered; the plan stays quiet while it stands.
+  Since #536 a live `no_verdict` question for the item keeps it quiet whatever head it
+  names: a builder pushing while it iterates moves the head every few minutes, and each
+  move used to page the operator again for the same unanswered question. Other kinds of
+  human question (a review stall, a malformed verdict) do not count. Once the `no_verdict`
+  question is answered or closed, a moved head asks again, once.
 
 **What "names the head" means in row text.** The same rule the note parser applies to
 verdicts applies to row bodies: an abbreviation of at least 7 hex characters that is a
