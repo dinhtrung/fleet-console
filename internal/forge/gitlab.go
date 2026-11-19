@@ -345,9 +345,13 @@ type glMergeRequest struct {
 	Draft              bool   `json:"draft"`
 	MergeStatus        string `json:"merge_status"`
 	DetailedMergeState string `json:"detailed_merge_status"`
-	TargetBranch       string `json:"target_branch"`
-	Description        string `json:"description"`
-	WebURL             string `json:"web_url"`
+	// SourceBranch is the head's branch (#533). Without it every GitLab change
+	// request had an empty Branch, so nothing keyed on the branch name could see
+	// it: the epic delivery hold, the completion guard, the epic-head refusal.
+	SourceBranch string `json:"source_branch"`
+	TargetBranch string `json:"target_branch"`
+	Description  string `json:"description"`
+	WebURL       string `json:"web_url"`
 }
 
 // ChangeRequests reads every merge request without candidate filtering.
@@ -379,6 +383,7 @@ func (g *GitLab) ChangeRequestsFor(ctx context.Context, accepted map[string]stru
 				// conflict, ci_stale, discussions_pending and so on. It is the
 				// word the repair path quotes.
 				MergeState: mr.DetailedMergeState,
+				Branch:     mr.SourceBranch,
 				Base:       mr.TargetBranch,
 				Body:       mr.Description, ClosesItem: ParseCloses(mr.Description), Title: mr.Title,
 				URL: mr.WebURL,

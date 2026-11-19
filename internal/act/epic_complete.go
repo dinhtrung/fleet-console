@@ -35,6 +35,38 @@ func openEpicDelivery(requests []forge.ChangeRequest, epic int) *EpicDelivery {
 	return nil
 }
 
+// epicOpenRequest is the change request this tick would open for the epic: an
+// open request whose head is the epic's branch and whose base is the default
+// branch (#533). A request on another base is not the delivery — it merges
+// elsewhere — so it does not suppress a new one, and a merged or closed request
+// does not either. The lookup is the guard completeEpic runs before it opens,
+// because the tick's snapshot is `state=open` only and a delivery that exists
+// but is absent from it is what made every tick try again.
+func epicOpenRequest(requests []forge.ChangeRequest, branch, base string) *forge.ChangeRequest {
+	for index := range requests {
+		request := requests[index]
+		if request.Merged || strings.EqualFold(request.State, forge.StateClosed) {
+			continue
+		}
+		if request.Branch == branch && request.Base == base {
+			return &request
+		}
+	}
+	return nil
+}
+
+// changeRequestAlreadyExists reports whether an OpenChangeRequest refusal is the
+// forge saying the request is already there. A stale tick snapshot can miss a
+// delivery another writer opened, and both forges name the refusal the same way
+// ("Another open merge request already exists…"); the caller then reads the
+// delivery back rather than reporting the tick as failed (#533).
+func changeRequestAlreadyExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already exists")
+}
+
 // epicBranchByPrefix resolves the epic's branch by the epic/<n>- prefix after a
 // fetch (#484, design D2: "resolved by prefix"). Re-deriving the name from the
 // current title would wedge delivery the moment the epic is retitled between
@@ -119,6 +151,14 @@ func epicBody(epic int, children []forge.Item, requests []forge.ChangeRequest) s
 //
 // `completed` carries the epics this tick already delivered, so a merge and a
 // sweep over the same epic open one change request, not two.
+//
+// A delivery that is already open is reused rather than reopened (#533): the
+// tick's snapshot is `state=open` only, so an epic whose request the mirror did
+// not carry — or whose request another writer opened a moment ago — would
+// otherwise be offered to the forge every tick until it merged. Reuse is the
+// same outcome with no write: the epic is marked completed for this tick, the
+// existing request is the drift step's handle and the completion line's number,
+// and nothing is reported as skipped.
 func (a *Actions) completeEpic(ctx context.Context, in TickInput, report *TickReport, completed map[int]bool, epic int, children []forge.Item) {
 	if completed[epic] {
 		return
@@ -179,21 +219,45 @@ func (a *Actions) completeEpic(ctx context.Context, in TickInput, report *TickRe
 			return
 		}
 	}
-	request, err := a.Forge.OpenChangeRequest(ctx, forge.OpenChangeRequestInput{
-		Head: branch, Base: a.defaultBranchName(),
-		Title: fmt.Sprintf("Epic #%d: %s", epic, title),
-		Body:  epicBody(epic, children, in.CRs), Draft: false,
-	})
-	if err != nil {
-		skip("open change request on %s: %v", branch, err)
-		return
+	// The delivery may already be open (#533): the snapshot is `state=open` only,
+	// so a request the mirror did not carry this tick is looked for before the
+	// write, not after it. Reusing it is today's path when nothing is open.
+	request := epicOpenRequest(in.CRs, branch, a.defaultBranchName())
+	if request == nil {
+		opened, err := a.Forge.OpenChangeRequest(ctx, forge.OpenChangeRequestInput{
+			Head: branch, Base: a.defaultBranchName(),
+			Title: fmt.Sprintf("Epic #%d: %s", epic, title),
+			Body:  epicBody(epic, children, in.CRs), Draft: false,
+		})
+		if err != nil && !changeRequestAlreadyExists(err) {
+			skip("open change request on %s: %v", branch, err)
+			return
+		}
+		if err != nil {
+			// The forge refused with "already exists": the request is there, this
+			// tick just did not see it. Read it back — its number is the handle the
+			// drift step and the completion line need.
+			requests, readErr := a.Forge.ChangeRequests(ctx)
+			if readErr != nil {
+				skip("open change request on %s: %v (already exists; read back: %v)", branch, err, readErr)
+				return
+			}
+			request = epicOpenRequest(requests, branch, a.defaultBranchName())
+			if request == nil {
+				skip("open change request on %s: %v (already exists, but the request is not in the snapshot)", branch, err)
+				return
+			}
+		} else {
+			request = &opened
+		}
 	}
 	completed[epic] = true
 
 	// Drift is reported, never forced (design D7): when the default has commits the
 	// epic branch lacks, ask the forge to update the branch. The forge's update is
-	// per change request, so it runs after opening with the request as its handle —
-	// the outcome D7 asks for (the request stays open, the conflict is named) is
+	// per change request, so it runs after the request exists — whether this tick
+	// opened it or found it already open — with the request as its handle. The
+	// outcome D7 asks for (the request stays open, the conflict is named) is
 	// unchanged, and the app never force-pushes or merges.
 	notice := ""
 	if behind, err := a.Git.IsAncestor(ctx, defaultSHA, epicSHA); err != nil {
