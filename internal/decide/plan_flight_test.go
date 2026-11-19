@@ -46,8 +46,9 @@ func TestPlanNoVerdictWhileReviewInFlight(t *testing.T) {
 
 // TestPlanQuestionStandingPerHead is the per-head half: a live human row
 // naming this head — abbreviated, matched through forge.SameSHA — is the
-// same question standing, so nothing is planned a second time; a question
-// for another head does not stand, and the question is asked again.
+// same question standing, so nothing is planned a second time. Since #536 a
+// moved head stays quiet too while the item's question stands; it is asked
+// again only once that question is closed.
 func TestPlanQuestionStandingPerHead(t *testing.T) {
 	const head = "bbbb22223333444455556666777788889999cccc"
 	const moved = "cccc3333444455556666777788889999aaaabbbb"
@@ -59,8 +60,14 @@ func TestPlanQuestionStandingPerHead(t *testing.T) {
 	if len(findIntents(plan, IntentRaiseDecision)) != 0 {
 		t.Fatalf("intents = %+v, want none while the same head's question stands", plan.Intents)
 	}
-	// A different head is a different question: asked again, naming the sha.
+	// A moved head while the question stands: still quiet (#536).
 	s.CRs[0].HeadSHA = moved
+	plan = PlanTick(s, planNow)
+	if len(findIntents(plan, IntentRaiseDecision)) != 0 {
+		t.Fatalf("intents = %+v, want none while the item's question stands", plan.Intents)
+	}
+	// The question closed: the moved head is asked, naming the sha.
+	s.Rows = nil
 	plan = PlanTick(s, planNow)
 	asked := findIntents(plan, IntentRaiseDecision)
 	if len(asked) != 1 || !strings.Contains(asked[0].Text, "cccc333") {
