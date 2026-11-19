@@ -19,13 +19,13 @@ rules and the oracle come before any surface (design §15.8).
 - [x] 2.3 Launch sequence: write spec dir, `rig specs sync`, `rig up <rig> --plan --json`, `rig up --non-interruptive`, verify every seat `running` or fail with the seat named. Verify: one real launch on the fleet box, with the JSON of both calls recorded in the task's evidence.
 - [x] 2.4 Growth and write-back: `rig grow` then `rig export` so the spec matches the running topology. Verify: after growing one seat, the exported spec validates and `rig ps --nodes --rig <rig> --json` lists the new seat.
 - [x] 2.5 Teardown: `rig down <rig> --delete` + spec archive; refuse when the rig still has live rows. Verify: a throwaway rig is removed and `rig ps --include-archived` no longer lists it; `rig up <same-name>` fails with a row-count message before teardown and succeeds after.
-- [ ] 2.6 Per-seat credential and MCP seeding before launch (provider key, `mcp.json` with serena/codegraph/rtk entries, `PATH` including Go). Verify: from inside a launched seat, `rig whoami --json` and one `mcp__serena__*` call succeed; the key never appears in any log or event row (grep the event table).
+- [x] 2.6 Per-seat credential and MCP seeding before launch (provider key, `mcp.json` with serena/codegraph/rtk entries, `PATH` including Go). Verify: from inside a launched seat, `rig whoami --json` and one `mcp__serena__*` call succeed; the key never appears in any log or event row (grep the event table).
 
 ## 3. Forge adapters (P1)
 
 - [x] 3.1 Normalized model + interface (`Item`, `ChangeRequest`, `Check`, writes) with a fake implementation. Verify: `go test ./internal/forge` exercises the interface through the fake for decide-loop tests.
 - [x] 3.2 GitHub reader: issues, sub-issues (epic → children), issue dependencies (`blocked_by`), PRs, check runs / commit statuses. Verify: recorded payload fixtures from `dinhtrung/fleet-console`; `TestGitHubItems` reproduces an epic with children and one blocked task.
-- [ ] 3.3 GitHub writes: label set/clear, comment, close item, `gh pr merge --squash --match-head-commit <sha>`. Verify: one real issue labelled and one docs-only PR merged by the watchdog path on a throwaway branch.
+- [x] 3.3 GitHub writes: label set/clear, comment, close item, `gh pr merge --squash --match-head-commit <sha>`. Verify: one real issue labelled and one docs-only PR merged by the watchdog path on a throwaway branch.
 - [x] 3.4 GitLab reader/writer parity: `glab api` items with `related_items` (smaller-iid rule), MRs, head pipeline jobs with `allow_failure`, `glab mr merge --sha`. Verify: fixture tests from `traffic-simulator-v2` payloads, and the same decide test passes for both adapters.
 - [x] 3.5 Auth and rate limits: token from the CLI's own store (never the repo), one retry on 5xx, a bounded per-tick request budget. Verify: `TestBudget` refuses the 101st call in a tick; a 401 surfaces as a project-level `stale` state, not an empty board.
 
@@ -40,10 +40,10 @@ rules and the oracle come before any surface (design §15.8).
 
 ## 5. Act (P2)
 
-- [ ] 5.1 Dispatch intent: fetch, base sha, worktree add-or-reuse, brief from template, `rig queue create --source human@kernel --destination <seat> --body-file`, marker label, dispatch row. Verify: a real issue dispatched with the old timer stopped; a second run is a no-op naming the existing row.
+- [x] 5.1 Dispatch intent: fetch, base sha, worktree add-or-reuse, brief from template, `rig queue create --source human@kernel --destination <seat> --body-file`, marker label, dispatch row. Verify: a real issue dispatched with the old timer stopped; a second run is a no-op naming the existing row.
 - [x] 5.2 Row actions: resolve, handoff, close-as-superseded, re-nudge — each one rig call plus one `event` row. Verify: each action's test asserts the CLI argv, the exit code and the before/after state.
 - [x] 5.3 Verdict capture: read the reviewer's note, store `verdict(dispatch, sha, accept|reject)`; only the newest note counts. Verify: three tests — accept, later reject vetoes, note for an older sha ignored.
-- [ ] 5.4 Merge watchdog: four facts re-read in the act pass; refuse naming the missing fact. Verify: four refusal tests plus one end-to-end merge on a docs-only PR.
+- [x] 5.4 Merge watchdog: four facts re-read in the act pass; refuse naming the missing fact. Verify: four refusal tests plus one end-to-end merge on a docs-only PR.
 - [x] 5.5 Post-merge: verify the item closed, close it when the body only referenced it, clear the marker, unblock the next item. Verify: a fixture where the PR body says `Refs #n` and the item ends closed with an event naming the reason.
 
 ## 6. Web foundation and board (P3)
@@ -57,7 +57,7 @@ rules and the oracle come before any surface (design §15.8).
 
 ## 7. Alerts, quota, multi-project, cutover (P4)
 
-- [ ] 7.1 Telegram escalation on SLA breach and on `quota`: one message per decision, edited rather than repeated. Verify: a forced breach delivers one message with project, item, question and a board deep link.
+- [x] 7.1 Telegram escalation on SLA breach and on `quota`: one message per decision, edited rather than repeated. Verify: a forced breach delivers one message with project, item, question and a board deep link.
 - [x] 7.2 Quota handling: two seats stalled within 5 minutes raises one decision and pauses dispatch to that rig; `rig provider signals` is the source. Verify: simulated stall test and one real reading.
 - [x] 7.3 Second project onboarded with its own generated rig and isolated capacity. Verify: both projects dispatch without a shared worktree path or item-number collision.
-- [ ] 7.4 Cutover: import the dispatcher state (`dispatched`, `attempts`, `nudges`, `closers`), disable the old timer, run one item end-to-end. Verify: item dispatched → reviewed → merged → epic closed, with the board empty and a reason per closed item; `docs/my-stack.md` names the binary, the unit, the port and the kill switch.
+- [x] 7.4 Cutover: import the dispatcher state (`dispatched`, `attempts`, `nudges`, `closers`), disable the old timer, run one item end-to-end. Verify: item dispatched → reviewed → merged → epic closed, with the board empty and a reason per closed item; `docs/my-stack.md` names the binary, the unit, the port and the kill switch.

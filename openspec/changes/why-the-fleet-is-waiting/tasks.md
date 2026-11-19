@@ -2,18 +2,18 @@
 
 ## 1. Read the attention facts
 
-- [ ] 1.1 `internal/rig`: decode `needsAttention`, `arbitratedNeedsInput`, `needsInputEvidence` per node into a
+- [x] 1.1 `internal/rig`: decode `needsAttention`, `arbitratedNeedsInput`, `needsInputEvidence` per node into a
       `SeatAttention{Seat, Rig, Kind, Question}` slice; keep the decode additive so older rigs (keys absent) still work.
-- [ ] 1.2 Test: a fixture with all three keys → three entries with the right kind; a fixture without them → empty and
+- [x] 1.2 Test: a fixture with all three keys → three entries with the right kind; a fixture without them → empty and
       no error.
 
 ## 2. One obligation per question
 
-- [ ] 2.1 `internal/act`: an `attention` map keyed by rig, holding `seat + hash(question)` and the first tick seen,
+- [x] 2.1 `internal/act`: an `attention` map keyed by rig, holding `seat + hash(question)` and the first tick seen,
       memory-only like `quiet`.
-- [ ] 2.2 Write `attention.raised` once per fingerprint and one notice; write `attention.resolved` on the first
+- [x] 2.2 Write `attention.raised` once per fingerprint and one notice; write `attention.resolved` on the first
       **successful** read that lacks it; a failed read resolves nothing.
-- [ ] 2.3 Test: five ticks one question → one event; answered → one resolution; failed read → nothing.
+- [x] 2.3 Test: five ticks one question → one event; answered → one resolution; failed read → nothing.
 
 ## 3. The capacity line names the human
 
@@ -85,5 +85,5 @@
       why-column.
       Shipped as "Why the fleet is waiting" with its three subsections. #428's half of 6.2/6.3 was verified against
       #440's base; the block's own gate is run at the rebase onto main.
-- [ ] 6.2 `go build ./... && go vet ./... && go test ./...` with output pasted in the PR.
-- [ ] 6.3 `openspec validate --all --strict`.
+- [x] 6.2 `go build ./... && go vet ./... && go test ./...` with output pasted in the PR.
+- [x] 6.3 `openspec validate --all --strict`.

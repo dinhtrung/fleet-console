@@ -28,5 +28,5 @@
       exists for this), keyset pager, and the three states from the spec. Remove the mock imports.
 - [x] 2.3 `src/mock/api.ts`: delete `listAudit`, `getAuditEvent`, `auditActions` and any seed type only they used;
       `rg -n 'mock' src/screens/Audit'` returns nothing.
-- [ ] 2.4 Evidence: `npm run build` output and a screenshot of `/audit` against a dev server with
+- [x] 2.4 Evidence: `npm run build` output and a screenshot of `/audit` against a dev server with
       `act: false` and a throwaway database — never port 8787.

@@ -73,7 +73,7 @@
 
 ## 5. Ship note
 
-- [ ] 5.1 The board is embedded in the Go binary (`internal/webui/dist`), so the web job's `npm run build` is not
+- [x] 5.1 The board is embedded in the Go binary (`internal/webui/dist`), so the web job's `npm run build` is not
       enough for the running service. Rebuild `internal/webui/dist` from `dist/`, then
       `CGO_ENABLED=0 go build -trimpath -tags embedboard ./cmd/fleet-console`; the operator restarts the unit. No
       config, schema or API change.
