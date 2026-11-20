@@ -26,9 +26,11 @@ finds work closes it.
 
 ### Requirement: A stopped rig is started before its work is routed
 
-When a rig has no running seat and the plan has a ready item for it, or a claimable row names one of its seats, the
-app SHALL launch it with `rig up <spec>` before creating that dispatch's worktree and queue row. A failed launch
-SHALL skip the dispatch with one named reason, create no worktree and no row, and be retried on the next tick.
+When a rig has no running seat, the app's own newest lifecycle event for it is a stop, and the plan has a ready item
+for it — or a claimable row names one of its seats — the app SHALL launch it with `rig up <spec>` before creating that
+dispatch's worktree and queue row. A rig stopped by hand (`rig down`, `rig seat stop`) SHALL NOT be started by this
+path. A failed launch SHALL skip the dispatch with one named reason, create no worktree and no row, and be retried on
+the next tick.
 
 #### Scenario: A new issue wakes a stopped rig
 

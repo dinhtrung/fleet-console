@@ -27,7 +27,7 @@ A first line that merely uses a verdict word SHALL NOT be captured, and a line t
 - **THEN** the capture refuses with an unattributable-verdict error naming the note
 
 ### Requirement: A missing verdict becomes an operator question
-When a change request is open, its item is open, no reviewer row is live and no verdict names the head, the app SHALL raise exactly one operator question per `(item, head sha)`, naming the board's Approve/Reject and the item's reply line.
+When a change request is open, its item is open, no reviewer row is live and no verdict names the head, the app SHALL raise one operator question for the item, naming the board's Approve/Reject and the item's reply line, and SHALL NOT raise another for the item while that question is still standing, whatever the head.
 #### Scenario: The reviewer seat ends its row with no note
 - **WHEN** a review row ends and the change request carries no verdict for its head
 - **THEN** exactly one queue row with destination `human@kernel` is created
@@ -35,8 +35,11 @@ When a change request is open, its item is open, no reviewer row is live and no 
 #### Scenario: The same head is planned again
 - **WHEN** the next tick plans the same item and the head has not moved
 - **THEN** no second operator question is raised
+#### Scenario: The head moves while the question stands
+- **WHEN** the head changes, there is still no verdict for the new head, and the item's no-verdict question is still live
+- **THEN** no new operator question is raised
 #### Scenario: The head moves
-- **WHEN** the head changes and there is still no verdict for the new head
+- **WHEN** the head changes, there is no verdict for the new head, and no no-verdict question for the item is live
 - **THEN** one new operator question is raised, naming the new sha
 
 ### Requirement: A stale verdict asks the reviewer once per head
@@ -98,3 +101,18 @@ When a verdict for the change request's current head is captured, standing opera
 #### Scenario: A repeat tick
 - **WHEN** the next tick runs with nothing new
 - **THEN** no further rows are closed
+
+### Requirement: A pause refuses a board verdict
+
+The board verdict route SHALL answer 409 with `project is paused; resume it to post a verdict` when the item's
+project is paused, and SHALL write nothing: no note, no ready mark, no mirror wake.
+
+#### Scenario: Accept on a paused project
+
+- **WHEN** the operator posts accept for an item whose project is paused
+- **THEN** the response is 409, no note is posted, and the mirror loop is not woken
+
+#### Scenario: Resume, then accept
+
+- **WHEN** the project is resumed and the operator posts the same verdict
+- **THEN** the note is posted as usual and the loop is woken
