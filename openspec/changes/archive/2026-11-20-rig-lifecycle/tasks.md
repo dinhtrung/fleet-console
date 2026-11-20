@@ -41,8 +41,9 @@
       the previous quiet stamps) and `DecideLifecycle(in) []LifecycleAction` with actions `start` (rig, spec path)
       and `stop` (rig). Pure: no I/O, no clock, no globals, so a table test owns the whole matrix.
       Evidence: `go test ./internal/act -run Lifecycle` with the case names.
-- [x] 2.2 The table must cover, as separate cases: start on `Ready>0 && running==0`; no start when running>0; no
-      start when the project opted out; no start when the read is stale; start on a claimable row with no ready
+- [x] 2.2 The table must cover, as separate cases: start on `Ready>0 && running==0` and the app's own last event a
+      stop; no start when running>0, when the operator stopped the rig by hand, when the project opted out, when the
+      read is stale; start on a claimable row with no ready
       item; stop after the window; no stop one tick before the window; no stop when a live row is addressed to a
       seat on the rig; no stop with a stale read; no stop with `enabled=false`; two projects sharing one rig, one
       quiet and one busy, producing no stop.

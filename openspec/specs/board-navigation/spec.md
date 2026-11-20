@@ -56,3 +56,108 @@ which is the freshest stamp it can write, so an age past one window is quiet and
 #### Scenario: No read yet
 - **WHEN** a project has never completed a read
 - **THEN** the header says so in words rather than showing a zero age
+
+### Requirement: A paused project's header says paused
+
+The project header SHALL render a paused project's forge read as `paused — no forge reads` in state `paused`,
+whatever the stamp's age, instead of the age-based quiet or stalled state.
+
+#### Scenario: A day-long pause
+
+- **WHEN** a project has been paused for a day and its forge stamp is a day old
+- **THEN** the header says paused, not stalled
+
+#### Scenario: Resume resets the clock
+
+- **WHEN** the project is resumed and the next tick reads the forge
+- **THEN** the header shows the fresh age and its normal state again
+
+### Requirement: The board keeps the last plan reason per item
+The tick SHALL record, per item, the plan's reason for leaving it undispatched, with its detail and the head it was
+computed on, and SHALL delete that record in the tick the item is dispatched.
+
+#### Scenario: Two ticks, same reason
+- **WHEN** an item is skipped for `no_free_builder` on two consecutive ticks
+- **THEN** one row stands, carrying the later tick's time
+
+#### Scenario: The reason changes
+- **WHEN** the same item is skipped for `live_row` after `no_free_builder`
+- **THEN** the row carries `live_row` and no history is kept
+
+#### Scenario: Dispatched
+- **WHEN** the item is dispatched
+- **THEN** its reason row is gone in the same tick
+
+### Requirement: The item's why-column reads from that record
+The project surface SHALL show each undispatched item's last reason and detail, and SHALL show nothing where no plan
+has run since the app started.
+
+#### Scenario: A reason from the last tick
+- **WHEN** an item carries a recorded reason
+- **THEN** the surface shows the reason and its detail, not a blank cell
+
+#### Scenario: Never planned
+- **WHEN** no tick has run since start
+- **THEN** the cell says so in words
+
+### Requirement: The shell renders no demo scaffolding
+
+The console SHALL NOT render a scope switcher, demo identity or account block, permission-filtered navigation,
+failure/latency/reset control, synthetic-data notice, demo footer or demo attribution copy.
+
+#### Scenario: The rail
+
+- **WHEN** the board loads
+- **THEN** the rail shows navigation and real board controls only — no Scope dropdown, no database menu, no account
+  block
+
+#### Scenario: The footer
+
+- **WHEN** any screen is open
+- **THEN** no line says the board is synthetic, demo, authored or not a real service
+
+### Requirement: The console ships no mock data
+
+Every shipped module SHALL read data from `src/lib/fleet.ts` or a local display preference. `src/mock/**` and
+`public/mock/**` SHALL NOT exist, and nothing SHALL import a path reaching `/mock`.
+
+#### Scenario: A clean build
+
+- **WHEN** `npm run build` runs
+- **THEN** no module resolves a path under `src/mock`, and the built board reads the real API
+
+#### Scenario: The tree
+
+- **WHEN** the source tree is listed
+- **THEN** neither `src/mock` nor `public/mock` is present
+
+### Requirement: No identity or permission fiction
+
+The console SHALL NOT render a user name, email or role-derived permission gate. The rail SHALL list every shipped
+surface; the server's token SHALL remain the only authorization.
+
+#### Scenario: Every surface is reachable
+
+- **WHEN** the board loads
+- **THEN** every shipped route appears in the rail and no account block is drawn
+
+#### Scenario: The token is refused
+
+- **WHEN** a request reaches the server without a valid token
+- **THEN** the server answers its auth error and the screen shows its error state; the client did not pre-hide the
+  surface
+
+### Requirement: A guard refuses demo scaffolding
+
+A repository check SHALL fail when a demo token or a mock import appears in `src/`, `index.html` or `public/`, and
+the web CI job SHALL run it. The check SHALL name every offending file and line.
+
+#### Scenario: Scaffolding returns
+
+- **WHEN** a change adds `import … from "../mock/api"` or the string `Synthetic data`
+- **THEN** the check exits non-zero naming that file and line
+
+#### Scenario: A clean tree
+
+- **WHEN** the tree carries no demo token and no mock import
+- **THEN** the check exits 0 and the web job passes
